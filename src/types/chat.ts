@@ -4,6 +4,13 @@ export type ImageStatus = 'pending' | 'success' | 'failed'
 export type MessageRole = 'user' | 'assistant'
 export type SettingPrimitive = string | number | boolean
 export type ModelParamType = 'number' | 'enum' | 'boolean'
+export type FailureCode =
+  | 'timeout'
+  | 'auth'
+  | 'rate_limit'
+  | 'unsupported_param'
+  | 'rejected'
+  | 'unknown'
 
 export interface ModelParamSpec {
   key: string
@@ -42,12 +49,20 @@ export interface SingleSideSettings {
   paramValues: Record<string, SettingPrimitive>
 }
 
+export interface RunSettingsSnapshot {
+  resolution: string
+  aspectRatio: string
+  imageCount: number
+  autoSave: boolean
+}
+
 export interface ImageItem {
   id: string
   seq: number
   status: ImageStatus
   fileRef?: string
   error?: string
+  errorCode?: FailureCode
 }
 
 export interface Run {
@@ -63,6 +78,9 @@ export interface Run {
   modelId: string
   modelName: string
   paramsSnapshot: Record<string, SettingPrimitive>
+  settingsSnapshot: RunSettingsSnapshot
+  retryOfRunId?: string
+  retryAttempt: number
   images: ImageItem[]
 }
 

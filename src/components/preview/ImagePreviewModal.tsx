@@ -1,6 +1,6 @@
-import { Button, Modal, Space, Typography } from 'antd'
+﻿import { Button, Modal, Space, Typography } from 'antd'
 import type { Dispatch, MutableRefObject, SetStateAction } from 'react'
-import type { DragOrigin } from '../../hooks/useImagePreview'
+import type { DragOrigin, PreviewPair } from '../../hooks/useImagePreview'
 import type { PreviewImage } from '../../types/chat'
 import { clamp } from '../../utils/chat'
 
@@ -8,12 +8,15 @@ const { Text } = Typography
 
 interface ImagePreviewModalProps {
   isPreviewOpen: boolean
+  previewMode: 'single' | 'ab'
   closePreview: () => void
   goPrevPreview: () => void
   goNextPreview: () => void
   previewImages: PreviewImage[]
+  previewPairs: PreviewPair[]
   previewHint: string
   currentPreviewImage: PreviewImage | undefined
+  currentPreviewPair: PreviewPair | undefined
   zoom: number
   offset: { x: number; y: number }
   isDragging: boolean
@@ -23,15 +26,39 @@ interface ImagePreviewModalProps {
   dragOriginRef: MutableRefObject<DragOrigin | null>
 }
 
+function renderSingleImage(
+  src: string | undefined,
+  seq: number | undefined,
+  zoom: number,
+  offset: { x: number; y: number },
+  emptyText: string,
+) {
+  if (!src) {
+    return <Text type="secondary">{emptyText}</Text>
+  }
+
+  return (
+    <img
+      className="preview-image"
+      src={src}
+      alt={`preview-${seq ?? '-'}`}
+      style={{ transform: `translate(${offset.x}px, ${offset.y}px) scale(${zoom})` }}
+    />
+  )
+}
+
 export function ImagePreviewModal(props: ImagePreviewModalProps) {
   const {
     isPreviewOpen,
+    previewMode,
     closePreview,
     goPrevPreview,
     goNextPreview,
     previewImages,
+    previewPairs,
     previewHint,
     currentPreviewImage,
+    currentPreviewPair,
     zoom,
     offset,
     isDragging,
@@ -41,26 +68,28 @@ export function ImagePreviewModal(props: ImagePreviewModalProps) {
     dragOriginRef,
   } = props
 
+  const previewLength = previewMode === 'ab' ? previewPairs.length : previewImages.length
+
   return (
     <Modal
       open={isPreviewOpen}
       onCancel={closePreview}
       footer={
         <Space className="preview-footer">
-          <Button onClick={goPrevPreview} disabled={previewImages.length <= 1}>
+          <Button onClick={goPrevPreview} disabled={previewLength <= 1}>
             上一张
           </Button>
-          <Button onClick={goNextPreview} disabled={previewImages.length <= 1}>
+          <Button onClick={goNextPreview} disabled={previewLength <= 1}>
             下一张
           </Button>
           <Text type="secondary">{previewHint}</Text>
         </Space>
       }
-      width={900}
+      width={previewMode === 'ab' ? 1200 : 900}
       centered
       destroyOnClose
       className="preview-modal"
-      title="预览"
+      title={previewMode === 'ab' ? 'A/B 联动预览' : '预览'}
     >
       <div
         className={`preview-stage ${isDragging ? 'is-dragging' : ''}`}
@@ -107,15 +136,35 @@ export function ImagePreviewModal(props: ImagePreviewModalProps) {
           dragOriginRef.current = null
         }}
       >
-        {currentPreviewImage ? (
-          <img
-            className="preview-image"
-            src={currentPreviewImage.src}
-            alt={`preview-${currentPreviewImage.seq}`}
-            style={{ transform: `translate(${offset.x}px, ${offset.y}px) scale(${zoom})` }}
-          />
+        {previewMode === 'ab' ? (
+          <div className="preview-ab-grid">
+            <div className="preview-ab-pane">
+              <Text strong>A</Text>
+              <div className="preview-ab-image-wrap">
+                {renderSingleImage(
+                  currentPreviewPair?.left?.src,
+                  currentPreviewPair?.seq,
+                  zoom,
+                  offset,
+                  'A 侧该序号无图',
+                )}
+              </div>
+            </div>
+            <div className="preview-ab-pane">
+              <Text strong>B</Text>
+              <div className="preview-ab-image-wrap">
+                {renderSingleImage(
+                  currentPreviewPair?.right?.src,
+                  currentPreviewPair?.seq,
+                  zoom,
+                  offset,
+                  'B 侧该序号无图',
+                )}
+              </div>
+            </div>
+          </div>
         ) : (
-          <Text type="secondary">无可预览图片</Text>
+          renderSingleImage(currentPreviewImage?.src, currentPreviewImage?.seq, zoom, offset, '无可预览图片')
         )}
       </div>
     </Modal>

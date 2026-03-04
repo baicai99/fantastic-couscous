@@ -1,5 +1,5 @@
-﻿import { Card, Skeleton, Space, Tag, Typography } from 'antd'
-import type { Conversation, ImageItem, Message, Run, Side } from '../../types/chat'
+﻿import { Button, Card, Skeleton, Space, Tag, Typography } from 'antd'
+import type { Conversation, FailureCode, ImageItem, Message, Run, Side } from '../../types/chat'
 import { gridColumnCount, sortImagesBySeq } from '../../utils/chat'
 
 const { Paragraph, Text } = Typography
@@ -7,13 +7,23 @@ const { Paragraph, Text } = Typography
 interface MessageListProps {
   activeConversation: Conversation | null
   sideView: Side
-  onOpenPreview: (run: Run, imageId: string) => void
+  onOpenPreview: (run: Run, imageId: string, linkedRun?: Run) => void
+  onRetryRun: (runId: string) => void
 }
 
 interface DisplayImage {
   seq: number
   item: ImageItem | null
   missingReason?: string
+}
+
+const FAILURE_LABEL: Record<FailureCode, string> = {
+  timeout: '超时',
+  auth: '鉴权',
+  rate_limit: '限流',
+  unsupported_param: '参数不支持',
+  rejected: '拒绝',
+  unknown: '未知',
 }
 
 function formatParamSnapshot(params: Run['paramsSnapshot'] | undefined): string {
@@ -68,15 +78,33 @@ function getAbRunGroups(message: Message): Array<{ batchId: string; runA?: Run; 
   return Array.from(groups.values())
 }
 
+function getFailureSummary(run: Run): string | null {
+  const failed = run.images.filter((item) => item.status === 'failed')
+  if (failed.length === 0) {
+    return null
+  }
+
+  const counts = new Map<FailureCode, number>()
+  for (const item of failed) {
+    const code = item.errorCode ?? 'unknown'
+    counts.set(code, (counts.get(code) ?? 0) + 1)
+  }
+
+  return Array.from(counts.entries())
+    .map(([code, count]) => `${FAILURE_LABEL[code]} ${count}`)
+    .join(' | ')
+}
+
 function renderImages(
   rows: DisplayImage[],
   run: Run | undefined,
-  onOpenPreview: (run: Run, imageId: string) => void,
+  linkedRun: Run | undefined,
+  onOpenPreview: (run: Run, imageId: string, linkedRun?: Run) => void,
 ) {
   return (
     <div
       className="run-grid"
-      style={{ gridTemplateColumns: `repeat(${gridColumnCount(rows.length)}, minmax(0, 1fr))` }}
+      style={{ gridTemplateColumns: `repeat(${gridColumnCount(Math.max(rows.length, 1))}, minmax(0, 1fr))` }}
     >
       {rows.map((row) => (
         <div key={`${run?.id ?? 'none'}-${row.seq}`} className="run-grid-item">
@@ -85,7 +113,11 @@ function renderImages(
           ) : row.item?.status === 'failed' ? (
             <div className="run-image-fallback">失败: {row.item.error ?? '未知错误'}</div>
           ) : row.item?.status === 'success' && row.item.fileRef && run ? (
-            <button className="image-button" type="button" onClick={() => onOpenPreview(run, row.item!.id)}>
+            <button
+              className="image-button"
+              type="button"
+              onClick={() => onOpenPreview(run, row.item!.id, linkedRun)}
+            >
               <img className="run-image" src={row.item.fileRef} alt={`image-${row.seq}`} />
             </button>
           ) : (
@@ -98,7 +130,16 @@ function renderImages(
   )
 }
 
-function renderRunCard(run: Run, rows: DisplayImage[], onOpenPreview: (run: Run, imageId: string) => void) {
+function renderRunCard(
+  run: Run,
+  rows: DisplayImage[],
+  linkedRun: Run | undefined,
+  onOpenPreview: (run: Run, imageId: string, linkedRun?: Run) => void,
+  onRetryRun: (runId: string) => void,
+) {
+  const failureSummary = getFailureSummary(run)
+  const hasFailed = run.images.some((item) => item.status === 'failed')
+
   return (
     <Card key={run.id} size="small">
       <Space direction="vertical" size={8} className="full-width">
@@ -106,18 +147,28 @@ function renderRunCard(run: Run, rows: DisplayImage[], onOpenPreview: (run: Run,
         <Text type="secondary">
           side={run.side} | images={run.imageCount} | mode={run.sideMode} | batch={run.batchId}
         </Text>
+        <Text type="secondary">
+          retry={run.retryAttempt ?? 0}
+          {run.retryOfRunId ? ` | source=${run.retryOfRunId}` : ''}
+        </Text>
         <Text type="secondary">渠道：{run.channelName ?? '未选择'}</Text>
         <Text type="secondary">模型：{run.modelName ?? run.modelId ?? '未记录'}</Text>
         <Text type="secondary">参数：{formatParamSnapshot(run.paramsSnapshot)}</Text>
         <Text type="secondary">prompt: {run.prompt}</Text>
-        {renderImages(rows, run, onOpenPreview)}
+        {failureSummary ? <Text type="warning">失败摘要：{failureSummary}</Text> : null}
+        {hasFailed ? (
+          <Button size="small" onClick={() => onRetryRun(run.id)}>
+            重试失败项
+          </Button>
+        ) : null}
+        {renderImages(rows, run, linkedRun, onOpenPreview)}
       </Space>
     </Card>
   )
 }
 
 export function MessageList(props: MessageListProps) {
-  const { activeConversation, sideView, onOpenPreview } = props
+  const { activeConversation, sideView, onOpenPreview, onRetryRun } = props
 
   if (!activeConversation || activeConversation.messages.length === 0) {
     return (
@@ -145,7 +196,7 @@ export function MessageList(props: MessageListProps) {
             {message.role === 'assistant' && sideView === 'single'
               ? getSingleRuns(message).map((run) => {
                   const rows = sortImagesBySeq(run.images).map((item) => ({ seq: item.seq, item }))
-                  return renderRunCard(run, rows, onOpenPreview)
+                  return renderRunCard(run, rows, undefined, onOpenPreview, onRetryRun)
                 })
               : null}
 
@@ -163,12 +214,12 @@ export function MessageList(props: MessageListProps) {
                     return (
                       <Card key={`${group.batchId}-${sideView}`} size="small">
                         <Text type="secondary">batch={group.batchId} 缺失: 此侧无结果</Text>
-                        {renderImages(rows, undefined, onOpenPreview)}
+                        {renderImages(rows, undefined, undefined, onOpenPreview)}
                       </Card>
                     )
                   }
 
-                  return renderRunCard(run, rows, onOpenPreview)
+                  return renderRunCard(run, rows, other, onOpenPreview, onRetryRun)
                 })
               : null}
           </Space>

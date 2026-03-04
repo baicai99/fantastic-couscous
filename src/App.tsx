@@ -30,16 +30,20 @@ export default function App() {
     setSideModelParam,
     setChannels,
     sendDraft,
+    retryRun,
   } = useConversations()
 
   const {
     isPreviewOpen,
+    previewMode,
     previewImages,
+    previewPairs,
     zoom,
     offset,
     isDragging,
     dragOriginRef,
     currentPreviewImage,
+    currentPreviewPair,
     previewHint,
     setZoom,
     setOffset,
@@ -73,17 +77,32 @@ export default function App() {
             <Row gutter={12} className="ab-windows-row">
               <Col span={12} className="ab-window-col">
                 <Card title="A" size="small" className="ab-window-card">
-                  <MessageList activeConversation={activeConversation} sideView="A" onOpenPreview={openPreview} />
+                  <MessageList
+                    activeConversation={activeConversation}
+                    sideView="A"
+                    onOpenPreview={openPreview}
+                    onRetryRun={retryRun}
+                  />
                 </Card>
               </Col>
               <Col span={12} className="ab-window-col">
                 <Card title="B" size="small" className="ab-window-card">
-                  <MessageList activeConversation={activeConversation} sideView="B" onOpenPreview={openPreview} />
+                  <MessageList
+                    activeConversation={activeConversation}
+                    sideView="B"
+                    onOpenPreview={openPreview}
+                    onRetryRun={retryRun}
+                  />
                 </Card>
               </Col>
             </Row>
           ) : (
-            <MessageList activeConversation={activeConversation} sideView="single" onOpenPreview={openPreview} />
+            <MessageList
+              activeConversation={activeConversation}
+              sideView="single"
+              onOpenPreview={openPreview}
+              onRetryRun={retryRun}
+            />
           )}
         </Content>
 
@@ -106,12 +125,15 @@ export default function App() {
 
       <ImagePreviewModal
         isPreviewOpen={isPreviewOpen}
+        previewMode={previewMode}
         closePreview={closePreview}
         goPrevPreview={goPrevPreview}
         goNextPreview={goNextPreview}
         previewImages={previewImages}
+        previewPairs={previewPairs}
         previewHint={previewHint}
         currentPreviewImage={currentPreviewImage}
+        currentPreviewPair={currentPreviewPair}
         zoom={zoom}
         offset={offset}
         isDragging={isDragging}

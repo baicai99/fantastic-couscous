@@ -298,6 +298,92 @@ export function useConversations() {
     setDraft('')
   }
 
+  const retryRun = (runId: string) => {
+    if (!activeConversation) {
+      return
+    }
+
+    let targetMessageIndex = -1
+    let targetRunIndex = -1
+
+    for (let i = 0; i < activeConversation.messages.length; i += 1) {
+      const message = activeConversation.messages[i]
+      const idx = message.runs?.findIndex((item) => item.id === runId) ?? -1
+      if (idx >= 0) {
+        targetMessageIndex = i
+        targetRunIndex = idx
+        break
+      }
+    }
+
+    if (targetMessageIndex < 0 || targetRunIndex < 0) {
+      return
+    }
+
+    const targetMessage = activeConversation.messages[targetMessageIndex]
+    const targetRun = targetMessage.runs?.[targetRunIndex]
+    if (!targetRun) {
+      return
+    }
+
+    const rootRunId = targetRun.retryOfRunId ?? targetRun.id
+    const allRuns = activeConversation.messages.flatMap((message) => message.runs ?? [])
+    const maxRetryAttempt = allRuns.reduce((acc, current) => {
+      if (current.id === rootRunId || current.retryOfRunId === rootRunId) {
+        return Math.max(acc, current.retryAttempt ?? 0)
+      }
+      return acc
+    }, 0)
+
+    const settings = {
+      resolution: targetRun.settingsSnapshot?.resolution ?? RESOLUTION_DEFAULT,
+      aspectRatio: targetRun.settingsSnapshot?.aspectRatio ?? ASPECT_RATIO_DEFAULT,
+      imageCount: targetRun.settingsSnapshot?.imageCount ?? targetRun.imageCount,
+      autoSave: targetRun.settingsSnapshot?.autoSave ?? true,
+      channelId: targetRun.channelId,
+      modelId: targetRun.modelId,
+      paramValues: { ...targetRun.paramsSnapshot },
+    }
+
+    const model = getModelById(modelCatalog, targetRun.modelId) ?? getDefaultModel(modelCatalog)
+    const channel = channels.find((item) => item.id === targetRun.channelId)
+    const fallbackChannel = targetRun.channelName
+      ? { id: targetRun.channelId ?? makeId(), name: targetRun.channelName, baseUrl: '', apiKey: '' }
+      : undefined
+
+    const retry = createMockRun({
+      batchId: targetRun.batchId,
+      sideMode: targetRun.sideMode,
+      side: targetRun.side,
+      prompt: targetRun.prompt,
+      settings,
+      model,
+      paramsSnapshot: { ...targetRun.paramsSnapshot },
+      channel: channel ?? fallbackChannel,
+      retryOfRunId: rootRunId,
+      retryAttempt: maxRetryAttempt + 1,
+    })
+
+    const nextMessages = activeConversation.messages.map((message, index) => {
+      if (index !== targetMessageIndex) {
+        return message
+      }
+
+      return {
+        ...message,
+        runs: [...(message.runs ?? []), retry],
+      }
+    })
+
+    const updatedConversation: Conversation = {
+      ...activeConversation,
+      updatedAt: new Date().toISOString(),
+      messages: nextMessages,
+    }
+
+    persistConversation(updatedConversation)
+  }
+
   return {
     summaries,
     activeConversation,
@@ -316,5 +402,6 @@ export function useConversations() {
     setSideModelParam,
     setChannels,
     sendDraft,
+    retryRun,
   }
 }

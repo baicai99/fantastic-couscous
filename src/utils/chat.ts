@@ -2,10 +2,12 @@
   ApiChannel,
   Conversation,
   ConversationSummary,
+  FailureCode,
   ImageItem,
   Message,
   ModelSpec,
   Run,
+  RunSettingsSnapshot,
   SettingPrimitive,
   Side,
   SideMode,
@@ -85,6 +87,41 @@ function parseResolution(resolution: string): { width: number; height: number } 
   }
 }
 
+function getFailureFromPrompt(prompt: string): { code: FailureCode; message: string } {
+  const value = prompt.toLowerCase()
+
+  if (value.includes('timeout')) {
+    return { code: 'timeout', message: '请求超时' }
+  }
+
+  if (value.includes('auth')) {
+    return { code: 'auth', message: '鉴权失败' }
+  }
+
+  if (value.includes('rate')) {
+    return { code: 'rate_limit', message: '触发限流' }
+  }
+
+  if (value.includes('unsupported')) {
+    return { code: 'unsupported_param', message: '参数不支持' }
+  }
+
+  if (value.includes('reject')) {
+    return { code: 'rejected', message: '请求被拒绝' }
+  }
+
+  return { code: 'unknown', message: '未知错误' }
+}
+
+export function toSettingsSnapshot(settings: SingleSideSettings): RunSettingsSnapshot {
+  return {
+    resolution: settings.resolution,
+    aspectRatio: settings.aspectRatio,
+    imageCount: settings.imageCount,
+    autoSave: settings.autoSave,
+  }
+}
+
 interface CreateMockRunOptions {
   batchId: string
   sideMode: SideMode
@@ -94,14 +131,35 @@ interface CreateMockRunOptions {
   model: ModelSpec | undefined
   paramsSnapshot: Record<string, SettingPrimitive>
   channel: ApiChannel | undefined
+  retryOfRunId?: string
+  retryAttempt?: number
 }
 
 export function createMockRun(options: CreateMockRunOptions): Run {
-  const { batchId, sideMode, side, prompt, settings, model, paramsSnapshot, channel } = options
-  const shouldFailLast = prompt.toLowerCase().includes('fail')
-  const shouldPendingLast = prompt.toLowerCase().includes('loading')
+  const {
+    batchId,
+    sideMode,
+    side,
+    prompt,
+    settings,
+    model,
+    paramsSnapshot,
+    channel,
+    retryOfRunId,
+    retryAttempt = 0,
+  } = options
+
+  const promptLower = prompt.toLowerCase()
+  const failBySide = (side === 'A' && promptLower.includes('fail-a')) || (side === 'B' && promptLower.includes('fail-b'))
+  const failAll = promptLower.includes('fail')
+  const shouldFailLast = failAll || failBySide
+  const shouldPendingLast = promptLower.includes('loading')
+  const failOnce = promptLower.includes('failonce')
+  const effectiveFailLast = shouldFailLast && !(failOnce && retryAttempt > 0)
+
   const imageCount = clamp(Math.floor(settings.imageCount), 1, 8)
   const { width, height } = parseResolution(settings.resolution)
+  const failure = getFailureFromPrompt(prompt)
 
   return {
     id: makeId(),
@@ -116,9 +174,18 @@ export function createMockRun(options: CreateMockRunOptions): Run {
     modelId: model?.id ?? settings.modelId,
     modelName: model?.name ?? settings.modelId,
     paramsSnapshot,
+    settingsSnapshot: toSettingsSnapshot(settings),
+    retryOfRunId,
+    retryAttempt,
     images: Array.from({ length: imageCount }, (_, index) => index + 1).map((seq) => {
-      if (seq === imageCount && shouldFailLast) {
-        return { id: makeId(), seq, status: 'failed', error: '模拟失败' }
+      if (seq === imageCount && effectiveFailLast) {
+        return {
+          id: makeId(),
+          seq,
+          status: 'failed',
+          error: failure.message,
+          errorCode: failure.code,
+        }
       }
 
       if (seq === imageCount && shouldPendingLast) {
