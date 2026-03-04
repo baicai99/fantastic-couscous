@@ -1,0 +1,49 @@
+models:
+  - id: sdxl
+    name: SDXL
+    params:
+      - key: steps
+        label: Steps
+        type: number
+        default: 30
+        min: 10
+        max: 60
+      - key: cfgScale
+        label: CFG Scale
+        type: number
+        default: 7
+        min: 1
+        max: 20
+      - key: sampler
+        label: Sampler
+        type: enum
+        default: "euler_a"
+        options: ["euler_a", "dpmpp_2m", "ddim"]
+      - key: hiresFix
+        label: Hires Fix
+        type: boolean
+        default: false
+  - id: flux-dev
+    name: FLUX Dev
+    params:
+      - key: guidance
+        label: Guidance
+        type: number
+        default: 3.5
+        min: 1
+        max: 8
+      - key: seed
+        label: Seed
+        type: number
+        default: 42
+        min: 0
+        max: 999999
+      - key: style
+        label: Style
+        type: enum
+        default: "realistic"
+        options: ["realistic", "anime", "illustration"]
+      - key: promptEnhance
+        label: Prompt Enhance
+        type: boolean
+        default: true
