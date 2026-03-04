@@ -1,5 +1,5 @@
-import { Button, Modal, Popover, Space, Typography } from 'antd'
-import { useCallback, useEffect, useRef } from 'react'
+import { Button, Modal, Popover, Typography } from 'antd'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
 import type { MutableRefObject, WheelEvent as ReactWheelEvent } from 'react'
 import type {
   DragOrigin,
@@ -117,6 +117,7 @@ export function ImagePreviewModal(props: ImagePreviewModalProps) {
   const stageRef = useRef<HTMLDivElement | null>(null)
 
   const previewLength = previewMode === 'ab' ? previewPairs.length : previewImages.length
+  const hintParts = useMemo(() => previewHint.split('|').map((item) => item.trim()).filter(Boolean), [previewHint])
 
   const focusStage = useCallback(() => {
     stageRef.current?.focus({ preventScroll: true })
@@ -302,18 +303,28 @@ export function ImagePreviewModal(props: ImagePreviewModalProps) {
       open={isPreviewOpen}
       onCancel={closePreview}
       footer={
-        <Space className="preview-footer">
-          <Button onClick={goPrevPreview} disabled={previewLength <= 1}>
-            上一张
-          </Button>
-          <Button onClick={goNextPreview} disabled={previewLength <= 1}>
-            下一张
-          </Button>
-          <Text type="secondary">{previewHint}</Text>
-          <Popover content={SHORTCUT_HINT} trigger="click" placement="topRight">
-            <Button type="default">快捷键</Button>
-          </Popover>
-        </Space>
+        <div className="preview-footer">
+          <div className="preview-footer-status">
+            {hintParts.map((item) => (
+              <span key={item} className="preview-status-pill">
+                {item}
+              </span>
+            ))}
+          </div>
+          <div className="preview-footer-nav">
+            <Button onClick={goPrevPreview} disabled={previewLength <= 1}>
+              上一张
+            </Button>
+            <Button type="primary" onClick={goNextPreview} disabled={previewLength <= 1}>
+              下一张
+            </Button>
+          </div>
+          <div className="preview-footer-actions">
+            <Popover content={SHORTCUT_HINT} trigger="click" placement="topRight">
+              <Button type="default">快捷键</Button>
+            </Popover>
+          </div>
+        </div>
       }
       width={previewMode === 'ab' ? 1200 : 900}
       centered

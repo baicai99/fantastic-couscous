@@ -112,68 +112,41 @@ function renderRunCard(
   linkedRun: Run | undefined,
   onOpenPreview: (run: Run, imageId: string, linkedRun?: Run) => void,
   onRetryRun: (runId: string) => void,
-  onEditRunTemplate: (runId: string) => void,
-  onReplayRun: (runId: string) => void,
-  replayingRunIds: string[],
 ) {
   const failureSummary = getFailureSummary(run)
   const hasFailed = run.images.some((item) => item.status === 'failed')
-  const isReplaying = replayingRunIds.includes(run.id)
 
   return (
     <Fragment key={run.id}>
       <div className="run-record">
         <Space direction="vertical" size={8} className="full-width">
-          <div className="run-record-head">
-            <Collapse
-              className="run-meta-collapse"
-              ghost
-              items={[
-                {
-                  key: 'meta',
-                  label: <Text strong>Run 记录</Text>,
-                  children: (
-                    <Space direction="vertical" size={8} className="full-width">
-                      <Text type="secondary">
-                        side={run.side} | images={run.imageCount} | mode={run.sideMode} | batch={run.batchId}
-                      </Text>
-                      <Text type="secondary">
-                        retry={run.retryAttempt ?? 0}
-                        {run.retryOfRunId ? ` | source=${run.retryOfRunId}` : ''}
-                      </Text>
-                      <Text type="secondary">渠道：{run.channelName ?? '未选择'}</Text>
-                      <Text type="secondary">模型：{run.modelName ?? run.modelId ?? '未记录'}</Text>
-                      <Text type="secondary">参数：{formatParamSnapshot(run.paramsSnapshot)}</Text>
-                      <Text type="secondary">模板: {run.templatePrompt}</Text>
-                      <Text type="secondary">变量: {formatParamSnapshot(run.variablesSnapshot)}</Text>
-                      <Text type="secondary">最终 prompt: {run.finalPrompt}</Text>
-                    </Space>
-                  ),
-                },
-              ]}
-            />
-            <Space size={4} className="run-head-actions">
-              <Button
-                size="small"
-                type="primary"
-                icon={<ReloadOutlined />}
-                onClick={() => onReplayRun(run.id)}
-                loading={isReplaying}
-                disabled={isReplaying}
-              >
-                再来一次
-              </Button>
-              <Button
-                size="small"
-                type="default"
-                icon={<EditOutlined />}
-                className="run-edit-top-btn"
-                onClick={() => onEditRunTemplate(run.id)}
-              >
-                编辑
-              </Button>
-            </Space>
-          </div>
+          <Collapse
+            className="run-meta-collapse"
+            ghost
+            items={[
+              {
+                key: 'meta',
+                label: <Text strong>Run 记录</Text>,
+                children: (
+                  <Space direction="vertical" size={8} className="full-width">
+                    <Text type="secondary">
+                      side={run.side} | images={run.imageCount} | mode={run.sideMode} | batch={run.batchId}
+                    </Text>
+                    <Text type="secondary">
+                      retry={run.retryAttempt ?? 0}
+                      {run.retryOfRunId ? ` | source=${run.retryOfRunId}` : ''}
+                    </Text>
+                    <Text type="secondary">渠道：{run.channelName ?? '未选择'}</Text>
+                    <Text type="secondary">模型：{run.modelName ?? run.modelId ?? '未记录'}</Text>
+                    <Text type="secondary">参数：{formatParamSnapshot(run.paramsSnapshot)}</Text>
+                    <Text type="secondary">模板: {run.templatePrompt}</Text>
+                    <Text type="secondary">变量: {formatParamSnapshot(run.variablesSnapshot)}</Text>
+                    <Text type="secondary">最终 prompt: {run.finalPrompt}</Text>
+                  </Space>
+                ),
+              },
+            ]}
+          />
           {failureSummary ? <Text type="warning">失败摘要：{failureSummary}</Text> : null}
           {hasFailed ? (
             <Space size={8} wrap>
@@ -278,12 +251,48 @@ function MessageListComponent(props: MessageListProps) {
         {visibleMessages.map((message) => (
           <Card key={message.id} size="small" className={`message-card ${message.role}`}>
             <Space direction="vertical" size={8} className="full-width">
-              <Space>
-                <Tag color={message.role === 'user' ? 'blue' : 'green'}>
-                  {message.role === 'user' ? 'User' : 'Assistant'}
-                </Tag>
-                <Text type="secondary">{message.displayCreatedAt ?? new Date(message.createdAt).toLocaleString()}</Text>
-              </Space>
+              <div className="message-head-row">
+                <Space>
+                  <Tag color={message.role === 'user' ? 'blue' : 'green'}>
+                    {message.role === 'user' ? 'User' : 'Assistant'}
+                  </Tag>
+                  <Text type="secondary">{message.displayCreatedAt ?? new Date(message.createdAt).toLocaleString()}</Text>
+                </Space>
+                {message.role === 'assistant'
+                  ? (() => {
+                      const runs = sideView === 'single' ? getSingleRuns(message) : getSideRuns(message, sideView)
+                      const run = runs[0]
+                      if (!run) {
+                        return null
+                      }
+
+                      const isReplaying = replayingRunIds.includes(run.id)
+                      return (
+                        <Space size={4} className="run-head-actions">
+                          <Button
+                            size="small"
+                            type="primary"
+                            icon={<ReloadOutlined />}
+                            onClick={() => onReplayRun(run.id)}
+                            loading={isReplaying}
+                            disabled={isReplaying}
+                          >
+                            再来一次
+                          </Button>
+                          <Button
+                            size="small"
+                            type="default"
+                            icon={<EditOutlined />}
+                            className="run-edit-top-btn"
+                            onClick={() => onEditRunTemplate(run.id)}
+                          >
+                            编辑
+                          </Button>
+                        </Space>
+                      )
+                    })()
+                  : null}
+              </div>
 
               <Paragraph style={{ marginBottom: 0 }}>{message.content}</Paragraph>
 
@@ -296,9 +305,6 @@ function MessageListComponent(props: MessageListProps) {
                       undefined,
                       onOpenPreview,
                       onRetryRun,
-                      onEditRunTemplate,
-                      onReplayRun,
-                      replayingRunIds,
                     )
                   })
                 : null}
@@ -312,9 +318,6 @@ function MessageListComponent(props: MessageListProps) {
                       undefined,
                       onOpenPreview,
                       onRetryRun,
-                      onEditRunTemplate,
-                      onReplayRun,
-                      replayingRunIds,
                     )
                   })
                 : null}
