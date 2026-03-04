@@ -1,19 +1,24 @@
 import type { ApiChannel, ModelCatalog, ModelSpec, SettingPrimitive } from '../types/chat'
 
 const EMPTY_CATALOG: ModelCatalog = { models: [] }
+const OPENAI_IMAGE_ALLOWLIST = new Set(['gpt-image-1.5', 'gpt-image-1', 'dall-e-3', 'kolors'])
 
 function shouldDisplayModel(modelId: string): boolean {
   const value = modelId.toLowerCase()
 
-  if (value.includes('gemini')) {
-    return value.includes('image') || value.includes('banana')
+  const isOpenAIImageFamily =
+    value.includes('gpt-image') || value.includes('dall-e') || value.includes('dalle') || value.includes('openai')
+  if (isOpenAIImageFamily) {
+    return OPENAI_IMAGE_ALLOWLIST.has(value)
   }
 
-  if (value.includes('banana')) {
-    return true
-  }
-
-  return !value.includes('chat')
+  return (
+    value.includes('seeddance') ||
+    value.includes('seedream') ||
+    value.includes('seeddream') ||
+    value.includes('image') ||
+    OPENAI_IMAGE_ALLOWLIST.has(value)
+  )
 }
 
 export function getModelById(catalog: ModelCatalog, modelId: string): ModelSpec | undefined {
