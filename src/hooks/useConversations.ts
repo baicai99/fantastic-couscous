@@ -14,12 +14,22 @@ import {
   getModelCatalog,
   normalizeParamValues,
 } from '../services/modelCatalog'
-import type { ApiChannel, Conversation, ConversationSummary, SettingPrimitive, SingleSideSettings } from '../types/chat'
+import type {
+  ApiChannel,
+  Conversation,
+  ConversationSummary,
+  SettingPrimitive,
+  Side,
+  SideMode,
+  SingleSideSettings,
+} from '../types/chat'
 import {
   appendMessagesToConversation,
   clamp,
+  cloneSideSettings,
   createConversation,
   createMockRun,
+  makeId,
   toSummary,
 } from '../utils/chat'
 
@@ -52,13 +62,41 @@ function normalizeSettings(
   }
 }
 
-function normalizeConversation(
-  conversation: Conversation,
+function defaultSettingsBySide(channels: ApiChannel[]): Record<Side, SingleSideSettings> {
+  const base = normalizeSettings(undefined, channels)
+  return {
+    single: cloneSideSettings(base),
+    A: cloneSideSettings(base),
+    B: cloneSideSettings(base),
+  }
+}
+
+function normalizeSettingsBySide(
+  settingsBySide: Partial<Record<Side, SingleSideSettings>> | undefined,
   channels: ApiChannel[],
-): Conversation {
+): Record<Side, SingleSideSettings> {
+  const defaults = defaultSettingsBySide(channels)
+
+  return {
+    single: normalizeSettings(settingsBySide?.single ?? defaults.single, channels),
+    A: normalizeSettings(settingsBySide?.A ?? settingsBySide?.single ?? defaults.A, channels),
+    B: normalizeSettings(settingsBySide?.B ?? settingsBySide?.single ?? defaults.B, channels),
+  }
+}
+
+function normalizeConversation(conversation: Conversation, channels: ApiChannel[]): Conversation {
+  const raw = conversation as Conversation & {
+    singleSettings?: SingleSideSettings
+    settingsBySide?: Partial<Record<Side, SingleSideSettings>>
+  }
+
   return {
     ...conversation,
-    singleSettings: normalizeSettings(conversation.singleSettings, channels),
+    sideMode: conversation.sideMode === 'ab' ? 'ab' : 'single',
+    settingsBySide: normalizeSettingsBySide(
+      raw.settingsBySide ?? (raw.singleSettings ? { single: raw.singleSettings } : undefined),
+      channels,
+    ),
   }
 }
 
@@ -78,8 +116,9 @@ export function useConversations() {
   const [contents, setContents] = useState(normalizedContents)
   const [activeId, setActiveId] = useState<string | null>(initial.activeId)
   const [draft, setDraft] = useState('')
-  const [stagedSettings, setStagedSettings] = useState<SingleSideSettings>(() =>
-    normalizeSettings(undefined, channels),
+  const [stagedSideMode, setStagedSideMode] = useState<SideMode>('single')
+  const [stagedSettingsBySide, setStagedSettingsBySide] = useState<Record<Side, SingleSideSettings>>(() =>
+    defaultSettingsBySide(channels),
   )
   const [modelCatalog] = useState(() => getModelCatalog())
 
@@ -87,10 +126,8 @@ export function useConversations() {
     return activeId ? contents[activeId] ?? null : null
   }, [activeId, contents])
 
-  const activeSettings = useMemo(
-    () => activeConversation?.singleSettings ?? stagedSettings,
-    [activeConversation, stagedSettings],
-  )
+  const activeSideMode = activeConversation?.sideMode ?? stagedSideMode
+  const activeSettingsBySide = activeConversation?.settingsBySide ?? stagedSettingsBySide
 
   const persistConversation = (conversation: Conversation) => {
     setContents((prev) => {
@@ -111,7 +148,7 @@ export function useConversations() {
   }
 
   const createNewConversation = () => {
-    const conversation = createConversation(stagedSettings, `对话 ${summaries.length + 1}`)
+    const conversation = createConversation(stagedSettingsBySide, stagedSideMode, `对话 ${summaries.length + 1}`)
     persistConversation(conversation)
 
     setActiveId(conversation.id)
@@ -123,65 +160,90 @@ export function useConversations() {
     saveActiveConversationId(conversationId)
   }
 
-  const updateConversationSettings = (nextSettings: SingleSideSettings) => {
+  const updateConversationState = (
+    mode: SideMode,
+    settingsBySide: Record<Side, SingleSideSettings>,
+  ) => {
     if (!activeConversation) {
-      setStagedSettings(nextSettings)
+      setStagedSideMode(mode)
+      setStagedSettingsBySide(settingsBySide)
       return
     }
 
     const nextConversation: Conversation = {
       ...activeConversation,
       updatedAt: new Date().toISOString(),
-      singleSettings: nextSettings,
+      sideMode: mode,
+      settingsBySide,
     }
 
     persistConversation(nextConversation)
   }
 
-  const updateActiveSettings = (patch: Partial<SingleSideSettings>) => {
-    const merged = normalizeSettings({ ...activeSettings, ...patch }, channels)
-    updateConversationSettings(merged)
+  const updateSideMode = (mode: SideMode) => {
+    updateConversationState(mode, activeSettingsBySide)
   }
 
-  const setActiveModel = (modelId: string) => {
-    const model = getModelById(modelCatalog, modelId) ?? getDefaultModel(modelCatalog)
-    const nextSettings = normalizeSettings(
+  const updateSideSettings = (side: Side, patch: Partial<SingleSideSettings>) => {
+    const merged = normalizeSettingsBySide(
       {
-        ...activeSettings,
-        modelId: model?.id ?? activeSettings.modelId,
-        paramValues: getDefaultParamValues(model),
-      },
-      channels,
-    )
-    updateConversationSettings(nextSettings)
-  }
-
-  const setActiveModelParam = (paramKey: string, value: SettingPrimitive) => {
-    const nextSettings = normalizeSettings(
-      {
-        ...activeSettings,
-        paramValues: {
-          ...activeSettings.paramValues,
-          [paramKey]: value,
+        ...activeSettingsBySide,
+        [side]: {
+          ...activeSettingsBySide[side],
+          ...patch,
         },
       },
       channels,
     )
-    updateConversationSettings(nextSettings)
+
+    updateConversationState(activeSideMode, merged)
+  }
+
+  const setSideModel = (side: Side, modelId: string) => {
+    const current = activeSettingsBySide[side]
+    const model = getModelById(modelCatalog, modelId) ?? getDefaultModel(modelCatalog)
+
+    const merged = normalizeSettingsBySide(
+      {
+        ...activeSettingsBySide,
+        [side]: {
+          ...current,
+          modelId: model?.id ?? current.modelId,
+          paramValues: getDefaultParamValues(model),
+        },
+      },
+      channels,
+    )
+
+    updateConversationState(activeSideMode, merged)
+  }
+
+  const setSideModelParam = (side: Side, paramKey: string, value: SettingPrimitive) => {
+    const current = activeSettingsBySide[side]
+
+    const merged = normalizeSettingsBySide(
+      {
+        ...activeSettingsBySide,
+        [side]: {
+          ...current,
+          paramValues: {
+            ...current.paramValues,
+            [paramKey]: value,
+          },
+        },
+      },
+      channels,
+    )
+
+    updateConversationState(activeSideMode, merged)
   }
 
   const setChannels = (nextChannels: ApiChannel[]) => {
     setChannelsState(nextChannels)
     saveChannelsToStorage(nextChannels)
 
-    const current = activeConversation?.singleSettings ?? stagedSettings
-    const channelIdExists =
-      current.channelId !== null && nextChannels.some((item) => item.id === current.channelId)
-
-    if (!channelIdExists && current.channelId !== null) {
-      const nextSettings = { ...current, channelId: null }
-      updateConversationSettings(nextSettings)
-    }
+    const normalized = normalizeSettingsBySide(activeSettingsBySide, nextChannels)
+    updateConversationState(activeSideMode, normalized)
   }
 
   const sendDraft = () => {
@@ -190,20 +252,46 @@ export function useConversations() {
       return
     }
 
-    const effectiveSettings = normalizeSettings(activeSettings, channels)
-    const model = getModelById(modelCatalog, effectiveSettings.modelId) ?? getDefaultModel(modelCatalog)
-    const paramsSnapshot = normalizeParamValues(model, effectiveSettings.paramValues)
-    const channel = channels.find((item) => item.id === effectiveSettings.channelId)
-    const run = createMockRun(value, effectiveSettings, model, paramsSnapshot, channel)
+    const mode = activeSideMode
+    const settingsBySide = normalizeSettingsBySide(activeSettingsBySide, channels)
+    const batchId = makeId()
+
+    const buildRun = (side: Side) => {
+      const settings = settingsBySide[side]
+      const model = getModelById(modelCatalog, settings.modelId) ?? getDefaultModel(modelCatalog)
+      const paramsSnapshot = normalizeParamValues(model, settings.paramValues)
+      const channel = channels.find((item) => item.id === settings.channelId)
+
+      return createMockRun({
+        batchId,
+        sideMode: mode,
+        side,
+        prompt: value,
+        settings,
+        model,
+        paramsSnapshot,
+        channel,
+      })
+    }
+
+    const runs = mode === 'single' ? [buildRun('single')] : [buildRun('A'), buildRun('B')]
 
     if (!activeConversation) {
-      const conversation = createConversation(effectiveSettings, `对话 ${summaries.length + 1}`)
-      const updatedConversation = appendMessagesToConversation(conversation, value, run)
+      const conversation = createConversation(settingsBySide, mode, `对话 ${summaries.length + 1}`)
+      const updatedConversation = appendMessagesToConversation(conversation, value, runs)
       persistConversation(updatedConversation)
       setActiveId(updatedConversation.id)
       saveActiveConversationId(updatedConversation.id)
     } else {
-      const updatedConversation = appendMessagesToConversation(activeConversation, value, run)
+      const updatedConversation = appendMessagesToConversation(
+        {
+          ...activeConversation,
+          sideMode: mode,
+          settingsBySide,
+        },
+        value,
+        runs,
+      )
       persistConversation(updatedConversation)
     }
 
@@ -215,15 +303,17 @@ export function useConversations() {
     activeConversation,
     activeId,
     draft,
-    activeSettings,
+    activeSideMode,
+    activeSettingsBySide,
     modelCatalog,
     channels,
     setDraft,
     createNewConversation,
     switchConversation,
-    updateActiveSettings,
-    setActiveModel,
-    setActiveModelParam,
+    updateSideMode,
+    updateSideSettings,
+    setSideModel,
+    setSideModelParam,
     setChannels,
     sendDraft,
   }

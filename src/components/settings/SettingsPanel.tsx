@@ -13,6 +13,7 @@ import {
   Space,
   Switch,
   Table,
+  Tabs,
   Tag,
   Typography,
 } from 'antd'
@@ -21,6 +22,8 @@ import type {
   ModelParamSpec,
   ModelSpec,
   SettingPrimitive,
+  Side,
+  SideMode,
   SingleSideSettings,
 } from '../../types/chat'
 import { makeId } from '../../utils/chat'
@@ -34,12 +37,14 @@ type ChannelFormValues = {
 }
 
 interface SettingsPanelProps {
-  settings: SingleSideSettings
+  sideMode: SideMode
+  settingsBySide: Record<Side, SingleSideSettings>
   models: ModelSpec[]
   channels: ApiChannel[]
-  onSettingsChange: (patch: Partial<SingleSideSettings>) => void
-  onModelChange: (modelId: string) => void
-  onModelParamChange: (paramKey: string, value: SettingPrimitive) => void
+  onSideModeChange: (mode: SideMode) => void
+  onSettingsChange: (side: Side, patch: Partial<SingleSideSettings>) => void
+  onModelChange: (side: Side, modelId: string) => void
+  onModelParamChange: (side: Side, paramKey: string, value: SettingPrimitive) => void
   onChannelsChange: (channels: ApiChannel[]) => void
 }
 
@@ -92,84 +97,29 @@ function renderParamInput(
 
 export function SettingsPanel(props: SettingsPanelProps) {
   const {
-    settings,
+    sideMode,
+    settingsBySide,
     models,
     channels,
+    onSideModeChange,
     onSettingsChange,
     onModelChange,
     onModelParamChange,
     onChannelsChange,
   } = props
 
+  const [activeSideTab, setActiveSideTab] = useState<'A' | 'B'>('A')
   const [isDrawerOpen, setIsDrawerOpen] = useState(false)
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [editingChannelId, setEditingChannelId] = useState<string | null>(null)
   const [channelForm] = Form.useForm<ChannelFormValues>()
 
-  const activeModel = useMemo(
-    () => models.find((item) => item.id === settings.modelId) ?? models[0],
-    [models, settings.modelId],
-  )
+  const renderSettingForm = (side: Side) => {
+    const settings = settingsBySide[side]
+    const activeModel = models.find((item) => item.id === settings.modelId) ?? models[0]
+    const currentChannel = channels.find((item) => item.id === settings.channelId) ?? null
 
-  const currentChannel = useMemo(
-    () => channels.find((item) => item.id === settings.channelId) ?? null,
-    [channels, settings.channelId],
-  )
-
-  const channelColumns = [
-    {
-      title: '名称',
-      dataIndex: 'name',
-      key: 'name',
-    },
-    {
-      title: 'Base URL',
-      dataIndex: 'baseUrl',
-      key: 'baseUrl',
-      ellipsis: true,
-    },
-    {
-      title: 'API Key',
-      dataIndex: 'apiKey',
-      key: 'apiKey',
-      render: (value: string) => maskApiKey(value),
-    },
-    {
-      title: '操作',
-      key: 'actions',
-      render: (_: unknown, row: ApiChannel) => (
-        <Space>
-          <Button
-            size="small"
-            onClick={() => {
-              setEditingChannelId(row.id)
-              channelForm.setFieldsValue({
-                name: row.name,
-                baseUrl: row.baseUrl,
-                apiKey: row.apiKey,
-              })
-              setIsModalOpen(true)
-            }}
-          >
-            编辑
-          </Button>
-          <Popconfirm
-            title="确认删除该渠道？"
-            onConfirm={() => {
-              onChannelsChange(channels.filter((item) => item.id !== row.id))
-            }}
-          >
-            <Button danger size="small">
-              删除
-            </Button>
-          </Popconfirm>
-        </Space>
-      ),
-    },
-  ]
-
-  return (
-    <div className="panel-scroll">
+    return (
       <Space direction="vertical" size={16} className="full-width">
         <Card title="生成设置" size="small">
           <Form layout="vertical">
@@ -182,7 +132,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
                   { label: '1024x1024', value: '1024x1024' },
                   { label: '1216x832', value: '1216x832' },
                 ]}
-                onChange={(value) => onSettingsChange({ resolution: value })}
+                onChange={(value) => onSettingsChange(side, { resolution: value })}
               />
             </Form.Item>
 
@@ -196,7 +146,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
                   { label: '16:9', value: '16:9' },
                   { label: '9:16', value: '9:16' },
                 ]}
-                onChange={(value) => onSettingsChange({ aspectRatio: value })}
+                onChange={(value) => onSettingsChange(side, { aspectRatio: value })}
               />
             </Form.Item>
 
@@ -206,14 +156,14 @@ export function SettingsPanel(props: SettingsPanelProps) {
                 min={1}
                 max={8}
                 value={settings.imageCount}
-                onChange={(value) => onSettingsChange({ imageCount: typeof value === 'number' ? value : 4 })}
+                onChange={(value) => onSettingsChange(side, { imageCount: typeof value === 'number' ? value : 4 })}
               />
             </Form.Item>
 
             <Form.Item label="自动保存到本地">
               <Switch
                 checked={settings.autoSave}
-                onChange={(checked) => onSettingsChange({ autoSave: checked })}
+                onChange={(checked) => onSettingsChange(side, { autoSave: checked })}
               />
             </Form.Item>
           </Form>
@@ -225,7 +175,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
               placeholder="选择生成渠道"
               value={settings.channelId ?? undefined}
               options={channels.map((item) => ({ label: item.name, value: item.id }))}
-              onChange={(value) => onSettingsChange({ channelId: value })}
+              onChange={(value) => onSettingsChange(side, { channelId: value })}
               allowClear
             />
             <Space>
@@ -242,7 +192,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
                 <Select
                   value={activeModel?.id}
                   options={models.map((item) => ({ label: item.name, value: item.id }))}
-                  onChange={(value) => onModelChange(value)}
+                  onChange={(value) => onModelChange(side, value)}
                 />
               </Form.Item>
             </Form>
@@ -254,7 +204,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
                     <Text>{param.label}</Text>
                     <div style={{ marginTop: 6 }}>
                       {renderParamInput(param, settings.paramValues[param.key], (next) =>
-                        onModelParamChange(param.key, next),
+                        onModelParamChange(side, param.key, next),
                       )}
                     </div>
                   </div>
@@ -266,6 +216,85 @@ export function SettingsPanel(props: SettingsPanelProps) {
           </Space>
         </Card>
       </Space>
+    )
+  }
+
+  const channelColumns = useMemo(
+    () => [
+      {
+        title: '名称',
+        dataIndex: 'name',
+        key: 'name',
+      },
+      {
+        title: 'Base URL',
+        dataIndex: 'baseUrl',
+        key: 'baseUrl',
+        ellipsis: true,
+      },
+      {
+        title: 'API Key',
+        dataIndex: 'apiKey',
+        key: 'apiKey',
+        render: (value: string) => maskApiKey(value),
+      },
+      {
+        title: '操作',
+        key: 'actions',
+        render: (_: unknown, row: ApiChannel) => (
+          <Space>
+            <Button
+              size="small"
+              onClick={() => {
+                setEditingChannelId(row.id)
+                channelForm.setFieldsValue({
+                  name: row.name,
+                  baseUrl: row.baseUrl,
+                  apiKey: row.apiKey,
+                })
+                setIsModalOpen(true)
+              }}
+            >
+              编辑
+            </Button>
+            <Popconfirm
+              title="确认删除该渠道？"
+              onConfirm={() => {
+                onChannelsChange(channels.filter((item) => item.id !== row.id))
+              }}
+            >
+              <Button danger size="small">
+                删除
+              </Button>
+            </Popconfirm>
+          </Space>
+        ),
+      },
+    ],
+    [channelForm, channels, onChannelsChange],
+  )
+
+  return (
+    <div className="panel-scroll">
+      <Card title="对照模式" size="small" style={{ marginBottom: 16 }}>
+        <Space>
+          <Switch checked={sideMode === 'ab'} onChange={(checked) => onSideModeChange(checked ? 'ab' : 'single')} />
+          <Text>{sideMode === 'ab' ? 'A/B 对照已开启' : '单窗口模式'}</Text>
+        </Space>
+      </Card>
+
+      {sideMode === 'ab' ? (
+        <Tabs
+          activeKey={activeSideTab}
+          onChange={(value) => setActiveSideTab(value as 'A' | 'B')}
+          items={[
+            { key: 'A', label: 'A 侧设置', children: renderSettingForm('A') },
+            { key: 'B', label: 'B 侧设置', children: renderSettingForm('B') },
+          ]}
+        />
+      ) : (
+        renderSettingForm('single')
+      )}
 
       <Drawer
         title="API 渠道管理"
@@ -338,4 +367,3 @@ export function SettingsPanel(props: SettingsPanelProps) {
     </div>
   )
 }
-

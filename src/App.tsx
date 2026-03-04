@@ -1,4 +1,4 @@
-﻿import { Layout, Typography } from 'antd'
+﻿import { Card, Col, Layout, Row, Typography } from 'antd'
 import { Composer } from './components/chat/Composer'
 import { MessageList } from './components/chat/MessageList'
 import { ImagePreviewModal } from './components/preview/ImagePreviewModal'
@@ -17,15 +17,17 @@ export default function App() {
     activeConversation,
     activeId,
     draft,
-    activeSettings,
+    activeSideMode,
+    activeSettingsBySide,
     modelCatalog,
     channels,
     setDraft,
     createNewConversation,
     switchConversation,
-    updateActiveSettings,
-    setActiveModel,
-    setActiveModelParam,
+    updateSideMode,
+    updateSideSettings,
+    setSideModel,
+    setSideModelParam,
     setChannels,
     sendDraft,
   } = useConversations()
@@ -66,8 +68,23 @@ export default function App() {
           </Title>
         </Header>
 
-        <Content className="chat-body">
-          <MessageList activeConversation={activeConversation} onOpenPreview={openPreview} />
+        <Content className={`chat-body ${activeSideMode === 'ab' ? 'chat-body-ab' : ''}`}>
+          {activeSideMode === 'ab' ? (
+            <Row gutter={12} className="ab-windows-row">
+              <Col span={12} className="ab-window-col">
+                <Card title="A" size="small" className="ab-window-card">
+                  <MessageList activeConversation={activeConversation} sideView="A" onOpenPreview={openPreview} />
+                </Card>
+              </Col>
+              <Col span={12} className="ab-window-col">
+                <Card title="B" size="small" className="ab-window-card">
+                  <MessageList activeConversation={activeConversation} sideView="B" onOpenPreview={openPreview} />
+                </Card>
+              </Col>
+            </Row>
+          ) : (
+            <MessageList activeConversation={activeConversation} sideView="single" onOpenPreview={openPreview} />
+          )}
         </Content>
 
         <Composer draft={draft} onDraftChange={setDraft} onSend={sendDraft} />
@@ -75,12 +92,14 @@ export default function App() {
 
       <Sider width={320} className="panel panel-right">
         <SettingsPanel
-          settings={activeSettings}
+          sideMode={activeSideMode}
+          settingsBySide={activeSettingsBySide}
           models={modelCatalog.models}
           channels={channels}
-          onSettingsChange={updateActiveSettings}
-          onModelChange={setActiveModel}
-          onModelParamChange={setActiveModelParam}
+          onSideModeChange={updateSideMode}
+          onSettingsChange={updateSideSettings}
+          onModelChange={setSideModel}
+          onModelParamChange={setSideModelParam}
           onChannelsChange={setChannels}
         />
       </Sider>

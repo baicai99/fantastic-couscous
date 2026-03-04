@@ -52,6 +52,7 @@ export interface ImageItem {
 
 export interface Run {
   id: string
+  batchId: string
   createdAt: string
   sideMode: SideMode
   side: Side
@@ -78,7 +79,8 @@ export interface Conversation {
   title: string
   createdAt: string
   updatedAt: string
-  singleSettings: SingleSideSettings
+  sideMode: SideMode
+  settingsBySide: Record<Side, SingleSideSettings>
   messages: Message[]
 }
 

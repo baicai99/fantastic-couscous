@@ -7,6 +7,8 @@
   ModelSpec,
   Run,
   SettingPrimitive,
+  Side,
+  SideMode,
   SingleSideSettings,
 } from '../types/chat'
 
@@ -18,7 +20,18 @@ export function makeId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
 }
 
-export function createConversation(settings: SingleSideSettings, title?: string): Conversation {
+export function cloneSideSettings(settings: SingleSideSettings): SingleSideSettings {
+  return {
+    ...settings,
+    paramValues: { ...settings.paramValues },
+  }
+}
+
+export function createConversation(
+  settingsBySide: Record<Side, SingleSideSettings>,
+  sideMode: SideMode,
+  title?: string,
+): Conversation {
   const now = new Date().toISOString()
 
   return {
@@ -26,7 +39,12 @@ export function createConversation(settings: SingleSideSettings, title?: string)
     title: title ?? `对话 ${new Date().toLocaleTimeString()}`,
     createdAt: now,
     updatedAt: now,
-    singleSettings: settings,
+    sideMode,
+    settingsBySide: {
+      single: cloneSideSettings(settingsBySide.single),
+      A: cloneSideSettings(settingsBySide.A),
+      B: cloneSideSettings(settingsBySide.B),
+    },
     messages: [],
   }
 }
@@ -67,13 +85,19 @@ function parseResolution(resolution: string): { width: number; height: number } 
   }
 }
 
-export function createMockRun(
-  prompt: string,
-  settings: SingleSideSettings,
-  model: ModelSpec | undefined,
-  paramsSnapshot: Record<string, SettingPrimitive>,
-  channel: ApiChannel | undefined,
-): Run {
+interface CreateMockRunOptions {
+  batchId: string
+  sideMode: SideMode
+  side: Side
+  prompt: string
+  settings: SingleSideSettings
+  model: ModelSpec | undefined
+  paramsSnapshot: Record<string, SettingPrimitive>
+  channel: ApiChannel | undefined
+}
+
+export function createMockRun(options: CreateMockRunOptions): Run {
+  const { batchId, sideMode, side, prompt, settings, model, paramsSnapshot, channel } = options
   const shouldFailLast = prompt.toLowerCase().includes('fail')
   const shouldPendingLast = prompt.toLowerCase().includes('loading')
   const imageCount = clamp(Math.floor(settings.imageCount), 1, 8)
@@ -81,9 +105,10 @@ export function createMockRun(
 
   return {
     id: makeId(),
+    batchId,
     createdAt: new Date().toISOString(),
-    sideMode: 'single',
-    side: 'single',
+    sideMode,
+    side,
     prompt,
     imageCount,
     channelId: channel?.id ?? null,
@@ -113,7 +138,7 @@ export function createMockRun(
 export function appendMessagesToConversation(
   conversation: Conversation,
   userPrompt: string,
-  run: Run,
+  runs: Run[],
 ): Conversation {
   const now = new Date().toISOString()
   const userMessage: Message = {
@@ -128,7 +153,7 @@ export function appendMessagesToConversation(
     createdAt: now,
     role: 'assistant',
     content: '已生成 mock 结果，点击图片可预览。',
-    runs: [run],
+    runs,
   }
 
   return {

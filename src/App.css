@@ -41,6 +41,10 @@
   padding: 16px;
 }
 
+.chat-body.chat-body-ab {
+  overflow: hidden;
+}
+
 .chat-input {
   padding: 16px;
   border-top: 1px solid #f0f0f0;
