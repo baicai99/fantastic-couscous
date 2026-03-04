@@ -11,7 +11,7 @@ import {
   getDefaultModel,
   getDefaultParamValues,
   getModelById,
-  getModelCatalog,
+  getModelCatalogFromChannels,
   normalizeParamValues,
 } from '../services/modelCatalog'
 import type {
@@ -24,6 +24,7 @@ import type {
   Side,
   SideMode,
   SingleSideSettings,
+  ModelCatalog,
 } from '../types/chat'
 import {
   appendMessagesToConversation,
@@ -39,6 +40,7 @@ import { generateImages } from '../services/imageGeneration'
 
 const RESOLUTION_DEFAULT = '1024x1024'
 const ASPECT_RATIO_DEFAULT = '1:1'
+const EMPTY_MODEL_CATALOG: ModelCatalog = { models: [] }
 
 export type VariableInputMode = 'table' | 'inline' | 'panel'
 
@@ -58,11 +60,11 @@ export interface PanelVariableRow {
 function normalizeSettings(
   settings: SingleSideSettings | undefined,
   channels: ApiChannel[],
+  catalog = EMPTY_MODEL_CATALOG,
 ): SingleSideSettings {
-  const modelCatalog = getModelCatalog()
-  const defaultModel = getDefaultModel(modelCatalog)
+  const defaultModel = getDefaultModel(catalog)
 
-  const pickedModel = settings?.modelId ? getModelById(modelCatalog, settings.modelId) : undefined
+  const pickedModel = settings?.modelId ? getModelById(catalog, settings.modelId) : undefined
   const model = pickedModel ?? defaultModel
 
   const channelId =
@@ -81,8 +83,11 @@ function normalizeSettings(
   }
 }
 
-function defaultSettingsBySide(channels: ApiChannel[]): Record<Side, SingleSideSettings> {
-  const base = normalizeSettings(undefined, channels)
+function defaultSettingsBySide(
+  channels: ApiChannel[],
+  catalog = EMPTY_MODEL_CATALOG,
+): Record<Side, SingleSideSettings> {
+  const base = normalizeSettings(undefined, channels, catalog)
   return {
     single: cloneSideSettings(base),
     A: cloneSideSettings(base),
@@ -93,17 +98,22 @@ function defaultSettingsBySide(channels: ApiChannel[]): Record<Side, SingleSideS
 function normalizeSettingsBySide(
   settingsBySide: Partial<Record<Side, SingleSideSettings>> | undefined,
   channels: ApiChannel[],
+  catalog = EMPTY_MODEL_CATALOG,
 ): Record<Side, SingleSideSettings> {
-  const defaults = defaultSettingsBySide(channels)
+  const defaults = defaultSettingsBySide(channels, catalog)
 
   return {
-    single: normalizeSettings(settingsBySide?.single ?? defaults.single, channels),
-    A: normalizeSettings(settingsBySide?.A ?? settingsBySide?.single ?? defaults.A, channels),
-    B: normalizeSettings(settingsBySide?.B ?? settingsBySide?.single ?? defaults.B, channels),
+    single: normalizeSettings(settingsBySide?.single ?? defaults.single, channels, catalog),
+    A: normalizeSettings(settingsBySide?.A ?? settingsBySide?.single ?? defaults.A, channels, catalog),
+    B: normalizeSettings(settingsBySide?.B ?? settingsBySide?.single ?? defaults.B, channels, catalog),
   }
 }
 
-function normalizeConversation(conversation: Conversation, channels: ApiChannel[]): Conversation {
+function normalizeConversation(
+  conversation: Conversation,
+  channels: ApiChannel[],
+  catalog = EMPTY_MODEL_CATALOG,
+): Conversation {
   const raw = conversation as Conversation & {
     singleSettings?: SingleSideSettings
     settingsBySide?: Partial<Record<Side, SingleSideSettings>>
@@ -120,6 +130,7 @@ function normalizeConversation(conversation: Conversation, channels: ApiChannel[
     settingsBySide: normalizeSettingsBySide(
       raw.settingsBySide ?? (raw.singleSettings ? { single: raw.singleSettings } : undefined),
       channels,
+      catalog,
     ),
     messages: normalizedMessages,
   }
@@ -215,15 +226,16 @@ function classifyFailure(message: string): FailureCode {
 
 export function useConversations() {
   const [channels, setChannelsState] = useState<ApiChannel[]>(() => loadChannelsFromStorage())
+  const modelCatalog = useMemo(() => getModelCatalogFromChannels(channels), [channels])
   const [initial] = useState(() => loadConversationsFromStorage())
 
   const normalizedContents = useMemo(() => {
     const next: Record<string, Conversation> = {}
     for (const [id, conversation] of Object.entries(initial.contents)) {
-      next[id] = normalizeConversation(conversation, channels)
+      next[id] = normalizeConversation(conversation, channels, modelCatalog)
     }
     return next
-  }, [channels, initial.contents])
+  }, [channels, initial.contents, modelCatalog])
 
   const [summaries, setSummaries] = useState<ConversationSummary[]>(initial.summaries)
   const [contents, setContents] = useState(normalizedContents)
@@ -242,9 +254,8 @@ export function useConversations() {
 
   const [stagedSideMode, setStagedSideMode] = useState<SideMode>('single')
   const [stagedSettingsBySide, setStagedSettingsBySide] = useState<Record<Side, SingleSideSettings>>(() =>
-    defaultSettingsBySide(channels),
+    defaultSettingsBySide(channels, modelCatalog),
   )
-  const [modelCatalog] = useState(() => getModelCatalog())
 
   const activeConversation = useMemo(() => {
     return activeId ? contents[activeId] ?? null : null
@@ -326,6 +337,7 @@ export function useConversations() {
         },
       },
       channels,
+      modelCatalog,
     )
 
     updateConversationState(activeSideMode, merged)
@@ -345,6 +357,7 @@ export function useConversations() {
         },
       },
       channels,
+      modelCatalog,
     )
 
     updateConversationState(activeSideMode, merged)
@@ -365,6 +378,7 @@ export function useConversations() {
         },
       },
       channels,
+      modelCatalog,
     )
 
     updateConversationState(activeSideMode, merged)
@@ -374,7 +388,8 @@ export function useConversations() {
     setChannelsState(nextChannels)
     saveChannelsToStorage(nextChannels)
 
-    const normalized = normalizeSettingsBySide(activeSettingsBySide, nextChannels)
+    const nextCatalog = getModelCatalogFromChannels(nextChannels)
+    const normalized = normalizeSettingsBySide(activeSettingsBySide, nextChannels, nextCatalog)
     updateConversationState(activeSideMode, normalized)
   }
 
@@ -517,7 +532,7 @@ export function useConversations() {
     setSendError('')
 
     const mode = activeSideMode
-    const settingsBySide = normalizeSettingsBySide(activeSettingsBySide, channels)
+    const settingsBySide = normalizeSettingsBySide(activeSettingsBySide, channels, modelCatalog)
     const batchId = makeId()
 
     const buildRun = (side: Side) => {

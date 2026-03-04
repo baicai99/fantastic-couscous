@@ -38,6 +38,7 @@ export interface ApiChannel {
   name: string
   baseUrl: string
   apiKey: string
+  models?: string[]
 }
 
 export interface SingleSideSettings {

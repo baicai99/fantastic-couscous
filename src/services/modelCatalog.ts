@@ -1,87 +1,13 @@
-import { load } from 'js-yaml'
-import modelsYaml from '../config/models.yaml?raw'
-import type { ModelCatalog, ModelParamSpec, ModelSpec, SettingPrimitive } from '../types/chat'
+import type { ApiChannel, ModelCatalog, ModelSpec, SettingPrimitive } from '../types/chat'
 
 const EMPTY_CATALOG: ModelCatalog = { models: [] }
 
-function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null
-}
-
-function parseParam(raw: unknown): ModelParamSpec | null {
-  if (!isObject(raw)) {
-    return null
+function shouldDisplayModel(modelId: string): boolean {
+  const value = modelId.toLowerCase()
+  if (value.includes('banana') || value.includes('gemini')) {
+    return true
   }
-
-  const key = typeof raw.key === 'string' ? raw.key : ''
-  const label = typeof raw.label === 'string' ? raw.label : key
-  const type =
-    raw.type === 'number' || raw.type === 'enum' || raw.type === 'boolean' ? raw.type : undefined
-
-  if (!key || !type || !('default' in raw)) {
-    return null
-  }
-
-  const spec: ModelParamSpec = {
-    key,
-    label,
-    type,
-    default: raw.default as SettingPrimitive,
-  }
-
-  if (typeof raw.min === 'number') {
-    spec.min = raw.min
-  }
-  if (typeof raw.max === 'number') {
-    spec.max = raw.max
-  }
-  if (Array.isArray(raw.options)) {
-    spec.options = raw.options.filter((item): item is string => typeof item === 'string')
-  }
-
-  return spec
-}
-
-function parseModel(raw: unknown): ModelSpec | null {
-  if (!isObject(raw)) {
-    return null
-  }
-
-  const id = typeof raw.id === 'string' ? raw.id : ''
-  const name = typeof raw.name === 'string' ? raw.name : id
-  const tags = Array.isArray(raw.tags)
-    ? Array.from(
-        new Set(
-          raw.tags
-            .filter((item): item is string => typeof item === 'string')
-            .map((item) => item.trim().toLowerCase())
-            .filter(Boolean),
-        ),
-      )
-    : undefined
-  const paramsRaw = Array.isArray(raw.params) ? raw.params : []
-  const params = paramsRaw.map(parseParam).filter((item): item is ModelParamSpec => item !== null)
-
-  if (!id || !name) {
-    return null
-  }
-
-  return { id, name, tags, params }
-}
-
-export function getModelCatalog(): ModelCatalog {
-  try {
-    const parsed = load(modelsYaml)
-    if (!isObject(parsed) || !Array.isArray(parsed.models)) {
-      return EMPTY_CATALOG
-    }
-
-    return {
-      models: parsed.models.map(parseModel).filter((item): item is ModelSpec => item !== null),
-    }
-  } catch {
-    return EMPTY_CATALOG
-  }
+  return !value.includes('chat')
 }
 
 export function getModelById(catalog: ModelCatalog, modelId: string): ModelSpec | undefined {
@@ -140,4 +66,25 @@ export function normalizeParamValues(
   }
 
   return next
+}
+
+export function getModelCatalogFromChannels(channels: ApiChannel[]): ModelCatalog {
+  const merged = new Map<string, ModelSpec>()
+
+  for (const channel of channels) {
+    const modelIds = Array.isArray(channel.models) ? channel.models : []
+    for (const modelId of modelIds) {
+      if (!modelId || merged.has(modelId) || !shouldDisplayModel(modelId)) {
+        continue
+      }
+
+      merged.set(modelId, {
+        id: modelId,
+        name: modelId,
+        params: [],
+      })
+    }
+  }
+
+  return merged.size > 0 ? { models: Array.from(merged.values()) } : EMPTY_CATALOG
 }

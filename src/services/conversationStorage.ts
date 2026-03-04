@@ -65,13 +65,20 @@ export function loadChannelsFromStorage(): ApiChannel[] {
     }
 
     const parsed = JSON.parse(raw) as ApiChannel[]
-    return parsed.filter(
-      (item) =>
-        typeof item?.id === 'string' &&
-        typeof item?.name === 'string' &&
-        typeof item?.baseUrl === 'string' &&
-        typeof item?.apiKey === 'string',
-    )
+    return parsed
+      .filter(
+        (item) =>
+          typeof item?.id === 'string' &&
+          typeof item?.name === 'string' &&
+          typeof item?.baseUrl === 'string' &&
+          typeof item?.apiKey === 'string',
+      )
+      .map((item) => ({
+        ...item,
+        models: Array.isArray(item.models)
+          ? item.models.filter((model): model is string => typeof model === 'string' && Boolean(model.trim()))
+          : undefined,
+      }))
   } catch {
     return []
   }

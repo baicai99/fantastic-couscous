@@ -16,6 +16,7 @@ import {
   Tabs,
   Tag,
   Typography,
+  message,
 } from 'antd'
 import type {
   ApiChannel,
@@ -26,6 +27,7 @@ import type {
   SideMode,
   SingleSideSettings,
 } from '../../types/chat'
+import { fetchChannelModels } from '../../services/channelModels'
 import { makeId } from '../../utils/chat'
 
 const { Text } = Typography
@@ -106,7 +108,7 @@ function inferModelTags(model: ModelSpec): string[] {
   const value = `${model.id} ${model.name}`.toLowerCase()
   const tags = new Set<string>()
 
-  if (value.includes('gemini')) tags.add('gemini')
+  if (value.includes('gemini') || value.includes('banana')) tags.add('google')
   if (value.includes('midjourney')) tags.add('midjourney')
   if (value.includes('dall-e') || value.includes('dalle')) tags.add('dalle')
   if (value.includes('openai')) tags.add('openai')
@@ -114,6 +116,22 @@ function inferModelTags(model: ModelSpec): string[] {
   if (value.includes('flux')) tags.add('flux')
 
   return Array.from(tags)
+}
+
+function inferModelSearchTokens(model: ModelSpec): string {
+  const value = `${model.id} ${model.name}`.toLowerCase()
+  const tokens = new Set<string>()
+
+  if (value.includes('gemini')) {
+    tokens.add('google')
+    tokens.add('banana')
+  }
+  if (value.includes('banana')) {
+    tokens.add('google')
+    tokens.add('gemini')
+  }
+
+  return Array.from(tokens).join(' ')
 }
 
 export function SettingsPanel(props: SettingsPanelProps) {
@@ -141,6 +159,8 @@ export function SettingsPanel(props: SettingsPanelProps) {
     B: ALL_MODEL_TAG,
   })
   const [channelForm] = Form.useForm<ChannelFormValues>()
+  const [isSavingChannel, setIsSavingChannel] = useState(false)
+  const [messageApi, messageContextHolder] = message.useMessage()
 
   const availableModelTags = useMemo(() => {
     const tags = new Set<string>()
@@ -155,16 +175,22 @@ export function SettingsPanel(props: SettingsPanelProps) {
   const renderSettingForm = (side: Side) => {
     const settings = settingsBySide[side]
     const selectedTag = modelTagBySide[side] ?? ALL_MODEL_TAG
+    const currentChannel = channels.find((item) => item.id === settings.channelId) ?? null
+    const channelModelSet =
+      currentChannel && Array.isArray(currentChannel.models) && currentChannel.models.length > 0
+        ? new Set(currentChannel.models)
+        : null
+    const scopedModels = channelModelSet ? models.filter((item) => channelModelSet.has(item.id)) : models
     const filteredModels =
       selectedTag === ALL_MODEL_TAG
-        ? models
-        : models.filter((item) => inferModelTags(item).includes(selectedTag))
+        ? scopedModels
+        : scopedModels.filter((item) => inferModelTags(item).includes(selectedTag))
     const activeModel =
       filteredModels.find((item) => item.id === settings.modelId) ??
-      models.find((item) => item.id === settings.modelId) ??
+      scopedModels.find((item) => item.id === settings.modelId) ??
       filteredModels[0] ??
+      scopedModels[0] ??
       models[0]
-    const currentChannel = channels.find((item) => item.id === settings.channelId) ?? null
 
     return (
       <Space direction="vertical" size={16} className="full-width">
@@ -195,7 +221,24 @@ export function SettingsPanel(props: SettingsPanelProps) {
               placeholder="选择生成渠道"
               value={settings.channelId ?? undefined}
               options={channels.map((item) => ({ label: item.name, value: item.id }))}
-              onChange={(value) => onSettingsChange(side, { channelId: value })}
+              onChange={(value) => {
+                onSettingsChange(side, { channelId: value })
+
+                const selectedChannel = channels.find((item) => item.id === value)
+                if (!selectedChannel || !Array.isArray(selectedChannel.models) || selectedChannel.models.length === 0) {
+                  return
+                }
+
+                const supportedSet = new Set(selectedChannel.models)
+                if (supportedSet.has(settings.modelId)) {
+                  return
+                }
+
+                const fallbackModel = models.find((item) => supportedSet.has(item.id))
+                if (fallbackModel) {
+                  onModelChange(side, fallbackModel.id)
+                }
+              }}
               allowClear
             />
             <Space>
@@ -223,17 +266,32 @@ export function SettingsPanel(props: SettingsPanelProps) {
                     }
 
                     const vendorModels = models.filter((item) => inferModelTags(item).includes(value))
-                    const currentMatches = vendorModels.some((item) => item.id === settings.modelId)
-                    if (!currentMatches && vendorModels[0]) {
-                      onModelChange(side, vendorModels[0].id)
+                    const scopedVendorModels = channelModelSet
+                      ? vendorModels.filter((item) => channelModelSet.has(item.id))
+                      : vendorModels
+                    const currentMatches = scopedVendorModels.some((item) => item.id === settings.modelId)
+                    if (!currentMatches && scopedVendorModels[0]) {
+                      onModelChange(side, scopedVendorModels[0].id)
                     }
                   }}
                 />
               </Form.Item>
               <Form.Item label="模型">
                 <Select
+                  showSearch
                   value={activeModel?.id}
                   options={filteredModels.map((item) => ({ label: item.name, value: item.id }))}
+                  optionFilterProp="label"
+                  filterOption={(input, option) => {
+                    const keyword = input.trim().toLowerCase()
+                    const value = String(option?.value ?? '')
+                    const model = filteredModels.find((item) => item.id === value)
+                    const label = String(option?.label ?? '').toLowerCase()
+                    const id = value.toLowerCase()
+                    const aliases = model ? inferModelSearchTokens(model) : ''
+                    const haystack = `${label} ${id} ${aliases}`
+                    return haystack.includes(keyword)
+                  }}
                   onChange={(value) => onModelChange(side, value)}
                 />
               </Form.Item>
@@ -253,7 +311,9 @@ export function SettingsPanel(props: SettingsPanelProps) {
                 ))}
               </Space>
             ) : (
-              <Text type="secondary">未读取到模型配置（YAML）</Text>
+              <Text type="secondary">
+                {currentChannel ? '当前渠道未返回可用模型，请重新编辑渠道后刷新模型列表。' : '请先新增并选择一个渠道'}
+              </Text>
             )}
           </Space>
         </Card>
@@ -318,6 +378,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
 
   return (
     <div className="panel-scroll">
+      {messageContextHolder}
       <Card title="对照模式" size="small" style={{ marginBottom: 16 }}>
         <Space>
           <Switch checked={sideMode === 'ab'} onChange={(checked) => onSideModeChange(checked ? 'ab' : 'single')} />
@@ -375,26 +436,45 @@ export function SettingsPanel(props: SettingsPanelProps) {
       <Modal
         title={editingChannelId ? '编辑渠道' : '新增渠道'}
         open={isModalOpen}
+        confirmLoading={isSavingChannel}
         onCancel={() => setIsModalOpen(false)}
         onOk={async () => {
-          const values = await channelForm.validateFields()
+          setIsSavingChannel(true)
+          try {
+            const values = await channelForm.validateFields()
+            const nextBaseUrl = values.baseUrl.trim()
+            const nextApiKey = values.apiKey.trim()
+            const modelIds = await fetchChannelModels({ baseUrl: nextBaseUrl, apiKey: nextApiKey })
 
-          const nextChannel: ApiChannel = {
-            id: editingChannelId ?? makeId(),
-            name: values.name.trim(),
-            baseUrl: values.baseUrl.trim(),
-            apiKey: values.apiKey.trim(),
+            if (modelIds.length === 0) {
+              throw new Error('上游返回了空模型列表，请检查渠道权限。')
+            }
+
+            const nextChannel: ApiChannel = {
+              id: editingChannelId ?? makeId(),
+              name: values.name.trim(),
+              baseUrl: nextBaseUrl,
+              apiKey: nextApiKey,
+              models: modelIds,
+            }
+
+            if (editingChannelId) {
+              onChannelsChange(channels.map((item) => (item.id === editingChannelId ? nextChannel : item)))
+              messageApi.success(`渠道已更新，读取到 ${modelIds.length} 个模型`)
+            } else {
+              onChannelsChange([nextChannel, ...channels])
+              messageApi.success(`渠道已添加，读取到 ${modelIds.length} 个模型`)
+            }
+
+            setIsModalOpen(false)
+            channelForm.resetFields()
+            setEditingChannelId(null)
+          } catch (error) {
+            const reason = error instanceof Error ? error.message : '未知错误'
+            messageApi.error(reason)
+          } finally {
+            setIsSavingChannel(false)
           }
-
-          if (editingChannelId) {
-            onChannelsChange(channels.map((item) => (item.id === editingChannelId ? nextChannel : item)))
-          } else {
-            onChannelsChange([nextChannel, ...channels])
-          }
-
-          setIsModalOpen(false)
-          channelForm.resetFields()
-          setEditingChannelId(null)
         }}
       >
         <Form form={channelForm} layout="vertical">
