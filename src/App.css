@@ -348,10 +348,16 @@
   place-items: center;
   cursor: default;
   user-select: none;
+  touch-action: none;
+  outline: none;
+}
+
+.preview-stage.is-pannable {
+  cursor: grab;
 }
 
 .preview-stage.is-dragging {
-  cursor: move;
+  cursor: grabbing;
 }
 
 .preview-image {
@@ -359,6 +365,11 @@
   max-height: 95%;
   object-fit: contain;
   transition: transform 0.08s linear;
+  will-change: transform;
+}
+
+.preview-stage.is-dragging .preview-image {
+  transition: none;
 }
 
 .preview-ab-grid {
@@ -385,6 +396,19 @@
   min-height: 0;
   display: grid;
   place-items: center;
+}
+
+.preview-shortcuts {
+  display: grid;
+  gap: 4px;
+  min-width: 260px;
+  line-height: 1.4;
+}
+
+.preview-shortcuts code {
+  background: #f5f5f5;
+  border-radius: 4px;
+  padding: 1px 4px;
 }
 .ab-windows-row {
   height: 100%;

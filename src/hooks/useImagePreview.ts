@@ -1,18 +1,66 @@
-﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import type { PreviewImage, Run } from '../types/chat'
-import { sortImagesBySeq } from '../utils/chat'
+import { clamp, sortImagesBySeq } from '../utils/chat'
 
 export interface DragOrigin {
-  mouseX: number
-  mouseY: number
-  offsetX: number
-  offsetY: number
+  pointerId: number
+  pointerX: number
+  pointerY: number
 }
 
 export interface PreviewPair {
   seq: number
   left?: PreviewImage
   right?: PreviewImage
+}
+
+export type PreviewInteractionMode = 'fit' | 'actual'
+
+export interface PreviewPoint {
+  x: number
+  y: number
+}
+
+export interface PreviewSize {
+  width: number
+  height: number
+}
+
+export interface TransformState {
+  zoom: number
+  offset: PreviewPoint
+  mode: PreviewInteractionMode
+}
+
+const MIN_ZOOM = 0.5
+const MAX_ZOOM = 5
+const FIT_ZOOM = 1
+const DEFAULT_ACTUAL_ZOOM = 2
+
+export function clampOffsetToBounds(offset: PreviewPoint, zoom: number, viewport: PreviewSize, content: PreviewSize): PreviewPoint {
+  if (zoom <= FIT_ZOOM || viewport.width <= 0 || viewport.height <= 0 || content.width <= 0 || content.height <= 0) {
+    return { x: 0, y: 0 }
+  }
+
+  const maxX = Math.max((content.width * zoom - viewport.width) / 2, 0)
+  const maxY = Math.max((content.height * zoom - viewport.height) / 2, 0)
+
+  return {
+    x: clamp(offset.x, -maxX, maxX),
+    y: clamp(offset.y, -maxY, maxY),
+  }
+}
+
+export function computeAnchoredOffset(prev: PreviewPoint, prevZoom: number, nextZoom: number, anchor: PreviewPoint): PreviewPoint {
+  if (prevZoom <= 0 || prevZoom === nextZoom) {
+    return prev
+  }
+
+  const ratio = nextZoom / prevZoom
+  return {
+    x: anchor.x - (anchor.x - prev.x) * ratio,
+    y: anchor.y - (anchor.y - prev.y) * ratio,
+  }
 }
 
 function toSuccessPreviewImages(run: Run): PreviewImage[] {
@@ -31,8 +79,11 @@ export function useImagePreview() {
   const [previewImages, setPreviewImages] = useState<PreviewImage[]>([])
   const [previewPairs, setPreviewPairs] = useState<PreviewPair[]>([])
   const [previewIndex, setPreviewIndex] = useState(0)
-  const [zoom, setZoom] = useState(1)
-  const [offset, setOffset] = useState({ x: 0, y: 0 })
+  const [transform, setTransform] = useState<TransformState>({
+    zoom: FIT_ZOOM,
+    offset: { x: 0, y: 0 },
+    mode: 'fit',
+  })
   const [isDragging, setIsDragging] = useState(false)
   const dragOriginRef = useRef<DragOrigin | null>(null)
 
@@ -41,12 +92,117 @@ export function useImagePreview() {
 
   const previewLength = previewMode === 'ab' ? previewPairs.length : previewImages.length
 
-  const resetPreviewTransform = useCallback(() => {
-    setZoom(1)
-    setOffset({ x: 0, y: 0 })
+  const resetTransform = useCallback(() => {
+    setTransform({
+      zoom: FIT_ZOOM,
+      offset: { x: 0, y: 0 },
+      mode: 'fit',
+    })
     setIsDragging(false)
     dragOriginRef.current = null
   }, [])
+
+  const zoomTo = useCallback(
+    (value: number, options?: { anchor?: PreviewPoint; viewport?: PreviewSize; content?: PreviewSize }) => {
+      setTransform((prev) => {
+        const nextZoom = clamp(value, MIN_ZOOM, MAX_ZOOM)
+        const anchor = options?.anchor
+        const nextOffset = anchor
+          ? computeAnchoredOffset(prev.offset, prev.zoom, nextZoom, anchor)
+          : { ...prev.offset }
+
+        const clampedOffset = options?.viewport && options?.content
+          ? clampOffsetToBounds(nextOffset, nextZoom, options.viewport, options.content)
+          : nextOffset
+
+        return {
+          zoom: nextZoom,
+          offset: clampedOffset,
+          mode: nextZoom === FIT_ZOOM ? 'fit' : 'actual',
+        }
+      })
+    },
+    [],
+  )
+
+  const zoomBy = useCallback(
+    (delta: number, options?: { anchor?: PreviewPoint; viewport?: PreviewSize; content?: PreviewSize }) => {
+      setTransform((prev) => {
+        const nextZoom = clamp(prev.zoom + delta, MIN_ZOOM, MAX_ZOOM)
+        const anchor = options?.anchor
+        const nextOffset = anchor
+          ? computeAnchoredOffset(prev.offset, prev.zoom, nextZoom, anchor)
+          : { ...prev.offset }
+
+        const clampedOffset = options?.viewport && options?.content
+          ? clampOffsetToBounds(nextOffset, nextZoom, options.viewport, options.content)
+          : nextOffset
+
+        return {
+          zoom: nextZoom,
+          offset: clampedOffset,
+          mode: nextZoom === FIT_ZOOM ? 'fit' : 'actual',
+        }
+      })
+    },
+    [],
+  )
+
+  const panBy = useCallback((dx: number, dy: number, options?: { viewport?: PreviewSize; content?: PreviewSize }) => {
+    setTransform((prev) => {
+      const nextOffset = {
+        x: prev.offset.x + dx,
+        y: prev.offset.y + dy,
+      }
+
+      const clampedOffset = options?.viewport && options?.content
+        ? clampOffsetToBounds(nextOffset, prev.zoom, options.viewport, options.content)
+        : nextOffset
+
+      return {
+        ...prev,
+        offset: clampedOffset,
+      }
+    })
+  }, [])
+
+  const panTo = useCallback((offset: PreviewPoint, options?: { viewport?: PreviewSize; content?: PreviewSize }) => {
+    setTransform((prev) => {
+      const clampedOffset = options?.viewport && options?.content
+        ? clampOffsetToBounds(offset, prev.zoom, options.viewport, options.content)
+        : offset
+
+      return {
+        ...prev,
+        offset: clampedOffset,
+      }
+    })
+  }, [])
+
+  const toggleFitMode = useCallback(
+    (actualZoom = DEFAULT_ACTUAL_ZOOM, options?: { anchor?: PreviewPoint; viewport?: PreviewSize; content?: PreviewSize }) => {
+      setTransform((prev) => {
+        const nextZoom = prev.mode === 'fit' ? clamp(actualZoom, MIN_ZOOM, MAX_ZOOM) : FIT_ZOOM
+        const anchor = options?.anchor
+        const nextOffset = nextZoom === FIT_ZOOM
+          ? { x: 0, y: 0 }
+          : anchor
+            ? computeAnchoredOffset(prev.offset, prev.zoom, nextZoom, anchor)
+            : { ...prev.offset }
+
+        const clampedOffset = options?.viewport && options?.content
+          ? clampOffsetToBounds(nextOffset, nextZoom, options.viewport, options.content)
+          : nextOffset
+
+        return {
+          zoom: nextZoom,
+          offset: clampedOffset,
+          mode: nextZoom === FIT_ZOOM ? 'fit' : 'actual',
+        }
+      })
+    },
+    [],
+  )
 
   const openPreview = useCallback(
     (run: Run, imageId: string, linkedRun?: Run) => {
@@ -61,7 +217,7 @@ export function useImagePreview() {
         setPreviewPairs([])
         setPreviewImages(images)
         setPreviewIndex(selectedIndex >= 0 ? selectedIndex : 0)
-        resetPreviewTransform()
+        resetTransform()
         setIsPreviewOpen(true)
         return
       }
@@ -72,11 +228,8 @@ export function useImagePreview() {
         return
       }
 
-      const runA = run
-      const runB = linkedRun
-
-      const imagesA = toSuccessPreviewImages(runA)
-      const imagesB = toSuccessPreviewImages(runB)
+      const imagesA = toSuccessPreviewImages(run)
+      const imagesB = toSuccessPreviewImages(linkedRun)
       const mapA = new Map(imagesA.map((item) => [item.seq, item]))
       const mapB = new Map(imagesB.map((item) => [item.seq, item]))
       const seqSet = new Set<number>([...mapA.keys(), ...mapB.keys()])
@@ -98,10 +251,10 @@ export function useImagePreview() {
       setPreviewImages([])
       setPreviewPairs(pairs)
       setPreviewIndex(selectedIndex >= 0 ? selectedIndex : 0)
-      resetPreviewTransform()
+      resetTransform()
       setIsPreviewOpen(true)
     },
-    [resetPreviewTransform],
+    [resetTransform],
   )
 
   const closePreview = useCallback(() => {
@@ -110,46 +263,28 @@ export function useImagePreview() {
     setPreviewImages([])
     setPreviewPairs([])
     setPreviewIndex(0)
-    resetPreviewTransform()
-  }, [resetPreviewTransform])
+    resetTransform()
+  }, [resetTransform])
 
   const goPrevPreview = useCallback(() => {
     setPreviewIndex((prev) => (prev === 0 ? previewLength - 1 : prev - 1))
-    resetPreviewTransform()
-  }, [previewLength, resetPreviewTransform])
+    resetTransform()
+  }, [previewLength, resetTransform])
 
   const goNextPreview = useCallback(() => {
     setPreviewIndex((prev) => (prev === previewLength - 1 ? 0 : prev + 1))
-    resetPreviewTransform()
-  }, [previewLength, resetPreviewTransform])
+    resetTransform()
+  }, [previewLength, resetTransform])
 
-  useEffect(() => {
-    if (!isPreviewOpen) {
-      return undefined
-    }
+  const goFirstPreview = useCallback(() => {
+    setPreviewIndex(0)
+    resetTransform()
+  }, [resetTransform])
 
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault()
-        closePreview()
-        return
-      }
-
-      if (event.key === 'ArrowLeft' && previewLength > 1) {
-        event.preventDefault()
-        goPrevPreview()
-        return
-      }
-
-      if (event.key === 'ArrowRight' && previewLength > 1) {
-        event.preventDefault()
-        goNextPreview()
-      }
-    }
-
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [closePreview, goNextPreview, goPrevPreview, isPreviewOpen, previewLength])
+  const goLastPreview = useCallback(() => {
+    setPreviewIndex(Math.max(0, previewLength - 1))
+    resetTransform()
+  }, [previewLength, resetTransform])
 
   const previewHint = useMemo(() => {
     if (previewLength === 0) {
@@ -157,8 +292,8 @@ export function useImagePreview() {
     }
 
     const seq = previewMode === 'ab' ? currentPreviewPair?.seq : currentPreviewImage?.seq
-    return `${previewIndex + 1}/${previewLength} | 序号 ${seq ?? '-'} | 缩放 ${Math.round(zoom * 100)}%`
-  }, [currentPreviewImage?.seq, currentPreviewPair?.seq, previewIndex, previewLength, previewMode, zoom])
+    return `${previewIndex + 1}/${previewLength} | 序号 ${seq ?? '-'} | 缩放 ${Math.round(transform.zoom * 100)}%`
+  }, [currentPreviewImage?.seq, currentPreviewPair?.seq, previewIndex, previewLength, previewMode, transform.zoom])
 
   return {
     isPreviewOpen,
@@ -166,19 +301,27 @@ export function useImagePreview() {
     previewImages,
     previewPairs,
     previewIndex,
-    zoom,
-    offset,
+    transform,
+    zoom: transform.zoom,
+    offset: transform.offset,
+    interactionMode: transform.mode,
     isDragging,
     dragOriginRef,
     currentPreviewImage,
     currentPreviewPair,
     previewHint,
-    setZoom,
-    setOffset,
-    setIsDragging,
     openPreview,
     closePreview,
     goPrevPreview,
     goNextPreview,
+    goFirstPreview,
+    goLastPreview,
+    resetTransform,
+    zoomBy,
+    zoomTo,
+    panBy,
+    panTo,
+    toggleFitMode,
+    setIsDragging,
   }
 }

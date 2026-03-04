@@ -88,13 +88,18 @@ export function ConversationWorkspace() {
     currentPreviewImage,
     currentPreviewPair,
     previewHint,
-    setZoom,
-    setOffset,
-    setIsDragging,
     openPreview,
     closePreview,
     goPrevPreview,
     goNextPreview,
+    goFirstPreview,
+    goLastPreview,
+    resetTransform,
+    zoomBy,
+    panBy,
+    panTo,
+    toggleFitMode,
+    setIsDragging,
   } = useImagePreview()
 
   return (
@@ -226,8 +231,13 @@ export function ConversationWorkspace() {
         currentPreviewPair={currentPreviewPair}
         zoom={zoom}
         offset={offset}
-        setZoom={setZoom}
-        setOffset={setOffset}
+        goFirstPreview={goFirstPreview}
+        goLastPreview={goLastPreview}
+        resetTransform={resetTransform}
+        zoomBy={zoomBy}
+        panBy={panBy}
+        panTo={panTo}
+        toggleFitMode={toggleFitMode}
         isDragging={isDragging}
         setIsDragging={setIsDragging}
         dragOriginRef={dragOriginRef}
