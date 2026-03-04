@@ -1,4 +1,5 @@
-﻿import { Alert, Button, Input, Select, Space, Table, Tabs, Typography } from 'antd'
+﻿import { SendOutlined } from '@ant-design/icons'
+import { Alert, Button, Card, Input, Select, Space, Table, Tabs, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import type { PanelVariableRow, TableVariableRow, VariableInputMode } from '../../hooks/useConversations'
 import { makeId } from '../../utils/chat'
@@ -194,106 +195,122 @@ export function Composer(props: ComposerProps) {
 
   return (
     <div className="chat-input">
-      <Space direction="vertical" className="full-width" size={10}>
-        <Input.TextArea
-          value={draft}
-          onChange={(event) => onDraftChange(event.target.value)}
-          placeholder="输入模板 prompt，例如：a {{style}} portrait of {{subject}}"
-          autoSize={{ minRows: 2, maxRows: 5 }}
-          onPressEnter={(event) => {
-            if (!event.shiftKey && !isSending) {
-              event.preventDefault()
-              onSend()
-            }
-          }}
-        />
-
-        {showAdvancedVariables ? (
-          <>
-            <Tabs
-              activeKey={variableMode}
-              onChange={(value) => onVariableModeChange(value as VariableInputMode)}
-              items={[
-                {
-                  key: 'table',
-                  label: '表格变量',
-                  children: (
-                    <Space direction="vertical" className="full-width" size={8}>
-                      <Button
-                        size="small"
-                        onClick={() =>
-                          onTableVariablesChange([...tableVariables, { id: makeId(), key: '', value: '' }])
-                        }
-                      >
-                        新增变量
-                      </Button>
-                      <Table<TableVariableRow>
-                        size="small"
-                        rowKey="id"
-                        columns={tableColumns}
-                        dataSource={tableVariables}
-                        pagination={false}
-                      />
-                    </Space>
-                  ),
-                },
-                {
-                  key: 'inline',
-                  label: '内联 k=v',
-                  children: (
-                    <Input.TextArea
-                      value={inlineVariablesText}
-                      onChange={(event) => onInlineVariablesTextChange(event.target.value)}
-                      placeholder={'subject=cat\nstyle=anime'}
-                      autoSize={{ minRows: 4, maxRows: 8 }}
-                    />
-                  ),
-                },
-                {
-                  key: 'panel',
-                  label: '变量面板',
-                  children: (
-                    <Space direction="vertical" className="full-width" size={8}>
-                      <Button
-                        size="small"
-                        onClick={() =>
-                          onPanelVariablesChange([
-                            ...panelVariables,
-                            { id: makeId(), key: '', valuesText: '', selectedValue: '' },
-                          ])
-                        }
-                      >
-                        新增变量定义
-                      </Button>
-                      <Table<PanelVariableRow>
-                        size="small"
-                        rowKey="id"
-                        columns={panelColumns}
-                        dataSource={panelVariables}
-                        pagination={false}
-                      />
-                    </Space>
-                  ),
-                },
-              ]}
+      <Card bordered={false} className="composer-card">
+        <Space direction="vertical" className="full-width" size={12}>
+          <div className="composer-main-row">
+            <Input.TextArea
+              value={draft}
+              onChange={(event) => onDraftChange(event.target.value)}
+              placeholder="输入模板 prompt，例如：a {{style}} portrait of {{subject}}"
+              autoSize={{ minRows: 2, maxRows: 6 }}
+              className="composer-textarea"
+              onPressEnter={(event) => {
+                if (!event.shiftKey && !isSending) {
+                  event.preventDefault()
+                  onSend()
+                }
+              }}
             />
+            <div className="composer-action-col">
+              <Text type="secondary" className="composer-enter-hint">
+                Enter 发送 / Shift+Enter 换行
+              </Text>
+              <Button
+                type="primary"
+                icon={<SendOutlined />}
+                onClick={onSend}
+                loading={isSending}
+                disabled={isSending}
+                className="composer-send-btn"
+              >
+                发送
+              </Button>
+            </div>
+          </div>
 
-            <Text type="secondary">当前变量：{renderResolvedVars(resolvedVariables)}</Text>
-            <Text type="secondary">最终 prompt：{finalPromptPreview || '-'}</Text>
-            {missingKeys.length > 0 ? <Alert type="warning" message={`缺少变量: ${missingKeys.join(', ')}`} /> : null}
-            {unusedVariableKeys.length > 0 ? (
-              <Alert type="info" message={`多余变量(未使用): ${unusedVariableKeys.join(', ')}`} />
-            ) : null}
-          </>
-        ) : null}
-        {sendError ? <Alert type="error" message={sendError} /> : null}
+          {showAdvancedVariables ? (
+            <Card size="small" className="composer-advanced-card" title="高级变量">
+              <Space direction="vertical" className="full-width" size={10}>
+                <Tabs
+                  activeKey={variableMode}
+                  onChange={(value) => onVariableModeChange(value as VariableInputMode)}
+                  items={[
+                    {
+                      key: 'table',
+                      label: '表格变量',
+                      children: (
+                        <Space direction="vertical" className="full-width" size={8}>
+                          <Button
+                            size="small"
+                            onClick={() =>
+                              onTableVariablesChange([...tableVariables, { id: makeId(), key: '', value: '' }])
+                            }
+                          >
+                            新增变量
+                          </Button>
+                          <Table<TableVariableRow>
+                            size="small"
+                            rowKey="id"
+                            columns={tableColumns}
+                            dataSource={tableVariables}
+                            pagination={false}
+                          />
+                        </Space>
+                      ),
+                    },
+                    {
+                      key: 'inline',
+                      label: '内联 k=v',
+                      children: (
+                        <Input.TextArea
+                          value={inlineVariablesText}
+                          onChange={(event) => onInlineVariablesTextChange(event.target.value)}
+                          placeholder={'subject=cat\nstyle=anime'}
+                          autoSize={{ minRows: 4, maxRows: 8 }}
+                        />
+                      ),
+                    },
+                    {
+                      key: 'panel',
+                      label: '变量面板',
+                      children: (
+                        <Space direction="vertical" className="full-width" size={8}>
+                          <Button
+                            size="small"
+                            onClick={() =>
+                              onPanelVariablesChange([
+                                ...panelVariables,
+                                { id: makeId(), key: '', valuesText: '', selectedValue: '' },
+                              ])
+                            }
+                          >
+                            新增变量定义
+                          </Button>
+                          <Table<PanelVariableRow>
+                            size="small"
+                            rowKey="id"
+                            columns={panelColumns}
+                            dataSource={panelVariables}
+                            pagination={false}
+                          />
+                        </Space>
+                      ),
+                    },
+                  ]}
+                />
 
-        <Space>
-          <Button type="primary" onClick={onSend} loading={isSending} disabled={isSending}>
-            发送
-          </Button>
+                <Text type="secondary">当前变量：{renderResolvedVars(resolvedVariables)}</Text>
+                <Text type="secondary">最终 prompt：{finalPromptPreview || '-'}</Text>
+                {missingKeys.length > 0 ? <Alert type="warning" message={`缺少变量: ${missingKeys.join(', ')}`} /> : null}
+                {unusedVariableKeys.length > 0 ? (
+                  <Alert type="info" message={`多余变量(未使用): ${unusedVariableKeys.join(', ')}`} />
+                ) : null}
+              </Space>
+            </Card>
+          ) : null}
+          {sendError ? <Alert type="error" message={sendError} /> : null}
         </Space>
-      </Space>
+      </Card>
     </div>
   )
 }

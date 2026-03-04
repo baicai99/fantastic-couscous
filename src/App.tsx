@@ -1,5 +1,6 @@
-﻿import { useState } from 'react'
-import { Button, Card, Col, Layout, Row, Space, Typography } from 'antd'
+﻿import { useEffect, useState } from 'react'
+import { HistoryOutlined, SettingOutlined } from '@ant-design/icons'
+import { Button, Card, Col, Layout, Row, Space, Tag, Typography } from 'antd'
 import { Composer } from './components/chat/Composer'
 import { MessageList } from './components/chat/MessageList'
 import { ImagePreviewModal } from './components/preview/ImagePreviewModal'
@@ -10,11 +11,26 @@ import { useImagePreview } from './hooks/useImagePreview'
 import './App.css'
 
 const { Header, Sider, Content } = Layout
-const { Title } = Typography
+const { Text, Title } = Typography
+const RIGHT_PANEL_COLLAPSED_STORAGE_KEY = 'm3:right-panel-collapsed'
 
 export default function App() {
   const [isLeftPanelCollapsed, setIsLeftPanelCollapsed] = useState(false)
-  const [isRightPanelCollapsed, setIsRightPanelCollapsed] = useState(false)
+  const [isRightPanelCollapsed, setIsRightPanelCollapsed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(RIGHT_PANEL_COLLAPSED_STORAGE_KEY) === '1'
+    } catch {
+      return false
+    }
+  })
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(RIGHT_PANEL_COLLAPSED_STORAGE_KEY, isRightPanelCollapsed ? '1' : '0')
+    } catch {
+      // Ignore storage errors in restricted environments.
+    }
+  }, [isRightPanelCollapsed])
 
   const {
     summaries,
@@ -92,18 +108,26 @@ export default function App() {
 
       <Layout className="panel-center">
         <Header className="chat-header">
-          <div className="chat-header-row">
-            <Space>
-              <Button size="small" onClick={() => setIsLeftPanelCollapsed((prev) => !prev)}>
-                {isLeftPanelCollapsed ? '展开历史栏' : '收起历史栏'}
-              </Button>
-              <Button size="small" onClick={() => setIsRightPanelCollapsed((prev) => !prev)}>
-                {isRightPanelCollapsed ? '展开设置栏' : '收起设置栏'}
-              </Button>
-            </Space>
-            <Title level={5} className="panel-title">
-              {activeConversation?.title ?? '未选择对话'}
-            </Title>
+          <div className="chat-header-row chat-header-ant">
+            <Card size="small" className="chat-header-card" bordered={false}>
+              <div className="chat-header-card-content">
+                <Space size={8} wrap>
+                  <Button icon={<HistoryOutlined />} onClick={() => setIsLeftPanelCollapsed((prev) => !prev)}>
+                    {isLeftPanelCollapsed ? '展开历史栏' : '收起历史栏'}
+                  </Button>
+                  <Button icon={<SettingOutlined />} onClick={() => setIsRightPanelCollapsed((prev) => !prev)}>
+                    {isRightPanelCollapsed ? '展开设置栏' : '收起设置栏'}
+                  </Button>
+                </Space>
+                <Space size={10} wrap>
+                  <Text type="secondary">当前会话</Text>
+                  <Tag color="blue">{activeConversation ? '已选择' : '未选择'}</Tag>
+                  <Title level={5} className="panel-title">
+                    {activeConversation?.title ?? '未选择对话'}
+                  </Title>
+                </Space>
+              </div>
+            </Card>
           </div>
         </Header>
 
@@ -162,17 +186,17 @@ export default function App() {
       {!isRightPanelCollapsed ? (
         <Sider width={320} className="panel panel-right">
           <SettingsPanel
-          sideMode={activeSideMode}
-          sideCount={activeSideCount}
-          sideIds={activeSides.filter((side) => side !== 'single')}
-          isSideConfigLocked={isSideConfigLocked}
-          settingsBySide={activeSettingsBySide}
-          models={modelCatalog.models}
-          channels={channels}
-          showAdvancedVariables={showAdvancedVariables}
-          onSideModeChange={updateSideMode}
-          onSideCountChange={updateSideCount}
-          onSettingsChange={updateSideSettings}
+            sideMode={activeSideMode}
+            sideCount={activeSideCount}
+            sideIds={activeSides.filter((side) => side !== 'single')}
+            isSideConfigLocked={isSideConfigLocked}
+            settingsBySide={activeSettingsBySide}
+            models={modelCatalog.models}
+            channels={channels}
+            showAdvancedVariables={showAdvancedVariables}
+            onSideModeChange={updateSideMode}
+            onSideCountChange={updateSideCount}
+            onSettingsChange={updateSideSettings}
             onModelChange={setSideModel}
             onModelParamChange={setSideModelParam}
             onChannelsChange={setChannels}

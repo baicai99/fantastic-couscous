@@ -1,4 +1,4 @@
-﻿import { useMemo, useState } from 'react'
+﻿import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import {
   Alert,
@@ -35,6 +35,10 @@ import { makeId } from '../../utils/chat'
 
 const { Text } = Typography
 const ALL_MODEL_TAG = '__all__'
+const FIXED_VENDOR_TAGS = ['google', 'openai', 'midjourney', '豆包', '可灵']
+const SETTINGS_PANEL_COLLAPSE_STORAGE_KEY = 'm3:settings-panel-collapse'
+const DEFAULT_TOP_COLLAPSE_KEYS = ['mode', 'advanced']
+const DEFAULT_SIDE_COLLAPSE_KEYS = ['gen', 'api', 'model']
 
 type ChannelFormValues = {
   name: string
@@ -58,6 +62,23 @@ interface SettingsPanelProps {
   onModelParamChange: (side: Side, paramKey: string, value: SettingPrimitive) => void
   onChannelsChange: (channels: ApiChannel[]) => void
   onShowAdvancedVariablesChange: (enabled: boolean) => void
+}
+
+type SettingsPanelCollapseState = {
+  top?: unknown
+  sideById?: unknown
+}
+
+function normalizeCollapseKeys(raw: unknown, fallback: string[]): string[] {
+  if (Array.isArray(raw)) {
+    return raw
+      .map((item) => String(item))
+      .filter((item, index, array) => item.length > 0 && array.indexOf(item) === index)
+  }
+  if (typeof raw === 'string' && raw.length > 0) {
+    return [raw]
+  }
+  return fallback
 }
 
 function maskApiKey(apiKey: string): string {
@@ -128,13 +149,21 @@ function inferModelTags(model: ModelSpec): string[] {
   }
 
   const value = `${model.id} ${model.name}`.toLowerCase()
+  const isOpenAIModel =
+    value.includes('openai') ||
+    value.includes('gpt-image') ||
+    value.includes('gpt-4o') ||
+    value.includes('gpt-4-all') ||
+    value.includes('sora_image') ||
+    value.includes('dall-e') ||
+    value.includes('dalle') ||
+    value.includes('kolors')
   if (value.includes('gemini') || value.includes('banana')) tags.add('google')
   if (value.includes('doubao') || value.includes('seeddance') || value.includes('seeddream')) tags.add('豆包')
-  if (value.includes('midjourney')) tags.add('midjourney')
-  if (value.includes('dall-e') || value.includes('dalle')) tags.add('dalle')
-  if (value.includes('openai')) tags.add('openai')
+  if (value.includes('kling')) tags.add('可灵')
+  if (value.includes('midjourney') || value.includes('mj')) tags.add('midjourney')
+  if (isOpenAIModel) tags.add('openai')
   if (value.includes('stability') || value.includes('stable-diffusion') || value.includes('sdxl')) tags.add('stability')
-  if (value.includes('flux')) tags.add('flux')
 
   return Array.from(tags)
 }
@@ -169,6 +198,26 @@ function inferModelSearchTokens(model: ModelSpec): string {
     tokens.add('seeddance')
     tokens.add('豆包')
   }
+  if (value.includes('kling')) {
+    tokens.add('可灵')
+  }
+  if (value.includes('mj')) {
+    tokens.add('midjourney')
+  }
+  if (value.includes('midjourney')) {
+    tokens.add('mj')
+  }
+  if (
+    value.includes('gpt-image') ||
+    value.includes('gpt-4o') ||
+    value.includes('gpt-4-all') ||
+    value.includes('sora_image') ||
+    value.includes('dall-e') ||
+    value.includes('dalle') ||
+    value.includes('kolors')
+  ) {
+    tokens.add('openai')
+  }
 
   return Array.from(tokens).join(' ')
 }
@@ -202,9 +251,69 @@ export function SettingsPanel(props: SettingsPanelProps) {
   const [channelForm] = Form.useForm<ChannelFormValues>()
   const [isSavingChannel, setIsSavingChannel] = useState(false)
   const [messageApi, messageContextHolder] = message.useMessage()
+  const [topCollapseKeys, setTopCollapseKeys] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem(SETTINGS_PANEL_COLLAPSE_STORAGE_KEY)
+      if (!raw) {
+        return DEFAULT_TOP_COLLAPSE_KEYS
+      }
+      const parsed = JSON.parse(raw) as SettingsPanelCollapseState
+      return normalizeCollapseKeys(parsed?.top, DEFAULT_TOP_COLLAPSE_KEYS)
+    } catch {
+      return DEFAULT_TOP_COLLAPSE_KEYS
+    }
+  })
+  const [sideCollapseKeysById, setSideCollapseKeysById] = useState<Record<Side, string[]>>(() => {
+    try {
+      const raw = localStorage.getItem(SETTINGS_PANEL_COLLAPSE_STORAGE_KEY)
+      if (!raw) {
+        return { single: DEFAULT_SIDE_COLLAPSE_KEYS }
+      }
+      const parsed = JSON.parse(raw) as SettingsPanelCollapseState
+      if (!parsed?.sideById || typeof parsed.sideById !== 'object') {
+        return { single: DEFAULT_SIDE_COLLAPSE_KEYS }
+      }
+      const result: Record<Side, string[]> = { single: DEFAULT_SIDE_COLLAPSE_KEYS }
+      for (const [key, value] of Object.entries(parsed.sideById as Record<string, unknown>)) {
+        result[key as Side] = normalizeCollapseKeys(value, DEFAULT_SIDE_COLLAPSE_KEYS)
+      }
+      return result
+    } catch {
+      return { single: DEFAULT_SIDE_COLLAPSE_KEYS }
+    }
+  })
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        SETTINGS_PANEL_COLLAPSE_STORAGE_KEY,
+        JSON.stringify({
+          top: topCollapseKeys,
+          sideById: sideCollapseKeysById,
+        }),
+      )
+    } catch {
+      // Ignore storage errors in restricted environments.
+    }
+  }, [topCollapseKeys, sideCollapseKeysById])
+
+  useEffect(() => {
+    const expectedSides: Side[] = sideMode === 'multi' ? sideIds : ['single']
+    setSideCollapseKeysById((prev) => {
+      let changed = false
+      const next = { ...prev }
+      for (const side of expectedSides) {
+        if (!next[side]) {
+          next[side] = DEFAULT_SIDE_COLLAPSE_KEYS
+          changed = true
+        }
+      }
+      return changed ? next : prev
+    })
+  }, [sideIds, sideMode])
 
   const availableModelTags = useMemo(() => {
-    const tags = new Set<string>()
+    const tags = new Set<string>(FIXED_VENDOR_TAGS)
     for (const model of models) {
       for (const tag of inferModelTags(model)) {
         tags.add(tag)
@@ -251,7 +360,13 @@ export function SettingsPanel(props: SettingsPanelProps) {
     return (
       <Collapse
         className="full-width"
-        defaultActiveKey={['gen', 'api', 'model']}
+        activeKey={sideCollapseKeysById[side] ?? DEFAULT_SIDE_COLLAPSE_KEYS}
+        onChange={(keys) =>
+          setSideCollapseKeysById((prev) => ({
+            ...prev,
+            [side]: normalizeCollapseKeys(keys, DEFAULT_SIDE_COLLAPSE_KEYS),
+          }))
+        }
         items={[
           {
             key: 'gen',
@@ -517,7 +632,8 @@ export function SettingsPanel(props: SettingsPanelProps) {
       {messageContextHolder}
       <Collapse
         style={{ marginBottom: 16 }}
-        defaultActiveKey={['mode', 'advanced']}
+        activeKey={topCollapseKeys}
+        onChange={(keys) => setTopCollapseKeys(normalizeCollapseKeys(keys, DEFAULT_TOP_COLLAPSE_KEYS))}
         items={[
           {
             key: 'mode',
