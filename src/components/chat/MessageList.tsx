@@ -1,15 +1,20 @@
-﻿import { Fragment, useLayoutEffect, useRef } from 'react'
+import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Button, Card, Collapse, Space, Tag, Typography } from 'antd'
 import type { Conversation, FailureCode, ImageItem, Message, Run, Side } from '../../types/chat'
 import { gridColumnCount, sortImagesBySeq } from '../../utils/chat'
+import { ENABLE_MESSAGE_WINDOWING } from '../../features/performance/flags'
 
 const { Paragraph, Text } = Typography
+const DEFAULT_ESTIMATED_MESSAGE_HEIGHT = 220
 
 interface MessageListProps {
   activeConversation: Conversation | null
   sideView: Side
   onOpenPreview: (run: Run, imageId: string, linkedRun?: Run) => void
   onRetryRun: (runId: string) => void
+  windowSize?: number
+  overscan?: number
+  onReachBottom?: () => void
 }
 
 interface DisplayImage {
@@ -151,13 +156,73 @@ function renderRunCard(
   )
 }
 
-export function MessageList(props: MessageListProps) {
-  const { activeConversation, sideView, onOpenPreview, onRetryRun } = props
+function MessageListComponent(props: MessageListProps) {
+  const {
+    activeConversation,
+    sideView,
+    onOpenPreview,
+    onRetryRun,
+    windowSize = 24,
+    overscan = 15,
+    onReachBottom,
+  } = props
+
+  const viewportRef = useRef<HTMLDivElement | null>(null)
   const bottomRef = useRef<HTMLDivElement | null>(null)
+  const [scrollTop, setScrollTop] = useState(0)
+  const [viewportHeight, setViewportHeight] = useState(0)
+
+  const messages = activeConversation?.messages ?? []
 
   useLayoutEffect(() => {
     bottomRef.current?.scrollIntoView({ block: 'end' })
   }, [activeConversation?.id, activeConversation?.updatedAt, sideView])
+
+  useEffect(() => {
+    const node = viewportRef.current
+    if (!node) {
+      return undefined
+    }
+
+    const onScroll = () => {
+      setScrollTop(node.scrollTop)
+      const nearBottom = node.scrollHeight - node.scrollTop - node.clientHeight < 24
+      if (nearBottom) {
+        onReachBottom?.()
+      }
+    }
+
+    setViewportHeight(node.clientHeight)
+    node.addEventListener('scroll', onScroll, { passive: true })
+    const resize = () => setViewportHeight(node.clientHeight)
+    window.addEventListener('resize', resize)
+
+    return () => {
+      node.removeEventListener('scroll', onScroll)
+      window.removeEventListener('resize', resize)
+    }
+  }, [onReachBottom])
+
+  const windowed = useMemo(() => {
+    if (!ENABLE_MESSAGE_WINDOWING || messages.length <= windowSize + overscan * 2) {
+      return {
+        start: 0,
+        end: messages.length,
+        topSpacer: 0,
+        bottomSpacer: 0,
+      }
+    }
+
+    const estimatedHeight = DEFAULT_ESTIMATED_MESSAGE_HEIGHT
+    const visibleCount = Math.max(windowSize, Math.ceil((viewportHeight || estimatedHeight * windowSize) / estimatedHeight))
+    const firstVisibleIndex = Math.max(0, Math.floor(scrollTop / estimatedHeight))
+    const start = Math.max(0, firstVisibleIndex - overscan)
+    const end = Math.min(messages.length, firstVisibleIndex + visibleCount + overscan)
+    const topSpacer = start * estimatedHeight
+    const bottomSpacer = Math.max(0, (messages.length - end) * estimatedHeight)
+
+    return { start, end, topSpacer, bottomSpacer }
+  }, [messages.length, overscan, scrollTop, viewportHeight, windowSize])
 
   if (!activeConversation || activeConversation.messages.length === 0) {
     return (
@@ -168,37 +233,45 @@ export function MessageList(props: MessageListProps) {
     )
   }
 
+  const visibleMessages = messages.slice(windowed.start, windowed.end)
+
   return (
-    <Space direction="vertical" size={12} className="full-width">
-      {activeConversation.messages.map((message) => (
-        <Card key={message.id} size="small" className={`message-card ${message.role}`}>
-          <Space direction="vertical" size={8} className="full-width">
-            <Space>
-              <Tag color={message.role === 'user' ? 'blue' : 'green'}>
-                {message.role === 'user' ? 'User' : 'Assistant'}
-              </Tag>
-              <Text type="secondary">{new Date(message.createdAt).toLocaleString()}</Text>
+    <div ref={viewportRef} className="full-width" style={{ height: '100%', overflowY: 'auto' }}>
+      <Space direction="vertical" size={12} className="full-width">
+        {windowed.topSpacer > 0 ? <div style={{ height: `${windowed.topSpacer}px` }} /> : null}
+        {visibleMessages.map((message) => (
+          <Card key={message.id} size="small" className={`message-card ${message.role}`}>
+            <Space direction="vertical" size={8} className="full-width">
+              <Space>
+                <Tag color={message.role === 'user' ? 'blue' : 'green'}>
+                  {message.role === 'user' ? 'User' : 'Assistant'}
+                </Tag>
+                <Text type="secondary">{message.displayCreatedAt ?? new Date(message.createdAt).toLocaleString()}</Text>
+              </Space>
+
+              <Paragraph style={{ marginBottom: 0 }}>{message.content}</Paragraph>
+
+              {message.role === 'assistant' && sideView === 'single'
+                ? getSingleRuns(message).map((run) => {
+                    const rows = sortImagesBySeq(run.images).map((item) => ({ seq: item.seq, item }))
+                    return renderRunCard(run, rows, undefined, onOpenPreview, onRetryRun)
+                  })
+                : null}
+
+              {message.role === 'assistant' && sideView !== 'single'
+                ? getSideRuns(message, sideView).map((run) => {
+                    const rows = sortImagesBySeq(run.images).map((item) => ({ seq: item.seq, item }))
+                    return renderRunCard(run, rows, undefined, onOpenPreview, onRetryRun)
+                  })
+                : null}
             </Space>
-
-            <Paragraph style={{ marginBottom: 0 }}>{message.content}</Paragraph>
-
-            {message.role === 'assistant' && sideView === 'single'
-              ? getSingleRuns(message).map((run) => {
-                  const rows = sortImagesBySeq(run.images).map((item) => ({ seq: item.seq, item }))
-                  return renderRunCard(run, rows, undefined, onOpenPreview, onRetryRun)
-                })
-              : null}
-
-            {message.role === 'assistant' && sideView !== 'single'
-              ? getSideRuns(message, sideView).map((run) => {
-                  const rows = sortImagesBySeq(run.images).map((item) => ({ seq: item.seq, item }))
-                  return renderRunCard(run, rows, undefined, onOpenPreview, onRetryRun)
-                })
-              : null}
-          </Space>
-        </Card>
-      ))}
-      <div ref={bottomRef} />
-    </Space>
+          </Card>
+        ))}
+        {windowed.bottomSpacer > 0 ? <div style={{ height: `${windowed.bottomSpacer}px` }} /> : null}
+        <div ref={bottomRef} />
+      </Space>
+    </div>
   )
 }
+
+export const MessageList = memo(MessageListComponent)

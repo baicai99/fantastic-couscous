@@ -1,7 +1,7 @@
 ﻿import { SendOutlined } from '@ant-design/icons'
 import { Alert, Button, Card, Input, Select, Space, Table, Tabs, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
-import type { PanelVariableRow, TableVariableRow, VariableInputMode } from '../../hooks/useConversations'
+import type { PanelVariableRow, TableVariableRow, VariableInputMode } from '../../features/conversation/domain/types'
 import { makeId } from '../../utils/chat'
 
 const { Text } = Typography

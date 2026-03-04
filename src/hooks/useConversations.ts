@@ -1,494 +1,121 @@
-﻿import { useMemo, useState } from 'react'
-import {
-  clearConversationsFromStorage,
-  loadChannelsFromStorage,
-  loadConversationsFromStorage,
-  removeConversationContentFromStorage,
-  loadStagedSettingsFromStorage,
-  saveActiveConversationId,
-  saveChannelsToStorage,
-  saveConversationContent,
-  saveIndex,
-  saveStagedSettingsToStorage,
-} from '../services/conversationStorage'
-import {
-  getDefaultModel,
-  getDefaultParamValues,
-  getModelById,
-  getModelCatalogFromChannels,
-  normalizeParamValues,
-} from '../services/modelCatalog'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { getModelCatalogFromChannels } from '../services/modelCatalog'
 import type {
-  ApiChannel,
   Conversation,
   ConversationSummary,
-  FailureCode,
   Run,
-  SettingPrimitive,
   Side,
   SideMode,
   SingleSideSettings,
-  ModelCatalog,
 } from '../types/chat'
+import { appendMessagesToConversation, createConversation, toSummary } from '../utils/chat'
+import { createConversationOrchestrator } from '../features/conversation/application/conversationOrchestrator'
+import { createRunExecutor } from '../features/conversation/application/runExecutor'
 import {
-  appendMessagesToConversation,
-  clamp,
-  cloneSideSettings,
-  createConversation,
-  makeId,
-  toSettingsSnapshot,
-  toSummary,
-} from '../utils/chat'
-import { parseInlineAssignments, parseTemplateKeys, renderTemplate } from '../utils/template'
-import { generateImages } from '../services/imageGeneration'
-import { normalizeSizeTier } from '../services/imageSizing'
+  getMultiSideIds,
+  normalizeSettingsBySide,
+} from '../features/conversation/domain/conversationDomain'
+import type { PanelVariableRow, TableVariableRow, VariableInputMode } from '../features/conversation/domain/types'
+import { createConversationRepository } from '../features/conversation/infra/conversationRepository'
+import {
+  conversationSelectors,
+  createInitialConversationState,
+  useConversationState,
+} from '../features/conversation/state/conversationState'
 
-const ASPECT_RATIO_DEFAULT = '1:1'
-const EMPTY_MODEL_CATALOG: ModelCatalog = { models: [] }
-const MIN_MULTI_SIDE_COUNT = 2
-const MAX_MULTI_SIDE_COUNT = 8
-const CUSTOM_SIZE_MIN = 256
-const CUSTOM_SIZE_MAX = 8192
-
-export type VariableInputMode = 'table' | 'inline' | 'panel'
-
-export interface TableVariableRow {
-  id: string
-  key: string
-  value: string
-}
-
-export interface PanelVariableRow {
-  id: string
-  key: string
-  valuesText: string
-  selectedValue: string
-}
-
-function clampSideCount(value: number): number {
-  return clamp(Math.floor(value), MIN_MULTI_SIDE_COUNT, MAX_MULTI_SIDE_COUNT)
-}
-
-function sideIdAt(index: number): Side {
-  return `win-${index + 1}`
-}
-
-function getMultiSideIds(sideCount: number): Side[] {
-  return Array.from({ length: clampSideCount(sideCount) }, (_, index) => sideIdAt(index))
-}
-
-function normalizeSettings(
-  settings: SingleSideSettings | undefined,
-  channels: ApiChannel[],
-  catalog = EMPTY_MODEL_CATALOG,
-): SingleSideSettings {
-  const defaultModel = getDefaultModel(catalog)
-
-  const pickedModel = settings?.modelId ? getModelById(catalog, settings.modelId) : undefined
-  const model = pickedModel ?? defaultModel
-
-  const channelId =
-    settings?.channelId && channels.some((item) => item.id === settings.channelId)
-      ? settings.channelId
-      : null
-
-  return {
-    resolution: normalizeSizeTier(settings?.resolution),
-    aspectRatio: settings?.aspectRatio ?? ASPECT_RATIO_DEFAULT,
-    imageCount: clamp(Math.floor(settings?.imageCount ?? 4), 1, 8),
-    gridColumns: clamp(Math.floor(settings?.gridColumns ?? 4), 1, 8),
-    sizeMode: settings?.sizeMode === 'custom' ? 'custom' : 'preset',
-    customWidth: clamp(Math.floor(settings?.customWidth ?? 1024), CUSTOM_SIZE_MIN, CUSTOM_SIZE_MAX),
-    customHeight: clamp(Math.floor(settings?.customHeight ?? 1024), CUSTOM_SIZE_MIN, CUSTOM_SIZE_MAX),
-    autoSave: settings?.autoSave ?? true,
-    channelId,
-    modelId: model?.id ?? '',
-    paramValues: normalizeParamValues(model, settings?.paramValues ?? getDefaultParamValues(model)),
-  }
-}
-
-function defaultSettingsBySide(
-  channels: ApiChannel[],
-  catalog = EMPTY_MODEL_CATALOG,
-  sideCount = MIN_MULTI_SIDE_COUNT,
-): Record<Side, SingleSideSettings> {
-  const base = normalizeSettings(undefined, channels, catalog)
-  const next: Record<Side, SingleSideSettings> = {
-    single: cloneSideSettings(base),
-  }
-  for (const sideId of getMultiSideIds(sideCount)) {
-    next[sideId] = cloneSideSettings(base)
-  }
-  return next
-}
-
-function legacySideAlias(side: Side): Side | null {
-  if (side === 'win-1') return 'A'
-  if (side === 'win-2') return 'B'
-  return null
-}
-
-function normalizeSettingsBySide(
-  settingsBySide: Partial<Record<Side, SingleSideSettings>> | undefined,
-  channels: ApiChannel[],
-  catalog = EMPTY_MODEL_CATALOG,
-  sideCount = MIN_MULTI_SIDE_COUNT,
-): Record<Side, SingleSideSettings> {
-  const defaults = defaultSettingsBySide(channels, catalog, sideCount)
-  const normalizedSideCount = clampSideCount(sideCount)
-  const getSourceSettings = (side: Side): SingleSideSettings | undefined => {
-    const direct = settingsBySide?.[side]
-    if (direct) {
-      return direct
-    }
-    const legacy = legacySideAlias(side)
-    if (legacy && settingsBySide?.[legacy]) {
-      return settingsBySide[legacy]
-    }
-    return settingsBySide?.single
-  }
-
-  const next: Record<Side, SingleSideSettings> = {
-    single: normalizeSettings(getSourceSettings('single') ?? defaults.single, channels, catalog),
-  }
-
-  for (const sideId of getMultiSideIds(normalizedSideCount)) {
-    next[sideId] = normalizeSettings(getSourceSettings(sideId) ?? defaults[sideId], channels, catalog)
-  }
-
-  return next
-}
-
-function inferSideCountFromSettings(settingsBySide: Partial<Record<Side, SingleSideSettings>> | undefined): number {
-  if (!settingsBySide) {
-    return MIN_MULTI_SIDE_COUNT
-  }
-
-  const sideKeys = Object.keys(settingsBySide).filter((key) => key !== 'single')
-  if (sideKeys.length === 0) {
-    return MIN_MULTI_SIDE_COUNT
-  }
-
-  const winIndexes = sideKeys
-    .map((key) => key.match(/^win-(\d+)$/)?.[1])
-    .filter((value): value is string => Boolean(value))
-    .map((value) => Number(value))
-    .filter((value) => Number.isFinite(value))
-
-  if (winIndexes.length > 0) {
-    return clampSideCount(Math.max(...winIndexes))
-  }
-
-  // Legacy A/B storage fallback.
-  if (sideKeys.includes('A') || sideKeys.includes('B')) {
-    return MIN_MULTI_SIDE_COUNT
-  }
-
-  return clampSideCount(sideKeys.length)
-}
-
-function normalizeConversation(
+function upsertConversationState(
+  summaries: ConversationSummary[],
+  contents: Record<string, Conversation>,
   conversation: Conversation,
-  channels: ApiChannel[],
-  catalog = EMPTY_MODEL_CATALOG,
-): Conversation {
-  const raw = conversation as Conversation & {
-    singleSettings?: SingleSideSettings
-    settingsBySide?: Partial<Record<Side, SingleSideSettings>>
-    sideCount?: number
+): { nextSummaries: ConversationSummary[]; nextContents: Record<string, Conversation> } {
+  const nextContents = {
+    ...contents,
+    [conversation.id]: conversation,
   }
-  const rawMode = conversation.sideMode as unknown
-  const sideMode: SideMode = rawMode === 'multi' || rawMode === 'ab' ? 'multi' : 'single'
-  const sideCount =
-    typeof raw.sideCount === 'number'
-      ? clampSideCount(raw.sideCount)
-      : inferSideCountFromSettings(raw.settingsBySide)
 
-  const normalizedMessages = conversation.messages.map((message) => ({
-    ...message,
-    runs: (message.runs ?? []).map((run) => normalizeRun(run)),
-  }))
+  const summary = toSummary(conversation)
+  const hasExisting = summaries.some((item) => item.id === conversation.id)
+  const nextSummaries = hasExisting
+    ? summaries.map((item) => (item.id === conversation.id ? summary : item))
+    : [summary, ...summaries]
 
-  return {
-    ...conversation,
-    sideMode,
-    sideCount,
-    settingsBySide: normalizeSettingsBySide(
-      raw.settingsBySide ?? (raw.singleSettings ? { single: raw.singleSettings } : undefined),
-      channels,
-      catalog,
-      sideCount,
-    ),
-    messages: normalizedMessages,
-  }
+  return { nextSummaries, nextContents }
 }
 
-function normalizeRun(run: Run): Run {
-  const raw = run as {
-    sideMode?: string
-    side?: string
-    templatePrompt?: string
-    finalPrompt?: string
-    variablesSnapshot?: Record<string, string>
-    retryAttempt?: number
-  }
-
-  return {
-    ...run,
-    sideMode: raw.sideMode === 'ab' ? 'multi' : run.sideMode,
-    side:
-      raw.side === 'A'
-        ? 'win-1'
-        : raw.side === 'B'
-          ? 'win-2'
-          : run.side,
-    templatePrompt: raw.templatePrompt ?? run.prompt ?? '',
-    finalPrompt: raw.finalPrompt ?? run.prompt ?? '',
-    variablesSnapshot: raw.variablesSnapshot ?? {},
-    retryAttempt: raw.retryAttempt ?? 0,
-    settingsSnapshot: run.settingsSnapshot ?? {
-      resolution: '1K',
-      aspectRatio: ASPECT_RATIO_DEFAULT,
-      imageCount: run.imageCount,
-      gridColumns: 4,
-      sizeMode: 'preset',
-      customWidth: 1024,
-      customHeight: 1024,
-      autoSave: true,
-    },
-  }
-}
-
-function parseValuesText(valuesText: string): string[] {
-  return valuesText
-    .split(/[\n,;|]/)
-    .map((value) => value.trim())
-    .filter(Boolean)
-}
-
-function collectVariables(
-  mode: VariableInputMode,
-  tableRows: TableVariableRow[],
-  inlineText: string,
-  panelRows: PanelVariableRow[],
-): Record<string, string> {
-  if (mode === 'inline') {
-    return parseInlineAssignments(inlineText)
-  }
-
-  if (mode === 'panel') {
-    const result: Record<string, string> = {}
-    for (const row of panelRows) {
-      const key = row.key.trim()
-      if (!key) {
-        continue
-      }
-
-      const values = parseValuesText(row.valuesText)
-      const selected = row.selectedValue || values[0] || ''
-      result[key] = selected
-    }
-    return result
-  }
-
-  const result: Record<string, string> = {}
-  for (const row of tableRows) {
-    const key = row.key.trim()
-    if (!key) {
-      continue
-    }
-    result[key] = row.value
-  }
-  return result
-}
-
-function classifyFailure(message: string): FailureCode {
-  const value = message.toLowerCase()
-
-  if (value.includes('timeout')) {
-    return 'timeout'
-  }
-  if (value.includes('401') || value.includes('403') || value.includes('auth')) {
-    return 'auth'
-  }
-  if (value.includes('429') || value.includes('rate')) {
-    return 'rate_limit'
-  }
-  if (value.includes('unsupported') || value.includes('not support')) {
-    return 'unsupported_param'
-  }
-  if (value.includes('reject') || value.includes('denied')) {
-    return 'rejected'
-  }
-
-  return 'unknown'
-}
-
-function gcd(a: number, b: number): number {
-  let x = Math.abs(a)
-  let y = Math.abs(b)
-  while (y !== 0) {
-    const t = y
-    y = x % y
-    x = t
-  }
-  return x || 1
-}
-
-function toAspectRatioBySize(width: number, height: number): string {
-  const d = gcd(width, height)
-  return `${Math.floor(width / d)}:${Math.floor(height / d)}`
-}
-
-function getEffectiveSize(settings: SingleSideSettings): string {
-  if (settings.sizeMode === 'custom') {
-    return `${settings.customWidth}x${settings.customHeight}`
-  }
-  return settings.resolution
-}
-
-function getEffectiveAspectRatio(settings: SingleSideSettings): string {
-  if (settings.sizeMode === 'custom') {
-    return toAspectRatioBySize(settings.customWidth, settings.customHeight)
-  }
-  return settings.aspectRatio
-}
+export type { VariableInputMode, TableVariableRow, PanelVariableRow }
 
 export function useConversations() {
-  const [channels, setChannelsState] = useState<ApiChannel[]>(() => loadChannelsFromStorage())
-  const modelCatalog = useMemo(() => getModelCatalogFromChannels(channels), [channels])
-  const [initial] = useState(() => loadConversationsFromStorage())
-  const [initialStaged] = useState(() => loadStagedSettingsFromStorage())
-
-  const normalizedContents = useMemo(() => {
-    const next: Record<string, Conversation> = {}
-    for (const [id, conversation] of Object.entries(initial.contents)) {
-      next[id] = normalizeConversation(conversation, channels, modelCatalog)
-    }
-    return next
-  }, [channels, initial.contents, modelCatalog])
-
-  const [summaries, setSummaries] = useState<ConversationSummary[]>(initial.summaries)
-  const [contents, setContents] = useState(normalizedContents)
-  const [activeId, setActiveId] = useState<string | null>(initial.activeId)
-  const [draft, setDraft] = useState('')
-  const [sendError, setSendError] = useState<string>('')
-  const [isSending, setIsSending] = useState(false)
-  const [showAdvancedVariables, setShowAdvancedVariables] = useState(false)
-  const [variableMode, setVariableMode] = useState<VariableInputMode>('table')
-  const [tableVariables, setTableVariables] = useState<TableVariableRow[]>([
-    { id: makeId(), key: '', value: '' },
-  ])
-  const [inlineVariablesText, setInlineVariablesText] = useState('')
-  const [panelVariables, setPanelVariables] = useState<PanelVariableRow[]>([
-    { id: makeId(), key: '', valuesText: '', selectedValue: '' },
-  ])
-
-  const [stagedSideMode, setStagedSideMode] = useState<SideMode>(initialStaged?.sideMode ?? 'single')
-  const [stagedSideCount, setStagedSideCount] = useState<number>(clampSideCount(initialStaged?.sideCount ?? 2))
-  const [stagedSettingsBySide, setStagedSettingsBySide] = useState<Record<Side, SingleSideSettings>>(() =>
-    normalizeSettingsBySide(
-      initialStaged?.settingsBySide,
+  const repository = useMemo(() => createConversationRepository(), [])
+  const [initialState] = useState(() => {
+    const channels = repository.loadChannels()
+    const modelCatalog = getModelCatalogFromChannels(channels)
+    return createInitialConversationState({
       channels,
       modelCatalog,
-      clampSideCount(initialStaged?.sideCount ?? 2),
-    ),
-  )
+      initialLoad: repository.load(),
+      initialStaged: repository.loadStagedSettings(),
+    })
+  })
 
-  const activeConversation = useMemo(() => {
-    return activeId ? contents[activeId] ?? null : null
-  }, [activeId, contents])
+  const { state, dispatch, actions } = useConversationState(initialState)
+  const stateRef = useRef(state)
 
-  const activeSideMode = activeConversation?.sideMode ?? stagedSideMode
-  const activeSideCount = activeConversation?.sideCount ?? stagedSideCount
-  const activeSettingsBySide = activeConversation?.settingsBySide ?? stagedSettingsBySide
+  useEffect(() => {
+    stateRef.current = state
+  }, [state])
+
+  const modelCatalog = useMemo(() => getModelCatalogFromChannels(state.channels), [state.channels])
+
+  const activeConversation = conversationSelectors.selectActiveConversation(state)
+  const { activeSideMode, activeSideCount, activeSettingsBySide } = conversationSelectors.selectActiveSettings(state)
+  const { resolvedVariables, templatePreview, unusedVariableKeys } = conversationSelectors.selectTemplatePreview(state)
+
   const activeSides = useMemo(
     () => (activeSideMode === 'single' ? (['single'] as Side[]) : getMultiSideIds(activeSideCount)),
     [activeSideCount, activeSideMode],
   )
+
   const isSideConfigLocked = Boolean(activeConversation && activeConversation.messages.length > 0)
 
-  const resolvedVariables = useMemo(
-    () => collectVariables(variableMode, tableVariables, inlineVariablesText, panelVariables),
-    [variableMode, tableVariables, inlineVariablesText, panelVariables],
-  )
+  const runExecutor = useMemo(() => createRunExecutor(), [])
+  const orchestrator = useMemo(() => createConversationOrchestrator({ createRun: runExecutor.createRun }), [runExecutor])
 
-  const templatePreview = useMemo(() => renderTemplate(draft, resolvedVariables), [draft, resolvedVariables])
-  const unusedVariableKeys = useMemo(() => {
-    const templateKeys = new Set(parseTemplateKeys(draft))
-    return Object.keys(resolvedVariables).filter((key) => key && !templateKeys.has(key))
-  }, [draft, resolvedVariables])
+  const syncAndPersist = (next: { summaries: ConversationSummary[]; contents: Record<string, Conversation> }) => {
+    dispatch({ type: 'conversation/sync', payload: next })
+    repository.saveIndex(next.summaries)
+  }
 
   const persistConversation = (conversation: Conversation) => {
-    setContents((prev) => {
-      const next = { ...prev, [conversation.id]: conversation }
-      saveConversationContent(conversation)
-      return next
-    })
-
-    setSummaries((prev) => {
-      const summary = toSummary(conversation)
-      const hasExisting = prev.some((item) => item.id === conversation.id)
-      const next = hasExisting
-        ? prev.map((item) => (item.id === conversation.id ? summary : item))
-        : [summary, ...prev]
-      saveIndex(next)
-      return next
-    })
+    const snapshot = stateRef.current
+    const next = upsertConversationState(snapshot.summaries, snapshot.contents, conversation)
+    repository.saveConversation(conversation)
+    syncAndPersist({ summaries: next.nextSummaries, contents: next.nextContents })
   }
 
-  const createNewConversation = () => {
-    const seedMode = activeSideMode
-    const seedSideCount = activeSideCount
-    const seedSettings = normalizeSettingsBySide(activeSettingsBySide, channels, modelCatalog, seedSideCount)
+  const setActiveConversation = (conversationId: string | null) => {
+    dispatch({ type: 'conversation/switch', payload: conversationId })
+    repository.saveActiveId(conversationId)
+  }
 
-    // "新建对话" should switch to an unsaved draft session. Persist history only after first successful send.
-    saveStagedSettingsToStorage({
-      sideMode: seedMode,
-      sideCount: seedSideCount,
-      settingsBySide: seedSettings,
+  const saveStagedSettings = (
+    mode: SideMode,
+    sideCount: number,
+    settingsBySide: Record<Side, SingleSideSettings>,
+  ) => {
+    repository.saveStagedSettings({
+      sideMode: mode,
+      sideCount,
+      settingsBySide,
     })
-    setStagedSideMode(seedMode)
-    setStagedSideCount(seedSideCount)
-    setStagedSettingsBySide(seedSettings)
 
-    setActiveId(null)
-    saveActiveConversationId('')
-    setDraft('')
-    setSendError('')
-  }
-
-  const switchConversation = (conversationId: string) => {
-    setActiveId(conversationId)
-    saveActiveConversationId(conversationId)
-  }
-
-  const clearAllConversations = () => {
-    setSummaries([])
-    setContents({})
-    setActiveId(null)
-    setDraft('')
-    setSendError('')
-    clearConversationsFromStorage()
-  }
-
-  const removeConversation = (conversationId: string) => {
-    const nextSummaries = summaries.filter((item) => item.id !== conversationId)
-    setSummaries(nextSummaries)
-    saveIndex(nextSummaries)
-
-    setContents((prev) => {
-      const next = { ...prev }
-      delete next[conversationId]
-      return next
+    dispatch({
+      type: 'settings/updateSide',
+      payload: {
+        sideMode: mode,
+        sideCount,
+        settingsBySide,
+      },
     })
-    removeConversationContentFromStorage(conversationId)
-
-    if (activeId === conversationId) {
-      const nextActiveId = nextSummaries[0]?.id ?? null
-      setActiveId(nextActiveId)
-      saveActiveConversationId(nextActiveId ?? '')
-    }
   }
 
   const updateConversationState = (
@@ -496,40 +123,67 @@ export function useConversations() {
     sideCount: number,
     settingsBySide: Record<Side, SingleSideSettings>,
   ) => {
-    const normalizedCount = clampSideCount(sideCount)
-    const normalizedSettings = normalizeSettingsBySide(settingsBySide, channels, modelCatalog, normalizedCount)
+    const normalizedCount = Math.max(2, Math.floor(sideCount))
+    const normalizedSettings = normalizeSettingsBySide(settingsBySide, state.channels, modelCatalog, normalizedCount)
 
-    saveStagedSettingsToStorage({
-      sideMode: mode,
-      sideCount: normalizedCount,
-      settingsBySide: normalizedSettings,
-    })
+    saveStagedSettings(mode, normalizedCount, normalizedSettings)
 
-    // Always keep staged settings in sync so new conversation and refresh use latest user choices.
-    setStagedSideMode(mode)
-    setStagedSideCount(normalizedCount)
-    setStagedSettingsBySide(normalizedSettings)
-
-    if (!activeConversation) {
+    const current = stateRef.current
+    const currentActive = current.activeId ? current.contents[current.activeId] ?? null : null
+    if (!currentActive) {
       return
     }
 
-    const nextConversation: Conversation = {
-      ...activeConversation,
+    persistConversation({
+      ...currentActive,
       updatedAt: new Date().toISOString(),
       sideMode: mode,
       sideCount: normalizedCount,
       settingsBySide: normalizedSettings,
-    }
+    })
+  }
 
-    persistConversation(nextConversation)
+  const createNewConversation = () => {
+    const seedMode = activeSideMode
+    const seedSideCount = activeSideCount
+    const seedSettings = normalizeSettingsBySide(activeSettingsBySide, state.channels, modelCatalog, seedSideCount)
+
+    saveStagedSettings(seedMode, seedSideCount, seedSettings)
+
+    setActiveConversation(null)
+    actions.setDraft('')
+    dispatch({ type: 'send/clearError' })
+  }
+
+  const switchConversation = (conversationId: string) => {
+    setActiveConversation(conversationId)
+  }
+
+  const clearAllConversations = () => {
+    dispatch({ type: 'conversation/clear' })
+    repository.clearConversations()
+  }
+
+  const removeConversation = (conversationId: string) => {
+    const snapshot = stateRef.current
+    const nextSummaries = snapshot.summaries.filter((item) => item.id !== conversationId)
+    const nextContents = { ...snapshot.contents }
+    delete nextContents[conversationId]
+    syncAndPersist({ summaries: nextSummaries, contents: nextContents })
+
+    repository.removeConversation(conversationId)
+
+    if (snapshot.activeId === conversationId) {
+      const nextActiveId = nextSummaries[0]?.id ?? null
+      setActiveConversation(nextActiveId)
+    }
   }
 
   const updateSideMode = (mode: SideMode) => {
     if (isSideConfigLocked && mode !== activeSideMode) {
       return
     }
-    const normalized = normalizeSettingsBySide(activeSettingsBySide, channels, modelCatalog, activeSideCount)
+    const normalized = normalizeSettingsBySide(activeSettingsBySide, state.channels, modelCatalog, activeSideCount)
     updateConversationState(mode, activeSideCount, normalized)
   }
 
@@ -538,8 +192,8 @@ export function useConversations() {
       return
     }
 
-    const nextCount = clampSideCount(count)
-    const normalized = normalizeSettingsBySide(activeSettingsBySide, channels, modelCatalog, nextCount)
+    const nextCount = Math.max(2, Math.floor(count))
+    const normalized = normalizeSettingsBySide(activeSettingsBySide, state.channels, modelCatalog, nextCount)
     updateConversationState(activeSideMode, nextCount, normalized)
   }
 
@@ -552,7 +206,7 @@ export function useConversations() {
           ...patch,
         },
       },
-      channels,
+      state.channels,
       modelCatalog,
       activeSideCount,
     )
@@ -562,18 +216,16 @@ export function useConversations() {
 
   const setSideModel = (side: Side, modelId: string) => {
     const current = activeSettingsBySide[side]
-    const model = getModelById(modelCatalog, modelId) ?? getDefaultModel(modelCatalog)
-
     const merged = normalizeSettingsBySide(
       {
         ...activeSettingsBySide,
         [side]: {
           ...current,
-          modelId: model?.id ?? current.modelId,
-          paramValues: getDefaultParamValues(model),
+          modelId,
+          paramValues: {},
         },
       },
-      channels,
+      state.channels,
       modelCatalog,
       activeSideCount,
     )
@@ -581,9 +233,8 @@ export function useConversations() {
     updateConversationState(activeSideMode, activeSideCount, merged)
   }
 
-  const setSideModelParam = (side: Side, paramKey: string, value: SettingPrimitive) => {
+  const setSideModelParam = (side: Side, paramKey: string, value: string | number | boolean) => {
     const current = activeSettingsBySide[side]
-
     const merged = normalizeSettingsBySide(
       {
         ...activeSettingsBySide,
@@ -595,7 +246,7 @@ export function useConversations() {
           },
         },
       },
-      channels,
+      state.channels,
       modelCatalog,
       activeSideCount,
     )
@@ -603,400 +254,202 @@ export function useConversations() {
     updateConversationState(activeSideMode, activeSideCount, merged)
   }
 
-  const setChannels = (nextChannels: ApiChannel[]) => {
-    setChannelsState(nextChannels)
-    saveChannelsToStorage(nextChannels)
+  const setChannels = (nextChannels: typeof state.channels) => {
+    dispatch({ type: 'channels/set', payload: nextChannels })
+    repository.saveChannels(nextChannels)
 
     const nextCatalog = getModelCatalogFromChannels(nextChannels)
     const normalized = normalizeSettingsBySide(activeSettingsBySide, nextChannels, nextCatalog, activeSideCount)
-    updateConversationState(activeSideMode, activeSideCount, normalized)
-  }
 
-  const createRun = async (options: {
-    batchId: string
-    sideMode: SideMode
-    side: Side
-    settings: SingleSideSettings
-    templatePrompt: string
-    finalPrompt: string
-    variablesSnapshot: Record<string, string>
-    modelId: string
-    modelName: string
-    paramsSnapshot: Record<string, SettingPrimitive>
-    channel: ApiChannel | undefined
-    retryOfRunId?: string
-    retryAttempt?: number
-  }): Promise<Run> => {
-    const {
-      batchId,
-      sideMode,
-      side,
-      settings,
-      templatePrompt,
-      finalPrompt,
-      variablesSnapshot,
-      modelId,
-      modelName,
-      paramsSnapshot,
-      channel,
-      retryOfRunId,
-      retryAttempt = 0,
-    } = options
+    repository.saveStagedSettings({
+      sideMode: activeSideMode,
+      sideCount: activeSideCount,
+      settingsBySide: normalized,
+    })
 
-    const imageCount = clamp(Math.floor(settings.imageCount), 1, 8)
-    const baseRun = {
-      id: makeId(),
-      batchId,
-      createdAt: new Date().toISOString(),
-      sideMode,
-      side,
-      prompt: finalPrompt,
-      imageCount,
-      channelId: channel?.id ?? null,
-      channelName: channel?.name ?? null,
-      modelId,
-      modelName,
-      templatePrompt,
-      finalPrompt,
-      variablesSnapshot,
-      paramsSnapshot,
-      settingsSnapshot: toSettingsSnapshot(settings),
-      retryOfRunId,
-      retryAttempt,
-    } satisfies Omit<Run, 'images'>
+    dispatch({
+      type: 'settings/updateSide',
+      payload: {
+        sideMode: activeSideMode,
+        sideCount: activeSideCount,
+        settingsBySide: normalized,
+      },
+    })
 
-    if (!channel || !channel.baseUrl || !channel.apiKey) {
-      return {
-        ...baseRun,
-        images: Array.from({ length: imageCount }, (_, index) => ({
-          id: makeId(),
-          seq: index + 1,
-          status: 'failed',
-          error: '请先配置可用渠道（Base URL + API Key）',
-          errorCode: 'auth',
-        })),
-      }
-    }
-
-    try {
-      const generated = await generateImages({
-        channel,
-        modelId,
-        prompt: finalPrompt,
-        imageCount,
-        paramValues: paramsSnapshot,
+    const current = stateRef.current
+    const currentActive = current.activeId ? current.contents[current.activeId] ?? null : null
+    if (currentActive) {
+      persistConversation({
+        ...currentActive,
+        updatedAt: new Date().toISOString(),
+        sideMode: activeSideMode,
+        sideCount: activeSideCount,
+        settingsBySide: normalized,
       })
-
-      const images = Array.from({ length: imageCount }, (_, index) => {
-        const seq = index + 1
-        const src = generated.images[index]
-
-        if (!src) {
-          return {
-            id: makeId(),
-            seq,
-            status: 'failed' as const,
-            error: '该序号未返回图片',
-            errorCode: 'unknown' as const,
-          }
-        }
-
-        return {
-          id: makeId(),
-          seq,
-          status: 'success' as const,
-          fileRef: src,
-        }
-      })
-
-      return { ...baseRun, images }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : '未知错误'
-      const code = classifyFailure(message)
-
-      return {
-        ...baseRun,
-        images: Array.from({ length: imageCount }, (_, index) => ({
-          id: makeId(),
-          seq: index + 1,
-          status: 'failed',
-          error: message,
-          errorCode: code,
-        })),
-      }
     }
   }
 
   const replaceRunsInConversation = (conversationId: string, nextRunsById: Map<string, Run>) => {
-    setContents((prev) => {
-      const currentConversation = prev[conversationId]
-      if (!currentConversation) {
-        return prev
+    const snapshot = stateRef.current
+    const currentConversation = snapshot.contents[conversationId]
+    if (!currentConversation) {
+      return
+    }
+
+    let changed = false
+    const nextMessages = currentConversation.messages.map((message) => {
+      if (!Array.isArray(message.runs) || message.runs.length === 0) {
+        return message
       }
 
-      let changed = false
-      const nextMessages = currentConversation.messages.map((message) => {
-        if (!Array.isArray(message.runs) || message.runs.length === 0) {
-          return message
+      let messageChanged = false
+      const nextRuns = message.runs.map((run) => {
+        const replacement = nextRunsById.get(run.id)
+        if (!replacement) {
+          return run
         }
 
-        let messageChanged = false
-        const nextRuns = message.runs.map((run) => {
-          const replacement = nextRunsById.get(run.id)
-          if (!replacement) {
-            return run
-          }
-
-          changed = true
-          messageChanged = true
-          return replacement
-        })
-
-        if (!messageChanged) {
-          return message
-        }
-
-        return {
-          ...message,
-          runs: nextRuns,
-        }
+        changed = true
+        messageChanged = true
+        return replacement
       })
 
-      if (!changed) {
-        return prev
-      }
-
-      const updatedConversation: Conversation = {
-        ...currentConversation,
-        updatedAt: new Date().toISOString(),
-        messages: nextMessages,
-      }
-
-      saveConversationContent(updatedConversation)
-      setSummaries((summaryPrev) => {
-        const nextSummary = summaryPrev.map((item) => (item.id === conversationId ? toSummary(updatedConversation) : item))
-        saveIndex(nextSummary)
-        return nextSummary
-      })
-
-      return { ...prev, [conversationId]: updatedConversation }
-    })
-  }
-
-  const sendDraft = async () => {
-    if (isSending) {
-      return
-    }
-
-    const templatePrompt = draft.trim()
-    if (!templatePrompt) {
-      setSendError('请输入模板 prompt')
-      return
-    }
-
-    const variablesSnapshot = collectVariables(variableMode, tableVariables, inlineVariablesText, panelVariables)
-    const rendered = renderTemplate(templatePrompt, variablesSnapshot)
-
-    if (!rendered.ok) {
-      setSendError(`缺少变量：${rendered.missingKeys.join(', ')}`)
-      return
-    }
-
-    const finalPrompt = rendered.finalPrompt.trim()
-    if (!finalPrompt) {
-      setSendError('替换后 prompt 为空，无法发送')
-      return
-    }
-
-    setSendError('')
-
-    const mode = activeSideMode
-    const sideCount = activeSideCount
-    const settingsBySide = normalizeSettingsBySide(activeSettingsBySide, channels, modelCatalog, sideCount)
-    const batchId = makeId()
-    const sides = mode === 'single' ? (['single'] as Side[]) : getMultiSideIds(sideCount)
-
-    const runPlans = sides.map((side) => {
-      const settings = settingsBySide[side]
-      const model = getModelById(modelCatalog, settings.modelId) ?? getDefaultModel(modelCatalog)
-      const paramsSnapshot: Record<string, SettingPrimitive> = {
-        ...normalizeParamValues(model, settings.paramValues),
-        size: getEffectiveSize(settings),
-        aspectRatio: getEffectiveAspectRatio(settings),
-      }
-      const channel = channels.find((item) => item.id === settings.channelId)
-      const imageCount = clamp(Math.floor(settings.imageCount), 1, 8)
-      const createdAt = new Date().toISOString()
-      const pendingRun: Run = {
-        id: makeId(),
-        batchId,
-        createdAt,
-        sideMode: mode,
-        side,
-        prompt: finalPrompt,
-        imageCount,
-        channelId: channel?.id ?? null,
-        channelName: channel?.name ?? null,
-        modelId: model?.id ?? settings.modelId,
-        modelName: model?.name ?? settings.modelId,
-        templatePrompt,
-        finalPrompt,
-        variablesSnapshot,
-        paramsSnapshot,
-        settingsSnapshot: toSettingsSnapshot(settings),
-        retryAttempt: 0,
-        images: Array.from({ length: imageCount }, (_, index) => ({
-          id: makeId(),
-          seq: index + 1,
-          status: 'pending' as const,
-        })),
+      if (!messageChanged) {
+        return message
       }
 
       return {
-        side,
-        settings,
-        modelId: model?.id ?? settings.modelId,
-        modelName: model?.name ?? settings.modelId,
-        paramsSnapshot,
-        channel,
-        pendingRun,
+        ...message,
+        runs: nextRuns,
       }
     })
 
-    const pendingRuns = runPlans.map((item) => item.pendingRun)
+    if (!changed) {
+      return
+    }
+
+    const updatedConversation: Conversation = {
+      ...currentConversation,
+      updatedAt: new Date().toISOString(),
+      messages: nextMessages,
+    }
+
+    persistConversation(updatedConversation)
+  }
+
+  const sendDraft = async () => {
+    const snapshot = stateRef.current
+    if (snapshot.isSending) {
+      return
+    }
+
+    const currentActive = snapshot.activeId ? snapshot.contents[snapshot.activeId] ?? null : null
+    const activeState = conversationSelectors.selectActiveSettings(snapshot)
+
+    const planned = orchestrator.planSendDraft(snapshot, {
+      mode: activeState.activeSideMode,
+      sideCount: activeState.activeSideCount,
+      settingsBySide: activeState.activeSettingsBySide,
+      modelCatalog,
+    })
+
+    if (!planned.ok) {
+      dispatch({ type: 'send/fail', payload: planned.error })
+      return
+    }
+
+    const plan = planned.value
+
+    dispatch({ type: 'send/start' })
+
     let targetConversationId: string
-    if (!activeConversation) {
-      const conversation = createConversation(settingsBySide, mode, sideCount, `对话 ${summaries.length + 1}`)
-      const updatedConversation = appendMessagesToConversation(conversation, finalPrompt, pendingRuns)
+
+    if (!currentActive) {
+      const conversation = createConversation(
+        plan.settingsBySide,
+        plan.mode,
+        plan.sideCount,
+        `对话 ${snapshot.summaries.length + 1}`,
+      )
+      const updatedConversation = appendMessagesToConversation(conversation, plan.finalPrompt, plan.pendingRuns)
       persistConversation(updatedConversation)
-      setActiveId(updatedConversation.id)
-      saveActiveConversationId(updatedConversation.id)
+      setActiveConversation(updatedConversation.id)
       targetConversationId = updatedConversation.id
     } else {
       const updatedConversation = appendMessagesToConversation(
         {
-          ...activeConversation,
-          sideMode: mode,
-          sideCount,
-          settingsBySide,
+          ...currentActive,
+          sideMode: plan.mode,
+          sideCount: plan.sideCount,
+          settingsBySide: plan.settingsBySide,
         },
-        finalPrompt,
-        pendingRuns,
+        plan.finalPrompt,
+        plan.pendingRuns,
       )
       persistConversation(updatedConversation)
       targetConversationId = updatedConversation.id
     }
 
-    setDraft('')
-    setIsSending(true)
+    actions.setDraft('')
 
     try {
-      const completedRuns = await Promise.all(
-        runPlans.map(async (plan) => {
-          const result = await createRun({
-            batchId,
-            sideMode: mode,
-            side: plan.side,
-            settings: plan.settings,
-            templatePrompt,
-            finalPrompt,
-            variablesSnapshot,
-            modelId: plan.modelId,
-            modelName: plan.modelName,
-            paramsSnapshot: plan.paramsSnapshot,
-            channel: plan.channel,
-          })
-
-          return {
-            ...result,
-            id: plan.pendingRun.id,
-            createdAt: plan.pendingRun.createdAt,
-          }
-        }),
+      const completedRuns = await orchestrator.executeRunPlans(
+        plan.runPlans.map((runPlan) => ({
+          batchId: plan.batchId,
+          sideMode: plan.mode,
+          side: runPlan.side,
+          settings: runPlan.settings,
+          templatePrompt: plan.templatePrompt,
+          finalPrompt: plan.finalPrompt,
+          variablesSnapshot: plan.variablesSnapshot,
+          modelId: runPlan.modelId,
+          modelName: runPlan.modelName,
+          paramsSnapshot: runPlan.paramsSnapshot,
+          channel: runPlan.channel,
+          pendingRunId: runPlan.pendingRun.id,
+          pendingCreatedAt: runPlan.pendingRun.createdAt,
+        })),
       )
 
       const map = new Map(completedRuns.map((run) => [run.id, run]))
       replaceRunsInConversation(targetConversationId, map)
-    } finally {
-      setIsSending(false)
+      dispatch({ type: 'send/succeed' })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '发送失败'
+      dispatch({ type: 'send/fail', payload: message })
     }
   }
 
   const retryRun = async (runId: string) => {
-    if (!activeConversation) {
-      return
-    }
-
-    let targetMessageIndex = -1
-    let targetRunIndex = -1
-
-    for (let i = 0; i < activeConversation.messages.length; i += 1) {
-      const message = activeConversation.messages[i]
-      const idx = message.runs?.findIndex((item) => item.id === runId) ?? -1
-      if (idx >= 0) {
-        targetMessageIndex = i
-        targetRunIndex = idx
-        break
-      }
-    }
-
-    if (targetMessageIndex < 0 || targetRunIndex < 0) {
-      return
-    }
-
-    const targetMessage = activeConversation.messages[targetMessageIndex]
-    const targetRun = targetMessage.runs?.[targetRunIndex]
-    if (!targetRun) {
-      return
-    }
-
-    const rootRunId = targetRun.retryOfRunId ?? targetRun.id
-    const allRuns = activeConversation.messages.flatMap((message) => message.runs ?? [])
-    const maxRetryAttempt = allRuns.reduce((acc, current) => {
-      if (current.id === rootRunId || current.retryOfRunId === rootRunId) {
-        return Math.max(acc, current.retryAttempt ?? 0)
-      }
-      return acc
-    }, 0)
-
-    const settings = {
-      resolution: normalizeSizeTier(targetRun.settingsSnapshot?.resolution),
-      aspectRatio: targetRun.settingsSnapshot?.aspectRatio ?? ASPECT_RATIO_DEFAULT,
-      imageCount: targetRun.settingsSnapshot?.imageCount ?? targetRun.imageCount,
-      gridColumns: targetRun.settingsSnapshot?.gridColumns ?? 4,
-      sizeMode: targetRun.settingsSnapshot?.sizeMode ?? 'preset',
-      customWidth: targetRun.settingsSnapshot?.customWidth ?? 1024,
-      customHeight: targetRun.settingsSnapshot?.customHeight ?? 1024,
-      autoSave: targetRun.settingsSnapshot?.autoSave ?? true,
-      channelId: targetRun.channelId,
-      modelId: targetRun.modelId,
-      paramValues: { ...targetRun.paramsSnapshot },
-    }
-
-    const model = getModelById(modelCatalog, targetRun.modelId) ?? getDefaultModel(modelCatalog)
-    const channel = channels.find((item) => item.id === targetRun.channelId)
-    const fallbackChannel = targetRun.channelName
-      ? { id: targetRun.channelId ?? makeId(), name: targetRun.channelName, baseUrl: '', apiKey: '' }
-      : undefined
-
-    const retry = await createRun({
-      batchId: targetRun.batchId,
-      sideMode: targetRun.sideMode,
-      side: targetRun.side,
-      settings,
-      templatePrompt: targetRun.templatePrompt,
-      finalPrompt: targetRun.finalPrompt,
-      variablesSnapshot: { ...targetRun.variablesSnapshot },
-      modelId: model?.id ?? targetRun.modelId,
-      modelName: model?.name ?? targetRun.modelName,
-      paramsSnapshot: { ...targetRun.paramsSnapshot },
-      channel: channel ?? fallbackChannel,
-      retryOfRunId: rootRunId,
-      retryAttempt: maxRetryAttempt + 1,
+    const snapshot = stateRef.current
+    const currentActive = snapshot.activeId ? snapshot.contents[snapshot.activeId] ?? null : null
+    const plan = orchestrator.planRetry(currentActive, runId, {
+      channels: snapshot.channels,
+      modelCatalog,
     })
 
-    const nextMessages = activeConversation.messages.map((message, index) => {
-      if (index !== targetMessageIndex) {
+    if (!plan || !currentActive) {
+      return
+    }
+
+    const retry = await orchestrator.executeRetry({
+      batchId: plan.sourceRun.batchId,
+      sideMode: plan.sourceRun.sideMode,
+      side: plan.sourceRun.side,
+      settings: plan.settings,
+      templatePrompt: plan.sourceRun.templatePrompt,
+      finalPrompt: plan.sourceRun.finalPrompt,
+      variablesSnapshot: { ...plan.sourceRun.variablesSnapshot },
+      modelId: plan.modelId,
+      modelName: plan.modelName,
+      paramsSnapshot: { ...plan.paramsSnapshot },
+      channel: plan.channel,
+      retryOfRunId: plan.rootRunId,
+      retryAttempt: plan.nextRetryAttempt,
+    })
+
+    const nextMessages = currentActive.messages.map((message) => {
+      if (!Array.isArray(message.runs) || !message.runs.some((item) => item.id === runId)) {
         return message
       }
 
@@ -1006,27 +459,25 @@ export function useConversations() {
       }
     })
 
-    const updatedConversation: Conversation = {
-      ...activeConversation,
+    persistConversation({
+      ...currentActive,
       updatedAt: new Date().toISOString(),
       messages: nextMessages,
-    }
-
-    persistConversation(updatedConversation)
+    })
   }
 
   return {
-    summaries,
+    summaries: state.summaries,
     activeConversation,
-    activeId,
-    draft,
-    sendError,
-    isSending,
-    showAdvancedVariables,
-    variableMode,
-    tableVariables,
-    inlineVariablesText,
-    panelVariables,
+    activeId: state.activeId,
+    draft: state.draft,
+    sendError: state.sendError,
+    isSending: state.isSending,
+    showAdvancedVariables: state.showAdvancedVariables,
+    variableMode: state.variableMode,
+    tableVariables: state.tableVariables,
+    inlineVariablesText: state.inlineVariablesText,
+    panelVariables: state.panelVariables,
     resolvedVariables,
     templatePreview,
     unusedVariableKeys,
@@ -1036,25 +487,13 @@ export function useConversations() {
     isSideConfigLocked,
     activeSettingsBySide,
     modelCatalog,
-    channels,
-    setDraft: (value: string) => {
-      setDraft(value)
-      setSendError('')
-    },
-    setShowAdvancedVariables,
-    setVariableMode,
-    setTableVariables: (rows: TableVariableRow[]) => {
-      setTableVariables(rows)
-      setSendError('')
-    },
-    setInlineVariablesText: (value: string) => {
-      setInlineVariablesText(value)
-      setSendError('')
-    },
-    setPanelVariables: (rows: PanelVariableRow[]) => {
-      setPanelVariables(rows)
-      setSendError('')
-    },
+    channels: state.channels,
+    setDraft: actions.setDraft,
+    setShowAdvancedVariables: actions.setAdvancedVariables,
+    setVariableMode: actions.setVariableMode,
+    setTableVariables: actions.setTableVariables,
+    setInlineVariablesText: actions.setInlineVariablesText,
+    setPanelVariables: actions.setPanelVariables,
     createNewConversation,
     clearAllConversations,
     removeConversation,

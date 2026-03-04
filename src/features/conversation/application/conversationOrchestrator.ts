@@ -1,0 +1,118 @@
+import type { Conversation, ModelCatalog, Run, SettingPrimitive } from '../../../types/chat'
+import type { CreateRunInput } from './runExecutor'
+import { buildRetryPlan, planRunBatch } from '../domain/conversationDomain'
+import type { ConversationState } from '../state/conversationState'
+
+export interface ConversationOrchestratorDeps {
+  createRun: (input: CreateRunInput) => Promise<Run>
+}
+
+export function createConversationOrchestrator(deps: ConversationOrchestratorDeps) {
+  return {
+    planSendDraft(state: ConversationState, input: {
+      mode: Conversation['sideMode']
+      sideCount: number
+      settingsBySide: Conversation['settingsBySide']
+      modelCatalog: ModelCatalog
+    }) {
+      return planRunBatch({
+        draft: state.draft,
+        variableMode: state.variableMode,
+        tableVariables: state.tableVariables,
+        inlineVariablesText: state.inlineVariablesText,
+        panelVariables: state.panelVariables,
+        mode: input.mode,
+        sideCount: input.sideCount,
+        settingsBySide: input.settingsBySide,
+        channels: state.channels,
+        modelCatalog: input.modelCatalog,
+      })
+    },
+
+    async executeRunPlans(runPlans: Array<{
+      batchId: string
+      sideMode: Conversation['sideMode']
+      side: string
+      settings: CreateRunInput['settings']
+      templatePrompt: string
+      finalPrompt: string
+      variablesSnapshot: Record<string, string>
+      modelId: string
+      modelName: string
+      paramsSnapshot: Record<string, SettingPrimitive>
+      channel: CreateRunInput['channel']
+      pendingRunId: string
+      pendingCreatedAt: string
+    }>): Promise<Run[]> {
+      const completedRuns = await Promise.all(
+        runPlans.map(async (plan) => {
+          const result = await deps.createRun({
+            batchId: plan.batchId,
+            sideMode: plan.sideMode,
+            side: plan.side,
+            settings: plan.settings,
+            templatePrompt: plan.templatePrompt,
+            finalPrompt: plan.finalPrompt,
+            variablesSnapshot: plan.variablesSnapshot,
+            modelId: plan.modelId,
+            modelName: plan.modelName,
+            paramsSnapshot: plan.paramsSnapshot,
+            channel: plan.channel,
+          })
+
+          return {
+            ...result,
+            id: plan.pendingRunId,
+            createdAt: plan.pendingCreatedAt,
+          }
+        }),
+      )
+
+      return completedRuns
+    },
+
+    planRetry(conversation: Conversation | null, runId: string, input: {
+      channels: ConversationState['channels']
+      modelCatalog: ModelCatalog
+    }) {
+      return buildRetryPlan({
+        activeConversation: conversation,
+        runId,
+        channels: input.channels,
+        modelCatalog: input.modelCatalog,
+      })
+    },
+
+    executeRetry(options: {
+      batchId: string
+      sideMode: Conversation['sideMode']
+      side: string
+      settings: CreateRunInput['settings']
+      templatePrompt: string
+      finalPrompt: string
+      variablesSnapshot: Record<string, string>
+      modelId: string
+      modelName: string
+      paramsSnapshot: Record<string, SettingPrimitive>
+      channel: CreateRunInput['channel']
+      retryOfRunId: string
+      retryAttempt: number
+    }) {
+      return deps.createRun({
+        batchId: options.batchId,
+        sideMode: options.sideMode,
+        side: options.side,
+        settings: options.settings,
+        templatePrompt: options.templatePrompt,
+        finalPrompt: options.finalPrompt,
+        variablesSnapshot: options.variablesSnapshot,
+        modelId: options.modelId,
+        modelName: options.modelName,
+        paramsSnapshot: options.paramsSnapshot,
+        channel: options.channel,
+        retryOfRunId: options.retryOfRunId,
+        retryAttempt: options.retryAttempt,
+      })
+    },
+  }
+}
