@@ -77,6 +77,9 @@ export interface Run {
   channelName: string | null
   modelId: string
   modelName: string
+  templatePrompt: string
+  finalPrompt: string
+  variablesSnapshot: Record<string, string>
   paramsSnapshot: Record<string, SettingPrimitive>
   settingsSnapshot: RunSettingsSnapshot
   retryOfRunId?: string

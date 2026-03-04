@@ -18,6 +18,7 @@ import type {
   ApiChannel,
   Conversation,
   ConversationSummary,
+  Run,
   SettingPrimitive,
   Side,
   SideMode,
@@ -32,9 +33,25 @@ import {
   makeId,
   toSummary,
 } from '../utils/chat'
+import { parseInlineAssignments, parseTemplateKeys, renderTemplate } from '../utils/template'
 
 const RESOLUTION_DEFAULT = '1024x1024'
 const ASPECT_RATIO_DEFAULT = '1:1'
+
+export type VariableInputMode = 'table' | 'inline' | 'panel'
+
+export interface TableVariableRow {
+  id: string
+  key: string
+  value: string
+}
+
+export interface PanelVariableRow {
+  id: string
+  key: string
+  valuesText: string
+  selectedValue: string
+}
 
 function normalizeSettings(
   settings: SingleSideSettings | undefined,
@@ -90,6 +107,11 @@ function normalizeConversation(conversation: Conversation, channels: ApiChannel[
     settingsBySide?: Partial<Record<Side, SingleSideSettings>>
   }
 
+  const normalizedMessages = conversation.messages.map((message) => ({
+    ...message,
+    runs: (message.runs ?? []).map((run) => normalizeRun(run)),
+  }))
+
   return {
     ...conversation,
     sideMode: conversation.sideMode === 'ab' ? 'ab' : 'single',
@@ -97,7 +119,74 @@ function normalizeConversation(conversation: Conversation, channels: ApiChannel[
       raw.settingsBySide ?? (raw.singleSettings ? { single: raw.singleSettings } : undefined),
       channels,
     ),
+    messages: normalizedMessages,
   }
+}
+
+function normalizeRun(run: Run): Run {
+  const raw = run as Run & {
+    templatePrompt?: string
+    finalPrompt?: string
+    variablesSnapshot?: Record<string, string>
+    retryAttempt?: number
+  }
+
+  return {
+    ...run,
+    templatePrompt: raw.templatePrompt ?? run.prompt ?? '',
+    finalPrompt: raw.finalPrompt ?? run.prompt ?? '',
+    variablesSnapshot: raw.variablesSnapshot ?? {},
+    retryAttempt: raw.retryAttempt ?? 0,
+    settingsSnapshot: run.settingsSnapshot ?? {
+      resolution: RESOLUTION_DEFAULT,
+      aspectRatio: ASPECT_RATIO_DEFAULT,
+      imageCount: run.imageCount,
+      autoSave: true,
+    },
+  }
+}
+
+function parseValuesText(valuesText: string): string[] {
+  return valuesText
+    .split(/[\n,;|]/)
+    .map((value) => value.trim())
+    .filter(Boolean)
+}
+
+function collectVariables(
+  mode: VariableInputMode,
+  tableRows: TableVariableRow[],
+  inlineText: string,
+  panelRows: PanelVariableRow[],
+): Record<string, string> {
+  if (mode === 'inline') {
+    return parseInlineAssignments(inlineText)
+  }
+
+  if (mode === 'panel') {
+    const result: Record<string, string> = {}
+    for (const row of panelRows) {
+      const key = row.key.trim()
+      if (!key) {
+        continue
+      }
+
+      const values = parseValuesText(row.valuesText)
+      const selected = row.selectedValue || values[0] || ''
+      result[key] = selected
+    }
+    return result
+  }
+
+  const result: Record<string, string> = {}
+  for (const row of tableRows) {
+    const key = row.key.trim()
+    if (!key) {
+      continue
+    }
+    result[key] = row.value
+  }
+  return result
 }
 
 export function useConversations() {
@@ -116,6 +205,16 @@ export function useConversations() {
   const [contents, setContents] = useState(normalizedContents)
   const [activeId, setActiveId] = useState<string | null>(initial.activeId)
   const [draft, setDraft] = useState('')
+  const [sendError, setSendError] = useState<string>('')
+  const [variableMode, setVariableMode] = useState<VariableInputMode>('table')
+  const [tableVariables, setTableVariables] = useState<TableVariableRow[]>([
+    { id: makeId(), key: '', value: '' },
+  ])
+  const [inlineVariablesText, setInlineVariablesText] = useState('')
+  const [panelVariables, setPanelVariables] = useState<PanelVariableRow[]>([
+    { id: makeId(), key: '', valuesText: '', selectedValue: '' },
+  ])
+
   const [stagedSideMode, setStagedSideMode] = useState<SideMode>('single')
   const [stagedSettingsBySide, setStagedSettingsBySide] = useState<Record<Side, SingleSideSettings>>(() =>
     defaultSettingsBySide(channels),
@@ -128,6 +227,17 @@ export function useConversations() {
 
   const activeSideMode = activeConversation?.sideMode ?? stagedSideMode
   const activeSettingsBySide = activeConversation?.settingsBySide ?? stagedSettingsBySide
+
+  const resolvedVariables = useMemo(
+    () => collectVariables(variableMode, tableVariables, inlineVariablesText, panelVariables),
+    [variableMode, tableVariables, inlineVariablesText, panelVariables],
+  )
+
+  const templatePreview = useMemo(() => renderTemplate(draft, resolvedVariables), [draft, resolvedVariables])
+  const unusedVariableKeys = useMemo(() => {
+    const templateKeys = new Set(parseTemplateKeys(draft))
+    return Object.keys(resolvedVariables).filter((key) => key && !templateKeys.has(key))
+  }, [draft, resolvedVariables])
 
   const persistConversation = (conversation: Conversation) => {
     setContents((prev) => {
@@ -160,10 +270,7 @@ export function useConversations() {
     saveActiveConversationId(conversationId)
   }
 
-  const updateConversationState = (
-    mode: SideMode,
-    settingsBySide: Record<Side, SingleSideSettings>,
-  ) => {
+  const updateConversationState = (mode: SideMode, settingsBySide: Record<Side, SingleSideSettings>) => {
     if (!activeConversation) {
       setStagedSideMode(mode)
       setStagedSettingsBySide(settingsBySide)
@@ -247,10 +354,27 @@ export function useConversations() {
   }
 
   const sendDraft = () => {
-    const value = draft.trim()
-    if (!value) {
+    const templatePrompt = draft.trim()
+    if (!templatePrompt) {
+      setSendError('请输入模板 prompt')
       return
     }
+
+    const variablesSnapshot = collectVariables(variableMode, tableVariables, inlineVariablesText, panelVariables)
+    const rendered = renderTemplate(templatePrompt, variablesSnapshot)
+
+    if (!rendered.ok) {
+      setSendError(`缺少变量：${rendered.missingKeys.join(', ')}`)
+      return
+    }
+
+    const finalPrompt = rendered.finalPrompt.trim()
+    if (!finalPrompt) {
+      setSendError('替换后 prompt 为空，无法发送')
+      return
+    }
+
+    setSendError('')
 
     const mode = activeSideMode
     const settingsBySide = normalizeSettingsBySide(activeSettingsBySide, channels)
@@ -266,8 +390,10 @@ export function useConversations() {
         batchId,
         sideMode: mode,
         side,
-        prompt: value,
         settings,
+        templatePrompt,
+        finalPrompt,
+        variablesSnapshot,
         model,
         paramsSnapshot,
         channel,
@@ -278,7 +404,7 @@ export function useConversations() {
 
     if (!activeConversation) {
       const conversation = createConversation(settingsBySide, mode, `对话 ${summaries.length + 1}`)
-      const updatedConversation = appendMessagesToConversation(conversation, value, runs)
+      const updatedConversation = appendMessagesToConversation(conversation, finalPrompt, runs)
       persistConversation(updatedConversation)
       setActiveId(updatedConversation.id)
       saveActiveConversationId(updatedConversation.id)
@@ -289,7 +415,7 @@ export function useConversations() {
           sideMode: mode,
           settingsBySide,
         },
-        value,
+        finalPrompt,
         runs,
       )
       persistConversation(updatedConversation)
@@ -355,8 +481,10 @@ export function useConversations() {
       batchId: targetRun.batchId,
       sideMode: targetRun.sideMode,
       side: targetRun.side,
-      prompt: targetRun.prompt,
       settings,
+      templatePrompt: targetRun.templatePrompt,
+      finalPrompt: targetRun.finalPrompt,
+      variablesSnapshot: { ...targetRun.variablesSnapshot },
       model,
       paramsSnapshot: { ...targetRun.paramsSnapshot },
       channel: channel ?? fallbackChannel,
@@ -389,11 +517,35 @@ export function useConversations() {
     activeConversation,
     activeId,
     draft,
+    sendError,
+    variableMode,
+    tableVariables,
+    inlineVariablesText,
+    panelVariables,
+    resolvedVariables,
+    templatePreview,
+    unusedVariableKeys,
     activeSideMode,
     activeSettingsBySide,
     modelCatalog,
     channels,
-    setDraft,
+    setDraft: (value: string) => {
+      setDraft(value)
+      setSendError('')
+    },
+    setVariableMode,
+    setTableVariables: (rows: TableVariableRow[]) => {
+      setTableVariables(rows)
+      setSendError('')
+    },
+    setInlineVariablesText: (value: string) => {
+      setInlineVariablesText(value)
+      setSendError('')
+    },
+    setPanelVariables: (rows: PanelVariableRow[]) => {
+      setPanelVariables(rows)
+      setSendError('')
+    },
     createNewConversation,
     switchConversation,
     updateSideMode,

@@ -154,7 +154,9 @@ function renderRunCard(
         <Text type="secondary">渠道：{run.channelName ?? '未选择'}</Text>
         <Text type="secondary">模型：{run.modelName ?? run.modelId ?? '未记录'}</Text>
         <Text type="secondary">参数：{formatParamSnapshot(run.paramsSnapshot)}</Text>
-        <Text type="secondary">prompt: {run.prompt}</Text>
+        <Text type="secondary">模板: {run.templatePrompt}</Text>
+        <Text type="secondary">变量: {formatParamSnapshot(run.variablesSnapshot)}</Text>
+        <Text type="secondary">最终 prompt: {run.finalPrompt}</Text>
         {failureSummary ? <Text type="warning">失败摘要：{failureSummary}</Text> : null}
         {hasFailed ? (
           <Button size="small" onClick={() => onRetryRun(run.id)}>

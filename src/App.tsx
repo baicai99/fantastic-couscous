@@ -17,11 +17,23 @@ export default function App() {
     activeConversation,
     activeId,
     draft,
+    sendError,
+    variableMode,
+    tableVariables,
+    inlineVariablesText,
+    panelVariables,
+    resolvedVariables,
+    templatePreview,
+    unusedVariableKeys,
     activeSideMode,
     activeSettingsBySide,
     modelCatalog,
     channels,
     setDraft,
+    setVariableMode,
+    setTableVariables,
+    setInlineVariablesText,
+    setPanelVariables,
     createNewConversation,
     switchConversation,
     updateSideMode,
@@ -106,7 +118,24 @@ export default function App() {
           )}
         </Content>
 
-        <Composer draft={draft} onDraftChange={setDraft} onSend={sendDraft} />
+        <Composer
+          draft={draft}
+          sendError={sendError}
+          variableMode={variableMode}
+          tableVariables={tableVariables}
+          inlineVariablesText={inlineVariablesText}
+          panelVariables={panelVariables}
+          resolvedVariables={resolvedVariables}
+          finalPromptPreview={templatePreview.ok ? templatePreview.finalPrompt : ''}
+          missingKeys={templatePreview.missingKeys}
+          unusedVariableKeys={unusedVariableKeys}
+          onDraftChange={setDraft}
+          onVariableModeChange={setVariableMode}
+          onTableVariablesChange={setTableVariables}
+          onInlineVariablesTextChange={setInlineVariablesText}
+          onPanelVariablesChange={setPanelVariables}
+          onSend={sendDraft}
+        />
       </Layout>
 
       <Sider width={320} className="panel panel-right">

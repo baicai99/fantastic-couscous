@@ -126,8 +126,10 @@ interface CreateMockRunOptions {
   batchId: string
   sideMode: SideMode
   side: Side
-  prompt: string
   settings: SingleSideSettings
+  templatePrompt: string
+  finalPrompt: string
+  variablesSnapshot: Record<string, string>
   model: ModelSpec | undefined
   paramsSnapshot: Record<string, SettingPrimitive>
   channel: ApiChannel | undefined
@@ -140,8 +142,10 @@ export function createMockRun(options: CreateMockRunOptions): Run {
     batchId,
     sideMode,
     side,
-    prompt,
     settings,
+    templatePrompt,
+    finalPrompt,
+    variablesSnapshot,
     model,
     paramsSnapshot,
     channel,
@@ -149,7 +153,7 @@ export function createMockRun(options: CreateMockRunOptions): Run {
     retryAttempt = 0,
   } = options
 
-  const promptLower = prompt.toLowerCase()
+  const promptLower = finalPrompt.toLowerCase()
   const failBySide = (side === 'A' && promptLower.includes('fail-a')) || (side === 'B' && promptLower.includes('fail-b'))
   const failAll = promptLower.includes('fail')
   const shouldFailLast = failAll || failBySide
@@ -159,7 +163,7 @@ export function createMockRun(options: CreateMockRunOptions): Run {
 
   const imageCount = clamp(Math.floor(settings.imageCount), 1, 8)
   const { width, height } = parseResolution(settings.resolution)
-  const failure = getFailureFromPrompt(prompt)
+  const failure = getFailureFromPrompt(finalPrompt)
 
   return {
     id: makeId(),
@@ -167,12 +171,15 @@ export function createMockRun(options: CreateMockRunOptions): Run {
     createdAt: new Date().toISOString(),
     sideMode,
     side,
-    prompt,
+    prompt: finalPrompt,
     imageCount,
     channelId: channel?.id ?? null,
     channelName: channel?.name ?? null,
     modelId: model?.id ?? settings.modelId,
     modelName: model?.name ?? settings.modelId,
+    templatePrompt,
+    finalPrompt,
+    variablesSnapshot,
     paramsSnapshot,
     settingsSnapshot: toSettingsSnapshot(settings),
     retryOfRunId,
