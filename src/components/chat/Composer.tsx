@@ -17,6 +17,7 @@ interface ComposerProps {
   finalPromptPreview: string
   missingKeys: string[]
   unusedVariableKeys: string[]
+  isSending: boolean
   onDraftChange: (value: string) => void
   onVariableModeChange: (mode: VariableInputMode) => void
   onTableVariablesChange: (rows: TableVariableRow[]) => void
@@ -47,6 +48,7 @@ export function Composer(props: ComposerProps) {
     finalPromptPreview,
     missingKeys,
     unusedVariableKeys,
+    isSending,
     onDraftChange,
     onVariableModeChange,
     onTableVariablesChange,
@@ -199,7 +201,7 @@ export function Composer(props: ComposerProps) {
           placeholder="输入模板 prompt，例如：a {{style}} portrait of {{subject}}"
           autoSize={{ minRows: 2, maxRows: 5 }}
           onPressEnter={(event) => {
-            if (!event.shiftKey) {
+            if (!event.shiftKey && !isSending) {
               event.preventDefault()
               onSend()
             }
@@ -287,7 +289,7 @@ export function Composer(props: ComposerProps) {
         {sendError ? <Alert type="error" message={sendError} /> : null}
 
         <Space>
-          <Button type="primary" onClick={onSend}>
+          <Button type="primary" onClick={onSend} loading={isSending} disabled={isSending}>
             发送
           </Button>
         </Space>

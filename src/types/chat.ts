@@ -1,5 +1,5 @@
-export type SideMode = 'single' | 'ab'
-export type Side = 'single' | 'A' | 'B'
+export type SideMode = 'single' | 'multi'
+export type Side = string
 export type ImageStatus = 'pending' | 'success' | 'failed'
 export type MessageRole = 'user' | 'assistant'
 export type SettingPrimitive = string | number | boolean
@@ -45,6 +45,7 @@ export interface SingleSideSettings {
   resolution: string
   aspectRatio: string
   imageCount: number
+  gridColumns: number
   autoSave: boolean
   channelId: string | null
   modelId: string
@@ -55,6 +56,7 @@ export interface RunSettingsSnapshot {
   resolution: string
   aspectRatio: string
   imageCount: number
+  gridColumns: number
   autoSave: boolean
 }
 
@@ -103,6 +105,7 @@ export interface Conversation {
   createdAt: string
   updatedAt: string
   sideMode: SideMode
+  sideCount: number
   settingsBySide: Record<Side, SingleSideSettings>
   messages: Message[]
 }

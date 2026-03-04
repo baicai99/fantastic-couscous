@@ -50,7 +50,7 @@ export function useImagePreview() {
 
   const openPreview = useCallback(
     (run: Run, imageId: string, linkedRun?: Run) => {
-      if (!linkedRun || run.sideMode !== 'ab') {
+      if (!linkedRun || run.sideMode !== 'multi') {
         const images = toSuccessPreviewImages(run)
         if (images.length === 0) {
           return
@@ -72,8 +72,8 @@ export function useImagePreview() {
         return
       }
 
-      const runA = run.side === 'A' ? run : linkedRun
-      const runB = run.side === 'B' ? run : linkedRun
+      const runA = run
+      const runB = linkedRun
 
       const imagesA = toSuccessPreviewImages(runA)
       const imagesB = toSuccessPreviewImages(runB)

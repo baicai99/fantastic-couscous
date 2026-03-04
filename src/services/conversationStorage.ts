@@ -1,9 +1,16 @@
-import type { ApiChannel, Conversation, ConversationSummary } from '../types/chat'
+import type { ApiChannel, Conversation, ConversationSummary, Side, SideMode, SingleSideSettings } from '../types/chat'
 
 const STORAGE_INDEX_KEY = 'm1:conversation-index'
 const STORAGE_ACTIVE_KEY = 'm1:active-conversation-id'
 const STORAGE_CONTENT_PREFIX = 'm1:conversation:'
 const STORAGE_CHANNELS_KEY = 'm3:channels'
+const STORAGE_STAGED_SETTINGS_KEY = 'm3:staged-settings'
+
+export interface StagedSettingsState {
+  sideMode: SideMode
+  sideCount?: number
+  settingsBySide?: Partial<Record<Side, SingleSideSettings>>
+}
 
 function contentStorageKey(conversationId: string): string {
   return `${STORAGE_CONTENT_PREFIX}${conversationId}`
@@ -86,4 +93,27 @@ export function loadChannelsFromStorage(): ApiChannel[] {
 
 export function saveChannelsToStorage(channels: ApiChannel[]): void {
   localStorage.setItem(STORAGE_CHANNELS_KEY, JSON.stringify(channels))
+}
+
+export function loadStagedSettingsFromStorage(): StagedSettingsState | null {
+  try {
+    const raw = localStorage.getItem(STORAGE_STAGED_SETTINGS_KEY)
+    if (!raw) {
+      return null
+    }
+
+    const parsed = JSON.parse(raw) as { sideMode?: string; sideCount?: unknown; settingsBySide?: unknown }
+    const sideMode: SideMode = parsed?.sideMode === 'multi' || parsed?.sideMode === 'ab' ? 'multi' : 'single'
+    const sideCount = typeof parsed?.sideCount === 'number' ? Math.max(2, Math.floor(parsed.sideCount)) : undefined
+    const settingsBySide =
+      parsed?.settingsBySide && typeof parsed.settingsBySide === 'object' ? parsed.settingsBySide : undefined
+
+    return { sideMode, sideCount, settingsBySide }
+  } catch {
+    return null
+  }
+}
+
+export function saveStagedSettingsToStorage(state: StagedSettingsState): void {
+  localStorage.setItem(STORAGE_STAGED_SETTINGS_KEY, JSON.stringify(state))
 }

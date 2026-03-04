@@ -4,9 +4,15 @@ const EMPTY_CATALOG: ModelCatalog = { models: [] }
 
 function shouldDisplayModel(modelId: string): boolean {
   const value = modelId.toLowerCase()
-  if (value.includes('banana') || value.includes('gemini')) {
+
+  if (value.includes('gemini')) {
+    return value.includes('image') || value.includes('banana')
+  }
+
+  if (value.includes('banana')) {
     return true
   }
+
   return !value.includes('chat')
 }
 

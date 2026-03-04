@@ -1,4 +1,5 @@
-﻿import { Card, Col, Layout, Row, Typography } from 'antd'
+﻿import { useState } from 'react'
+import { Button, Card, Col, Layout, Row, Space, Typography } from 'antd'
 import { Composer } from './components/chat/Composer'
 import { MessageList } from './components/chat/MessageList'
 import { ImagePreviewModal } from './components/preview/ImagePreviewModal'
@@ -12,12 +13,16 @@ const { Header, Sider, Content } = Layout
 const { Title } = Typography
 
 export default function App() {
+  const [isLeftPanelCollapsed, setIsLeftPanelCollapsed] = useState(false)
+  const [isRightPanelCollapsed, setIsRightPanelCollapsed] = useState(false)
+
   const {
     summaries,
     activeConversation,
     activeId,
     draft,
     sendError,
+    isSending,
     showAdvancedVariables,
     variableMode,
     tableVariables,
@@ -27,6 +32,9 @@ export default function App() {
     templatePreview,
     unusedVariableKeys,
     activeSideMode,
+    activeSideCount,
+    activeSides,
+    isSideConfigLocked,
     activeSettingsBySide,
     modelCatalog,
     channels,
@@ -39,6 +47,7 @@ export default function App() {
     createNewConversation,
     switchConversation,
     updateSideMode,
+    updateSideCount,
     updateSideSettings,
     setSideModel,
     setSideModelParam,
@@ -70,45 +79,53 @@ export default function App() {
 
   return (
     <Layout className="app-shell">
-      <Sider width={280} className="panel">
-        <ConversationList
-          summaries={summaries}
-          activeId={activeId}
-          onCreateConversation={createNewConversation}
-          onSwitchConversation={switchConversation}
-        />
-      </Sider>
+      {!isLeftPanelCollapsed ? (
+        <Sider width={280} className="panel">
+          <ConversationList
+            summaries={summaries}
+            activeId={activeId}
+            onCreateConversation={createNewConversation}
+            onSwitchConversation={switchConversation}
+          />
+        </Sider>
+      ) : null}
 
       <Layout className="panel-center">
         <Header className="chat-header">
-          <Title level={5} className="panel-title">
-            {activeConversation?.title ?? '未选择对话'}
-          </Title>
+          <div className="chat-header-row">
+            <Space>
+              <Button size="small" onClick={() => setIsLeftPanelCollapsed((prev) => !prev)}>
+                {isLeftPanelCollapsed ? '展开历史栏' : '收起历史栏'}
+              </Button>
+              <Button size="small" onClick={() => setIsRightPanelCollapsed((prev) => !prev)}>
+                {isRightPanelCollapsed ? '展开设置栏' : '收起设置栏'}
+              </Button>
+            </Space>
+            <Title level={5} className="panel-title">
+              {activeConversation?.title ?? '未选择对话'}
+            </Title>
+          </div>
         </Header>
 
-        <Content className={`chat-body ${activeSideMode === 'ab' ? 'chat-body-ab' : ''}`}>
-          {activeSideMode === 'ab' ? (
-            <Row gutter={12} className="ab-windows-row">
-              <Col span={12} className="ab-window-col">
-                <Card title="A" size="small" className="ab-window-card">
-                  <MessageList
-                    activeConversation={activeConversation}
-                    sideView="A"
-                    onOpenPreview={openPreview}
-                    onRetryRun={retryRun}
-                  />
-                </Card>
-              </Col>
-              <Col span={12} className="ab-window-col">
-                <Card title="B" size="small" className="ab-window-card">
-                  <MessageList
-                    activeConversation={activeConversation}
-                    sideView="B"
-                    onOpenPreview={openPreview}
-                    onRetryRun={retryRun}
-                  />
-                </Card>
-              </Col>
+        <Content className={`chat-body ${activeSideMode === 'multi' ? 'chat-body-multi' : ''}`}>
+          {activeSideMode === 'multi' ? (
+            <Row gutter={[12, 12]} wrap={false} className="ab-windows-row">
+              {activeSides.map((sideId, index) => (
+                <Col
+                  key={sideId}
+                  flex={`0 0 ${100 / activeSideCount}%`}
+                  className="ab-window-col"
+                >
+                  <Card title={`窗口 ${index + 1}`} size="small" className="ab-window-card">
+                    <MessageList
+                      activeConversation={activeConversation}
+                      sideView={sideId}
+                      onOpenPreview={openPreview}
+                      onRetryRun={retryRun}
+                    />
+                  </Card>
+                </Col>
+              ))}
             </Row>
           ) : (
             <MessageList
@@ -123,6 +140,7 @@ export default function App() {
         <Composer
           draft={draft}
           sendError={sendError}
+          isSending={isSending}
           showAdvancedVariables={showAdvancedVariables}
           variableMode={variableMode}
           tableVariables={tableVariables}
@@ -141,21 +159,27 @@ export default function App() {
         />
       </Layout>
 
-      <Sider width={320} className="panel panel-right">
-        <SettingsPanel
+      {!isRightPanelCollapsed ? (
+        <Sider width={320} className="panel panel-right">
+          <SettingsPanel
           sideMode={activeSideMode}
+          sideCount={activeSideCount}
+          sideIds={activeSides.filter((side) => side !== 'single')}
+          isSideConfigLocked={isSideConfigLocked}
           settingsBySide={activeSettingsBySide}
           models={modelCatalog.models}
           channels={channels}
           showAdvancedVariables={showAdvancedVariables}
           onSideModeChange={updateSideMode}
+          onSideCountChange={updateSideCount}
           onSettingsChange={updateSideSettings}
-          onModelChange={setSideModel}
-          onModelParamChange={setSideModelParam}
-          onChannelsChange={setChannels}
-          onShowAdvancedVariablesChange={setShowAdvancedVariables}
-        />
-      </Sider>
+            onModelChange={setSideModel}
+            onModelParamChange={setSideModelParam}
+            onChannelsChange={setChannels}
+            onShowAdvancedVariablesChange={setShowAdvancedVariables}
+          />
+        </Sider>
+      ) : null}
 
       <ImagePreviewModal
         isPreviewOpen={isPreviewOpen}

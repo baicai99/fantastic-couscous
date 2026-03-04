@@ -1,4 +1,4 @@
-﻿import { Button, Card, Skeleton, Space, Tag, Typography } from 'antd'
+﻿import { Button, Card, Space, Tag, Typography } from 'antd'
 import type { Conversation, FailureCode, ImageItem, Message, Run, Side } from '../../types/chat'
 import { gridColumnCount, sortImagesBySeq } from '../../utils/chat'
 
@@ -39,43 +39,8 @@ function getSingleRuns(message: Message): Run[] {
   return (message.runs ?? []).filter((run) => run.sideMode === 'single' && run.side === 'single')
 }
 
-function buildAlignedRows(run: Run | undefined, otherRun: Run | undefined): DisplayImage[] {
-  const maxCount = Math.max(run?.imageCount ?? 0, otherRun?.imageCount ?? 0)
-
-  return Array.from({ length: maxCount }, (_, index) => {
-    const seq = index + 1
-    const item = run?.images.find((image) => image.seq === seq) ?? null
-
-    if (item) {
-      return { seq, item }
-    }
-
-    if (!run) {
-      return { seq, item: null, missingReason: '此侧本批次未返回结果' }
-    }
-
-    return { seq, item: null, missingReason: '此侧缺失该序号图片' }
-  })
-}
-
-function getAbRunGroups(message: Message): Array<{ batchId: string; runA?: Run; runB?: Run }> {
-  const runs = (message.runs ?? []).filter((run) => run.sideMode === 'ab')
-  const groups = new Map<string, { batchId: string; runA?: Run; runB?: Run }>()
-
-  for (const run of runs) {
-    const key = run.batchId || run.id
-    const group = groups.get(key) ?? { batchId: key }
-
-    if (run.side === 'A') {
-      group.runA = run
-    } else if (run.side === 'B') {
-      group.runB = run
-    }
-
-    groups.set(key, group)
-  }
-
-  return Array.from(groups.values())
+function getSideRuns(message: Message, sideView: Side): Run[] {
+  return (message.runs ?? []).filter((run) => run.sideMode === 'multi' && run.side === sideView)
 }
 
 function getFailureSummary(run: Run): string | null {
@@ -101,15 +66,16 @@ function renderImages(
   linkedRun: Run | undefined,
   onOpenPreview: (run: Run, imageId: string, linkedRun?: Run) => void,
 ) {
+  const preferredColumns = run?.settingsSnapshot?.gridColumns
   return (
     <div
       className="run-grid"
-      style={{ gridTemplateColumns: `repeat(${gridColumnCount(Math.max(rows.length, 1))}, minmax(0, 1fr))` }}
+      style={{ gridTemplateColumns: `repeat(${gridColumnCount(Math.max(rows.length, 1), preferredColumns)}, minmax(0, 1fr))` }}
     >
       {rows.map((row) => (
         <div key={`${run?.id ?? 'none'}-${row.seq}`} className="run-grid-item">
           {row.item?.status === 'pending' ? (
-            <Skeleton.Image active className="run-skeleton" />
+            <div className="run-image-skeleton" />
           ) : row.item?.status === 'failed' ? (
             <div className="run-image-fallback">失败: {row.item.error ?? '未知错误'}</div>
           ) : row.item?.status === 'success' && row.item.fileRef && run ? (
@@ -203,25 +169,9 @@ export function MessageList(props: MessageListProps) {
               : null}
 
             {message.role === 'assistant' && sideView !== 'single'
-              ? getAbRunGroups(message).map((group) => {
-                  const run = sideView === 'A' ? group.runA : group.runB
-                  const other = sideView === 'A' ? group.runB : group.runA
-                  const rows = buildAlignedRows(run, other)
-
-                  if (!run && !other) {
-                    return null
-                  }
-
-                  if (!run) {
-                    return (
-                      <Card key={`${group.batchId}-${sideView}`} size="small">
-                        <Text type="secondary">batch={group.batchId} 缺失: 此侧无结果</Text>
-                        {renderImages(rows, undefined, undefined, onOpenPreview)}
-                      </Card>
-                    )
-                  }
-
-                  return renderRunCard(run, rows, other, onOpenPreview, onRetryRun)
+              ? getSideRuns(message, sideView).map((run) => {
+                  const rows = sortImagesBySeq(run.images).map((item) => ({ seq: item.seq, item }))
+                  return renderRunCard(run, rows, undefined, onOpenPreview, onRetryRun)
                 })
               : null}
           </Space>

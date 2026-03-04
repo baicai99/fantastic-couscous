@@ -32,9 +32,15 @@ export function cloneSideSettings(settings: SingleSideSettings): SingleSideSetti
 export function createConversation(
   settingsBySide: Record<Side, SingleSideSettings>,
   sideMode: SideMode,
+  sideCount: number,
   title?: string,
 ): Conversation {
   const now = new Date().toISOString()
+  const normalizedCount = Math.max(2, Math.floor(sideCount))
+  const copiedSettings: Record<Side, SingleSideSettings> = {}
+  for (const [side, settings] of Object.entries(settingsBySide)) {
+    copiedSettings[side] = cloneSideSettings(settings)
+  }
 
   return {
     id: makeId(),
@@ -42,11 +48,8 @@ export function createConversation(
     createdAt: now,
     updatedAt: now,
     sideMode,
-    settingsBySide: {
-      single: cloneSideSettings(settingsBySide.single),
-      A: cloneSideSettings(settingsBySide.A),
-      B: cloneSideSettings(settingsBySide.B),
-    },
+    sideCount: normalizedCount,
+    settingsBySide: copiedSettings,
     messages: [],
   }
 }
@@ -67,7 +70,12 @@ export function sortImagesBySeq(images: ImageItem[]): ImageItem[] {
   return [...images].sort((a, b) => a.seq - b.seq)
 }
 
-export function gridColumnCount(imageCount: number): number {
+export function gridColumnCount(imageCount: number, preferredColumns?: number): number {
+  if (typeof preferredColumns === 'number' && Number.isFinite(preferredColumns)) {
+    const normalized = Math.max(1, Math.floor(preferredColumns))
+    return Math.min(normalized, Math.max(1, imageCount))
+  }
+
   return Math.max(1, Math.ceil(Math.sqrt(imageCount)))
 }
 
@@ -118,6 +126,7 @@ export function toSettingsSnapshot(settings: SingleSideSettings): RunSettingsSna
     resolution: settings.resolution,
     aspectRatio: settings.aspectRatio,
     imageCount: settings.imageCount,
+    gridColumns: settings.gridColumns,
     autoSave: settings.autoSave,
   }
 }
@@ -154,7 +163,8 @@ export function createMockRun(options: CreateMockRunOptions): Run {
   } = options
 
   const promptLower = finalPrompt.toLowerCase()
-  const failBySide = (side === 'A' && promptLower.includes('fail-a')) || (side === 'B' && promptLower.includes('fail-b'))
+  const failBySide =
+    (side === 'win-1' && promptLower.includes('fail-a')) || (side === 'win-2' && promptLower.includes('fail-b'))
   const failAll = promptLower.includes('fail')
   const shouldFailLast = failAll || failBySide
   const shouldPendingLast = promptLower.includes('loading')

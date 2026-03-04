@@ -2,10 +2,12 @@
 import {
   loadChannelsFromStorage,
   loadConversationsFromStorage,
+  loadStagedSettingsFromStorage,
   saveActiveConversationId,
   saveChannelsToStorage,
   saveConversationContent,
   saveIndex,
+  saveStagedSettingsToStorage,
 } from '../services/conversationStorage'
 import {
   getDefaultModel,
@@ -41,6 +43,8 @@ import { generateImages } from '../services/imageGeneration'
 const RESOLUTION_DEFAULT = '1024x1024'
 const ASPECT_RATIO_DEFAULT = '1:1'
 const EMPTY_MODEL_CATALOG: ModelCatalog = { models: [] }
+const MIN_MULTI_SIDE_COUNT = 2
+const MAX_MULTI_SIDE_COUNT = 8
 
 export type VariableInputMode = 'table' | 'inline' | 'panel'
 
@@ -55,6 +59,18 @@ export interface PanelVariableRow {
   key: string
   valuesText: string
   selectedValue: string
+}
+
+function clampSideCount(value: number): number {
+  return clamp(Math.floor(value), MIN_MULTI_SIDE_COUNT, MAX_MULTI_SIDE_COUNT)
+}
+
+function sideIdAt(index: number): Side {
+  return `win-${index + 1}`
+}
+
+function getMultiSideIds(sideCount: number): Side[] {
+  return Array.from({ length: clampSideCount(sideCount) }, (_, index) => sideIdAt(index))
 }
 
 function normalizeSettings(
@@ -76,6 +92,7 @@ function normalizeSettings(
     resolution: settings?.resolution ?? RESOLUTION_DEFAULT,
     aspectRatio: settings?.aspectRatio ?? ASPECT_RATIO_DEFAULT,
     imageCount: clamp(Math.floor(settings?.imageCount ?? 4), 1, 8),
+    gridColumns: clamp(Math.floor(settings?.gridColumns ?? 4), 1, 8),
     autoSave: settings?.autoSave ?? true,
     channelId,
     modelId: model?.id ?? '',
@@ -86,27 +103,81 @@ function normalizeSettings(
 function defaultSettingsBySide(
   channels: ApiChannel[],
   catalog = EMPTY_MODEL_CATALOG,
+  sideCount = MIN_MULTI_SIDE_COUNT,
 ): Record<Side, SingleSideSettings> {
   const base = normalizeSettings(undefined, channels, catalog)
-  return {
+  const next: Record<Side, SingleSideSettings> = {
     single: cloneSideSettings(base),
-    A: cloneSideSettings(base),
-    B: cloneSideSettings(base),
   }
+  for (const sideId of getMultiSideIds(sideCount)) {
+    next[sideId] = cloneSideSettings(base)
+  }
+  return next
+}
+
+function legacySideAlias(side: Side): Side | null {
+  if (side === 'win-1') return 'A'
+  if (side === 'win-2') return 'B'
+  return null
 }
 
 function normalizeSettingsBySide(
   settingsBySide: Partial<Record<Side, SingleSideSettings>> | undefined,
   channels: ApiChannel[],
   catalog = EMPTY_MODEL_CATALOG,
+  sideCount = MIN_MULTI_SIDE_COUNT,
 ): Record<Side, SingleSideSettings> {
-  const defaults = defaultSettingsBySide(channels, catalog)
-
-  return {
-    single: normalizeSettings(settingsBySide?.single ?? defaults.single, channels, catalog),
-    A: normalizeSettings(settingsBySide?.A ?? settingsBySide?.single ?? defaults.A, channels, catalog),
-    B: normalizeSettings(settingsBySide?.B ?? settingsBySide?.single ?? defaults.B, channels, catalog),
+  const defaults = defaultSettingsBySide(channels, catalog, sideCount)
+  const normalizedSideCount = clampSideCount(sideCount)
+  const getSourceSettings = (side: Side): SingleSideSettings | undefined => {
+    const direct = settingsBySide?.[side]
+    if (direct) {
+      return direct
+    }
+    const legacy = legacySideAlias(side)
+    if (legacy && settingsBySide?.[legacy]) {
+      return settingsBySide[legacy]
+    }
+    return settingsBySide?.single
   }
+
+  const next: Record<Side, SingleSideSettings> = {
+    single: normalizeSettings(getSourceSettings('single') ?? defaults.single, channels, catalog),
+  }
+
+  for (const sideId of getMultiSideIds(normalizedSideCount)) {
+    next[sideId] = normalizeSettings(getSourceSettings(sideId) ?? defaults[sideId], channels, catalog)
+  }
+
+  return next
+}
+
+function inferSideCountFromSettings(settingsBySide: Partial<Record<Side, SingleSideSettings>> | undefined): number {
+  if (!settingsBySide) {
+    return MIN_MULTI_SIDE_COUNT
+  }
+
+  const sideKeys = Object.keys(settingsBySide).filter((key) => key !== 'single')
+  if (sideKeys.length === 0) {
+    return MIN_MULTI_SIDE_COUNT
+  }
+
+  const winIndexes = sideKeys
+    .map((key) => key.match(/^win-(\d+)$/)?.[1])
+    .filter((value): value is string => Boolean(value))
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value))
+
+  if (winIndexes.length > 0) {
+    return clampSideCount(Math.max(...winIndexes))
+  }
+
+  // Legacy A/B storage fallback.
+  if (sideKeys.includes('A') || sideKeys.includes('B')) {
+    return MIN_MULTI_SIDE_COUNT
+  }
+
+  return clampSideCount(sideKeys.length)
 }
 
 function normalizeConversation(
@@ -117,7 +188,14 @@ function normalizeConversation(
   const raw = conversation as Conversation & {
     singleSettings?: SingleSideSettings
     settingsBySide?: Partial<Record<Side, SingleSideSettings>>
+    sideCount?: number
   }
+  const rawMode = conversation.sideMode as unknown
+  const sideMode: SideMode = rawMode === 'multi' || rawMode === 'ab' ? 'multi' : 'single'
+  const sideCount =
+    typeof raw.sideCount === 'number'
+      ? clampSideCount(raw.sideCount)
+      : inferSideCountFromSettings(raw.settingsBySide)
 
   const normalizedMessages = conversation.messages.map((message) => ({
     ...message,
@@ -126,18 +204,22 @@ function normalizeConversation(
 
   return {
     ...conversation,
-    sideMode: conversation.sideMode === 'ab' ? 'ab' : 'single',
+    sideMode,
+    sideCount,
     settingsBySide: normalizeSettingsBySide(
       raw.settingsBySide ?? (raw.singleSettings ? { single: raw.singleSettings } : undefined),
       channels,
       catalog,
+      sideCount,
     ),
     messages: normalizedMessages,
   }
 }
 
 function normalizeRun(run: Run): Run {
-  const raw = run as Run & {
+  const raw = run as {
+    sideMode?: string
+    side?: string
     templatePrompt?: string
     finalPrompt?: string
     variablesSnapshot?: Record<string, string>
@@ -146,6 +228,13 @@ function normalizeRun(run: Run): Run {
 
   return {
     ...run,
+    sideMode: raw.sideMode === 'ab' ? 'multi' : run.sideMode,
+    side:
+      raw.side === 'A'
+        ? 'win-1'
+        : raw.side === 'B'
+          ? 'win-2'
+          : run.side,
     templatePrompt: raw.templatePrompt ?? run.prompt ?? '',
     finalPrompt: raw.finalPrompt ?? run.prompt ?? '',
     variablesSnapshot: raw.variablesSnapshot ?? {},
@@ -154,6 +243,7 @@ function normalizeRun(run: Run): Run {
       resolution: RESOLUTION_DEFAULT,
       aspectRatio: ASPECT_RATIO_DEFAULT,
       imageCount: run.imageCount,
+      gridColumns: 4,
       autoSave: true,
     },
   }
@@ -228,6 +318,7 @@ export function useConversations() {
   const [channels, setChannelsState] = useState<ApiChannel[]>(() => loadChannelsFromStorage())
   const modelCatalog = useMemo(() => getModelCatalogFromChannels(channels), [channels])
   const [initial] = useState(() => loadConversationsFromStorage())
+  const [initialStaged] = useState(() => loadStagedSettingsFromStorage())
 
   const normalizedContents = useMemo(() => {
     const next: Record<string, Conversation> = {}
@@ -242,6 +333,7 @@ export function useConversations() {
   const [activeId, setActiveId] = useState<string | null>(initial.activeId)
   const [draft, setDraft] = useState('')
   const [sendError, setSendError] = useState<string>('')
+  const [isSending, setIsSending] = useState(false)
   const [showAdvancedVariables, setShowAdvancedVariables] = useState(false)
   const [variableMode, setVariableMode] = useState<VariableInputMode>('table')
   const [tableVariables, setTableVariables] = useState<TableVariableRow[]>([
@@ -252,9 +344,15 @@ export function useConversations() {
     { id: makeId(), key: '', valuesText: '', selectedValue: '' },
   ])
 
-  const [stagedSideMode, setStagedSideMode] = useState<SideMode>('single')
+  const [stagedSideMode, setStagedSideMode] = useState<SideMode>(initialStaged?.sideMode ?? 'single')
+  const [stagedSideCount, setStagedSideCount] = useState<number>(clampSideCount(initialStaged?.sideCount ?? 2))
   const [stagedSettingsBySide, setStagedSettingsBySide] = useState<Record<Side, SingleSideSettings>>(() =>
-    defaultSettingsBySide(channels, modelCatalog),
+    normalizeSettingsBySide(
+      initialStaged?.settingsBySide,
+      channels,
+      modelCatalog,
+      clampSideCount(initialStaged?.sideCount ?? 2),
+    ),
   )
 
   const activeConversation = useMemo(() => {
@@ -262,7 +360,13 @@ export function useConversations() {
   }, [activeId, contents])
 
   const activeSideMode = activeConversation?.sideMode ?? stagedSideMode
+  const activeSideCount = activeConversation?.sideCount ?? stagedSideCount
   const activeSettingsBySide = activeConversation?.settingsBySide ?? stagedSettingsBySide
+  const activeSides = useMemo(
+    () => (activeSideMode === 'single' ? (['single'] as Side[]) : getMultiSideIds(activeSideCount)),
+    [activeSideCount, activeSideMode],
+  )
+  const isSideConfigLocked = Boolean(activeConversation && activeConversation.messages.length > 0)
 
   const resolvedVariables = useMemo(
     () => collectVariables(variableMode, tableVariables, inlineVariablesText, panelVariables),
@@ -294,7 +398,12 @@ export function useConversations() {
   }
 
   const createNewConversation = () => {
-    const conversation = createConversation(stagedSettingsBySide, stagedSideMode, `对话 ${summaries.length + 1}`)
+    const conversation = createConversation(
+      stagedSettingsBySide,
+      stagedSideMode,
+      stagedSideCount,
+      `对话 ${summaries.length + 1}`,
+    )
     persistConversation(conversation)
 
     setActiveId(conversation.id)
@@ -306,9 +415,21 @@ export function useConversations() {
     saveActiveConversationId(conversationId)
   }
 
-  const updateConversationState = (mode: SideMode, settingsBySide: Record<Side, SingleSideSettings>) => {
+  const updateConversationState = (
+    mode: SideMode,
+    sideCount: number,
+    settingsBySide: Record<Side, SingleSideSettings>,
+  ) => {
+    const normalizedCount = clampSideCount(sideCount)
+    saveStagedSettingsToStorage({
+      sideMode: mode,
+      sideCount: normalizedCount,
+      settingsBySide,
+    })
+
     if (!activeConversation) {
       setStagedSideMode(mode)
+      setStagedSideCount(normalizedCount)
       setStagedSettingsBySide(settingsBySide)
       return
     }
@@ -317,6 +438,7 @@ export function useConversations() {
       ...activeConversation,
       updatedAt: new Date().toISOString(),
       sideMode: mode,
+      sideCount: normalizedCount,
       settingsBySide,
     }
 
@@ -324,7 +446,21 @@ export function useConversations() {
   }
 
   const updateSideMode = (mode: SideMode) => {
-    updateConversationState(mode, activeSettingsBySide)
+    if (isSideConfigLocked && mode !== activeSideMode) {
+      return
+    }
+    const normalized = normalizeSettingsBySide(activeSettingsBySide, channels, modelCatalog, activeSideCount)
+    updateConversationState(mode, activeSideCount, normalized)
+  }
+
+  const updateSideCount = (count: number) => {
+    if (isSideConfigLocked || activeSideMode !== 'multi') {
+      return
+    }
+
+    const nextCount = clampSideCount(count)
+    const normalized = normalizeSettingsBySide(activeSettingsBySide, channels, modelCatalog, nextCount)
+    updateConversationState(activeSideMode, nextCount, normalized)
   }
 
   const updateSideSettings = (side: Side, patch: Partial<SingleSideSettings>) => {
@@ -338,9 +474,10 @@ export function useConversations() {
       },
       channels,
       modelCatalog,
+      activeSideCount,
     )
 
-    updateConversationState(activeSideMode, merged)
+    updateConversationState(activeSideMode, activeSideCount, merged)
   }
 
   const setSideModel = (side: Side, modelId: string) => {
@@ -358,9 +495,10 @@ export function useConversations() {
       },
       channels,
       modelCatalog,
+      activeSideCount,
     )
 
-    updateConversationState(activeSideMode, merged)
+    updateConversationState(activeSideMode, activeSideCount, merged)
   }
 
   const setSideModelParam = (side: Side, paramKey: string, value: SettingPrimitive) => {
@@ -379,9 +517,10 @@ export function useConversations() {
       },
       channels,
       modelCatalog,
+      activeSideCount,
     )
 
-    updateConversationState(activeSideMode, merged)
+    updateConversationState(activeSideMode, activeSideCount, merged)
   }
 
   const setChannels = (nextChannels: ApiChannel[]) => {
@@ -389,8 +528,8 @@ export function useConversations() {
     saveChannelsToStorage(nextChannels)
 
     const nextCatalog = getModelCatalogFromChannels(nextChannels)
-    const normalized = normalizeSettingsBySide(activeSettingsBySide, nextChannels, nextCatalog)
-    updateConversationState(activeSideMode, normalized)
+    const normalized = normalizeSettingsBySide(activeSettingsBySide, nextChannels, nextCatalog, activeSideCount)
+    updateConversationState(activeSideMode, activeSideCount, normalized)
   }
 
   const createRun = async (options: {
@@ -508,7 +647,67 @@ export function useConversations() {
     }
   }
 
+  const replaceRunsInConversation = (conversationId: string, nextRunsById: Map<string, Run>) => {
+    setContents((prev) => {
+      const currentConversation = prev[conversationId]
+      if (!currentConversation) {
+        return prev
+      }
+
+      let changed = false
+      const nextMessages = currentConversation.messages.map((message) => {
+        if (!Array.isArray(message.runs) || message.runs.length === 0) {
+          return message
+        }
+
+        let messageChanged = false
+        const nextRuns = message.runs.map((run) => {
+          const replacement = nextRunsById.get(run.id)
+          if (!replacement) {
+            return run
+          }
+
+          changed = true
+          messageChanged = true
+          return replacement
+        })
+
+        if (!messageChanged) {
+          return message
+        }
+
+        return {
+          ...message,
+          runs: nextRuns,
+        }
+      })
+
+      if (!changed) {
+        return prev
+      }
+
+      const updatedConversation: Conversation = {
+        ...currentConversation,
+        updatedAt: new Date().toISOString(),
+        messages: nextMessages,
+      }
+
+      saveConversationContent(updatedConversation)
+      setSummaries((summaryPrev) => {
+        const nextSummary = summaryPrev.map((item) => (item.id === conversationId ? toSummary(updatedConversation) : item))
+        saveIndex(nextSummary)
+        return nextSummary
+      })
+
+      return { ...prev, [conversationId]: updatedConversation }
+    })
+  }
+
   const sendDraft = async () => {
+    if (isSending) {
+      return
+    }
+
     const templatePrompt = draft.trim()
     if (!templatePrompt) {
       setSendError('请输入模板 prompt')
@@ -532,52 +731,111 @@ export function useConversations() {
     setSendError('')
 
     const mode = activeSideMode
-    const settingsBySide = normalizeSettingsBySide(activeSettingsBySide, channels, modelCatalog)
+    const sideCount = activeSideCount
+    const settingsBySide = normalizeSettingsBySide(activeSettingsBySide, channels, modelCatalog, sideCount)
     const batchId = makeId()
+    const sides = mode === 'single' ? (['single'] as Side[]) : getMultiSideIds(sideCount)
 
-    const buildRun = (side: Side) => {
+    const runPlans = sides.map((side) => {
       const settings = settingsBySide[side]
       const model = getModelById(modelCatalog, settings.modelId) ?? getDefaultModel(modelCatalog)
       const paramsSnapshot = normalizeParamValues(model, settings.paramValues)
       const channel = channels.find((item) => item.id === settings.channelId)
-
-      return createRun({
+      const imageCount = clamp(Math.floor(settings.imageCount), 1, 8)
+      const createdAt = new Date().toISOString()
+      const pendingRun: Run = {
+        id: makeId(),
         batchId,
+        createdAt,
         sideMode: mode,
         side,
-        settings,
+        prompt: finalPrompt,
+        imageCount,
+        channelId: channel?.id ?? null,
+        channelName: channel?.name ?? null,
+        modelId: model?.id ?? settings.modelId,
+        modelName: model?.name ?? settings.modelId,
         templatePrompt,
         finalPrompt,
         variablesSnapshot,
+        paramsSnapshot,
+        settingsSnapshot: toSettingsSnapshot(settings),
+        retryAttempt: 0,
+        images: Array.from({ length: imageCount }, (_, index) => ({
+          id: makeId(),
+          seq: index + 1,
+          status: 'pending' as const,
+        })),
+      }
+
+      return {
+        side,
+        settings,
         modelId: model?.id ?? settings.modelId,
         modelName: model?.name ?? settings.modelId,
         paramsSnapshot,
         channel,
-      })
-    }
+        pendingRun,
+      }
+    })
 
-    const runs = mode === 'single' ? [await buildRun('single')] : await Promise.all([buildRun('A'), buildRun('B')])
-
+    const pendingRuns = runPlans.map((item) => item.pendingRun)
+    let targetConversationId: string
     if (!activeConversation) {
-      const conversation = createConversation(settingsBySide, mode, `对话 ${summaries.length + 1}`)
-      const updatedConversation = appendMessagesToConversation(conversation, finalPrompt, runs)
+      const conversation = createConversation(settingsBySide, mode, sideCount, `对话 ${summaries.length + 1}`)
+      const updatedConversation = appendMessagesToConversation(conversation, finalPrompt, pendingRuns)
       persistConversation(updatedConversation)
       setActiveId(updatedConversation.id)
       saveActiveConversationId(updatedConversation.id)
+      targetConversationId = updatedConversation.id
     } else {
       const updatedConversation = appendMessagesToConversation(
         {
           ...activeConversation,
           sideMode: mode,
+          sideCount,
           settingsBySide,
         },
         finalPrompt,
-        runs,
+        pendingRuns,
       )
       persistConversation(updatedConversation)
+      targetConversationId = updatedConversation.id
     }
 
     setDraft('')
+    setIsSending(true)
+
+    try {
+      const completedRuns = await Promise.all(
+        runPlans.map(async (plan) => {
+          const result = await createRun({
+            batchId,
+            sideMode: mode,
+            side: plan.side,
+            settings: plan.settings,
+            templatePrompt,
+            finalPrompt,
+            variablesSnapshot,
+            modelId: plan.modelId,
+            modelName: plan.modelName,
+            paramsSnapshot: plan.paramsSnapshot,
+            channel: plan.channel,
+          })
+
+          return {
+            ...result,
+            id: plan.pendingRun.id,
+            createdAt: plan.pendingRun.createdAt,
+          }
+        }),
+      )
+
+      const map = new Map(completedRuns.map((run) => [run.id, run]))
+      replaceRunsInConversation(targetConversationId, map)
+    } finally {
+      setIsSending(false)
+    }
   }
 
   const retryRun = async (runId: string) => {
@@ -621,6 +879,7 @@ export function useConversations() {
       resolution: targetRun.settingsSnapshot?.resolution ?? RESOLUTION_DEFAULT,
       aspectRatio: targetRun.settingsSnapshot?.aspectRatio ?? ASPECT_RATIO_DEFAULT,
       imageCount: targetRun.settingsSnapshot?.imageCount ?? targetRun.imageCount,
+      gridColumns: targetRun.settingsSnapshot?.gridColumns ?? 4,
       autoSave: targetRun.settingsSnapshot?.autoSave ?? true,
       channelId: targetRun.channelId,
       modelId: targetRun.modelId,
@@ -675,6 +934,7 @@ export function useConversations() {
     activeId,
     draft,
     sendError,
+    isSending,
     showAdvancedVariables,
     variableMode,
     tableVariables,
@@ -684,6 +944,9 @@ export function useConversations() {
     templatePreview,
     unusedVariableKeys,
     activeSideMode,
+    activeSideCount,
+    activeSides,
+    isSideConfigLocked,
     activeSettingsBySide,
     modelCatalog,
     channels,
@@ -708,6 +971,7 @@ export function useConversations() {
     createNewConversation,
     switchConversation,
     updateSideMode,
+    updateSideCount,
     updateSideSettings,
     setSideModel,
     setSideModelParam,
