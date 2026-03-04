@@ -18,6 +18,7 @@ export default function App() {
     activeId,
     draft,
     sendError,
+    showAdvancedVariables,
     variableMode,
     tableVariables,
     inlineVariablesText,
@@ -30,6 +31,7 @@ export default function App() {
     modelCatalog,
     channels,
     setDraft,
+    setShowAdvancedVariables,
     setVariableMode,
     setTableVariables,
     setInlineVariablesText,
@@ -121,6 +123,7 @@ export default function App() {
         <Composer
           draft={draft}
           sendError={sendError}
+          showAdvancedVariables={showAdvancedVariables}
           variableMode={variableMode}
           tableVariables={tableVariables}
           inlineVariablesText={inlineVariablesText}
@@ -144,11 +147,13 @@ export default function App() {
           settingsBySide={activeSettingsBySide}
           models={modelCatalog.models}
           channels={channels}
+          showAdvancedVariables={showAdvancedVariables}
           onSideModeChange={updateSideMode}
           onSettingsChange={updateSideSettings}
           onModelChange={setSideModel}
           onModelParamChange={setSideModelParam}
           onChannelsChange={setChannels}
+          onShowAdvancedVariablesChange={setShowAdvancedVariables}
         />
       </Sider>
 

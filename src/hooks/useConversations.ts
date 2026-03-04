@@ -18,6 +18,7 @@ import type {
   ApiChannel,
   Conversation,
   ConversationSummary,
+  FailureCode,
   Run,
   SettingPrimitive,
   Side,
@@ -29,11 +30,12 @@ import {
   clamp,
   cloneSideSettings,
   createConversation,
-  createMockRun,
   makeId,
+  toSettingsSnapshot,
   toSummary,
 } from '../utils/chat'
 import { parseInlineAssignments, parseTemplateKeys, renderTemplate } from '../utils/template'
+import { generateImages } from '../services/imageGeneration'
 
 const RESOLUTION_DEFAULT = '1024x1024'
 const ASPECT_RATIO_DEFAULT = '1:1'
@@ -189,6 +191,28 @@ function collectVariables(
   return result
 }
 
+function classifyFailure(message: string): FailureCode {
+  const value = message.toLowerCase()
+
+  if (value.includes('timeout')) {
+    return 'timeout'
+  }
+  if (value.includes('401') || value.includes('403') || value.includes('auth')) {
+    return 'auth'
+  }
+  if (value.includes('429') || value.includes('rate')) {
+    return 'rate_limit'
+  }
+  if (value.includes('unsupported') || value.includes('not support')) {
+    return 'unsupported_param'
+  }
+  if (value.includes('reject') || value.includes('denied')) {
+    return 'rejected'
+  }
+
+  return 'unknown'
+}
+
 export function useConversations() {
   const [channels, setChannelsState] = useState<ApiChannel[]>(() => loadChannelsFromStorage())
   const [initial] = useState(() => loadConversationsFromStorage())
@@ -206,6 +230,7 @@ export function useConversations() {
   const [activeId, setActiveId] = useState<string | null>(initial.activeId)
   const [draft, setDraft] = useState('')
   const [sendError, setSendError] = useState<string>('')
+  const [showAdvancedVariables, setShowAdvancedVariables] = useState(false)
   const [variableMode, setVariableMode] = useState<VariableInputMode>('table')
   const [tableVariables, setTableVariables] = useState<TableVariableRow[]>([
     { id: makeId(), key: '', value: '' },
@@ -353,7 +378,122 @@ export function useConversations() {
     updateConversationState(activeSideMode, normalized)
   }
 
-  const sendDraft = () => {
+  const createRun = async (options: {
+    batchId: string
+    sideMode: SideMode
+    side: Side
+    settings: SingleSideSettings
+    templatePrompt: string
+    finalPrompt: string
+    variablesSnapshot: Record<string, string>
+    modelId: string
+    modelName: string
+    paramsSnapshot: Record<string, SettingPrimitive>
+    channel: ApiChannel | undefined
+    retryOfRunId?: string
+    retryAttempt?: number
+  }): Promise<Run> => {
+    const {
+      batchId,
+      sideMode,
+      side,
+      settings,
+      templatePrompt,
+      finalPrompt,
+      variablesSnapshot,
+      modelId,
+      modelName,
+      paramsSnapshot,
+      channel,
+      retryOfRunId,
+      retryAttempt = 0,
+    } = options
+
+    const imageCount = clamp(Math.floor(settings.imageCount), 1, 8)
+    const baseRun = {
+      id: makeId(),
+      batchId,
+      createdAt: new Date().toISOString(),
+      sideMode,
+      side,
+      prompt: finalPrompt,
+      imageCount,
+      channelId: channel?.id ?? null,
+      channelName: channel?.name ?? null,
+      modelId,
+      modelName,
+      templatePrompt,
+      finalPrompt,
+      variablesSnapshot,
+      paramsSnapshot,
+      settingsSnapshot: toSettingsSnapshot(settings),
+      retryOfRunId,
+      retryAttempt,
+    } satisfies Omit<Run, 'images'>
+
+    if (!channel || !channel.baseUrl || !channel.apiKey) {
+      return {
+        ...baseRun,
+        images: Array.from({ length: imageCount }, (_, index) => ({
+          id: makeId(),
+          seq: index + 1,
+          status: 'failed',
+          error: '请先配置可用渠道（Base URL + API Key）',
+          errorCode: 'auth',
+        })),
+      }
+    }
+
+    try {
+      const generated = await generateImages({
+        channel,
+        modelId,
+        prompt: finalPrompt,
+        imageCount,
+        paramValues: paramsSnapshot,
+      })
+
+      const images = Array.from({ length: imageCount }, (_, index) => {
+        const seq = index + 1
+        const src = generated.images[index]
+
+        if (!src) {
+          return {
+            id: makeId(),
+            seq,
+            status: 'failed' as const,
+            error: '该序号未返回图片',
+            errorCode: 'unknown' as const,
+          }
+        }
+
+        return {
+          id: makeId(),
+          seq,
+          status: 'success' as const,
+          fileRef: src,
+        }
+      })
+
+      return { ...baseRun, images }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '未知错误'
+      const code = classifyFailure(message)
+
+      return {
+        ...baseRun,
+        images: Array.from({ length: imageCount }, (_, index) => ({
+          id: makeId(),
+          seq: index + 1,
+          status: 'failed',
+          error: message,
+          errorCode: code,
+        })),
+      }
+    }
+  }
+
+  const sendDraft = async () => {
     const templatePrompt = draft.trim()
     if (!templatePrompt) {
       setSendError('请输入模板 prompt')
@@ -386,7 +526,7 @@ export function useConversations() {
       const paramsSnapshot = normalizeParamValues(model, settings.paramValues)
       const channel = channels.find((item) => item.id === settings.channelId)
 
-      return createMockRun({
+      return createRun({
         batchId,
         sideMode: mode,
         side,
@@ -394,13 +534,14 @@ export function useConversations() {
         templatePrompt,
         finalPrompt,
         variablesSnapshot,
-        model,
+        modelId: model?.id ?? settings.modelId,
+        modelName: model?.name ?? settings.modelId,
         paramsSnapshot,
         channel,
       })
     }
 
-    const runs = mode === 'single' ? [buildRun('single')] : [buildRun('A'), buildRun('B')]
+    const runs = mode === 'single' ? [await buildRun('single')] : await Promise.all([buildRun('A'), buildRun('B')])
 
     if (!activeConversation) {
       const conversation = createConversation(settingsBySide, mode, `对话 ${summaries.length + 1}`)
@@ -424,7 +565,7 @@ export function useConversations() {
     setDraft('')
   }
 
-  const retryRun = (runId: string) => {
+  const retryRun = async (runId: string) => {
     if (!activeConversation) {
       return
     }
@@ -477,7 +618,7 @@ export function useConversations() {
       ? { id: targetRun.channelId ?? makeId(), name: targetRun.channelName, baseUrl: '', apiKey: '' }
       : undefined
 
-    const retry = createMockRun({
+    const retry = await createRun({
       batchId: targetRun.batchId,
       sideMode: targetRun.sideMode,
       side: targetRun.side,
@@ -485,7 +626,8 @@ export function useConversations() {
       templatePrompt: targetRun.templatePrompt,
       finalPrompt: targetRun.finalPrompt,
       variablesSnapshot: { ...targetRun.variablesSnapshot },
-      model,
+      modelId: model?.id ?? targetRun.modelId,
+      modelName: model?.name ?? targetRun.modelName,
       paramsSnapshot: { ...targetRun.paramsSnapshot },
       channel: channel ?? fallbackChannel,
       retryOfRunId: rootRunId,
@@ -518,6 +660,7 @@ export function useConversations() {
     activeId,
     draft,
     sendError,
+    showAdvancedVariables,
     variableMode,
     tableVariables,
     inlineVariablesText,
@@ -533,6 +676,7 @@ export function useConversations() {
       setDraft(value)
       setSendError('')
     },
+    setShowAdvancedVariables,
     setVariableMode,
     setTableVariables: (rows: TableVariableRow[]) => {
       setTableVariables(rows)

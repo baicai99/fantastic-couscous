@@ -1,49 +1,146 @@
 models:
-  - id: sdxl
-    name: SDXL
+  - id: nano-banana
+    name: nano-banana (gemini-2.5-flash-image)
     params:
-      - key: steps
-        label: Steps
-        type: number
-        default: 30
-        min: 10
-        max: 60
-      - key: cfgScale
-        label: CFG Scale
-        type: number
-        default: 7
-        min: 1
-        max: 20
-      - key: sampler
-        label: Sampler
+      - key: responseFormat
+        label: Response Format
         type: enum
-        default: "euler_a"
-        options: ["euler_a", "dpmpp_2m", "ddim"]
-      - key: hiresFix
-        label: Hires Fix
-        type: boolean
-        default: false
-  - id: flux-dev
-    name: FLUX Dev
+        default: "url"
+        options: ["url"]
+      - key: size
+        label: Size
+        type: enum
+        default: "1:1"
+        options: ["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9", "1024x1024", "832x1248", "1248x832", "864x1184", "1184x864", "896x1152", "1152x896", "768x1344", "1344x768", "1536x672"]
+  - id: gemini-2.5-flash-image
+    name: gemini-2.5-flash-image
     params:
-      - key: guidance
-        label: Guidance
-        type: number
-        default: 3.5
-        min: 1
-        max: 8
-      - key: seed
-        label: Seed
-        type: number
-        default: 42
-        min: 0
-        max: 999999
-      - key: style
-        label: Style
+      - key: responseFormat
+        label: Response Format
         type: enum
-        default: "realistic"
-        options: ["realistic", "anime", "illustration"]
-      - key: promptEnhance
-        label: Prompt Enhance
-        type: boolean
-        default: true
+        default: "url"
+        options: ["url"]
+      - key: size
+        label: Size
+        type: enum
+        default: "1:1"
+        options: ["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9", "1024x1024", "832x1248", "1248x832", "864x1184", "1184x864", "896x1152", "1152x896", "768x1344", "1344x768", "1536x672"]
+  - id: nano-banana-pro
+    name: nano-banana-pro (gemini-3-pro-image-preview)
+    params:
+      - key: responseFormat
+        label: Response Format
+        type: enum
+        default: "url"
+        options: ["url"]
+      - key: size
+        label: Size
+        type: enum
+        default: "1K"
+        options: ["1K", "2K", "4K"]
+      - key: aspectRatio
+        label: Aspect Ratio
+        type: enum
+        default: "1:1"
+        options: ["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"]
+  - id: nano-banana-pro-2k
+    name: nano-banana-pro-2k
+    params:
+      - key: responseFormat
+        label: Response Format
+        type: enum
+        default: "url"
+        options: ["url"]
+      - key: size
+        label: Size
+        type: enum
+        default: "1:1"
+        options: ["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"]
+  - id: nano-banana-pro-4k
+    name: nano-banana-pro-4k
+    params:
+      - key: responseFormat
+        label: Response Format
+        type: enum
+        default: "url"
+        options: ["url"]
+      - key: size
+        label: Size
+        type: enum
+        default: "1:1"
+        options: ["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"]
+  - id: gemini-3.1-flash-image-preview
+    name: gemini-3.1-flash-image-preview
+    params:
+      - key: responseFormat
+        label: Response Format
+        type: enum
+        default: "url"
+        options: ["url"]
+      - key: size
+        label: Size
+        type: enum
+        default: "1K"
+        options: ["0.5K", "1K", "2K", "4K"]
+      - key: aspectRatio
+        label: Aspect Ratio
+        type: enum
+        default: "1:1"
+        options: ["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"]
+  - id: gemini-3.1-flash-image-preview-0.5k
+    name: gemini-3.1-flash-image-preview-0.5k
+    params:
+      - key: responseFormat
+        label: Response Format
+        type: enum
+        default: "url"
+        options: ["url"]
+      - key: size
+        label: Size
+        type: enum
+        default: "1:1"
+        options: ["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"]
+  - id: gemini-3.1-flash-image-preview-2k
+    name: gemini-3.1-flash-image-preview-2k
+    params:
+      - key: responseFormat
+        label: Response Format
+        type: enum
+        default: "url"
+        options: ["url"]
+      - key: size
+        label: Size
+        type: enum
+        default: "1:1"
+        options: ["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"]
+  - id: gemini-3.1-flash-image-preview-4k
+    name: gemini-3.1-flash-image-preview-4k
+    params:
+      - key: responseFormat
+        label: Response Format
+        type: enum
+        default: "url"
+        options: ["url"]
+      - key: size
+        label: Size
+        type: enum
+        default: "1:1"
+        options: ["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"]
+  - id: gemini-3-pro-image-preview
+    name: gemini-3-pro-image-preview
+    params:
+      - key: responseFormat
+        label: Response Format
+        type: enum
+        default: "url"
+        options: ["url"]
+      - key: size
+        label: Size
+        type: enum
+        default: "1K"
+        options: ["1K", "2K", "4K"]
+      - key: aspectRatio
+        label: Aspect Ratio
+        type: enum
+        default: "1:1"
+        options: ["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"]

@@ -29,6 +29,7 @@ import type {
 import { makeId } from '../../utils/chat'
 
 const { Text } = Typography
+const ALL_MODEL_TAG = '__all__'
 
 type ChannelFormValues = {
   name: string
@@ -41,11 +42,13 @@ interface SettingsPanelProps {
   settingsBySide: Record<Side, SingleSideSettings>
   models: ModelSpec[]
   channels: ApiChannel[]
+  showAdvancedVariables: boolean
   onSideModeChange: (mode: SideMode) => void
   onSettingsChange: (side: Side, patch: Partial<SingleSideSettings>) => void
   onModelChange: (side: Side, modelId: string) => void
   onModelParamChange: (side: Side, paramKey: string, value: SettingPrimitive) => void
   onChannelsChange: (channels: ApiChannel[]) => void
+  onShowAdvancedVariablesChange: (enabled: boolean) => void
 }
 
 function maskApiKey(apiKey: string): string {
@@ -95,61 +98,78 @@ function renderParamInput(
   )
 }
 
+function inferModelTags(model: ModelSpec): string[] {
+  if (Array.isArray(model.tags) && model.tags.length > 0) {
+    return model.tags
+  }
+
+  const value = `${model.id} ${model.name}`.toLowerCase()
+  const tags = new Set<string>()
+
+  if (value.includes('gemini')) tags.add('gemini')
+  if (value.includes('midjourney')) tags.add('midjourney')
+  if (value.includes('dall-e') || value.includes('dalle')) tags.add('dalle')
+  if (value.includes('openai')) tags.add('openai')
+  if (value.includes('stability') || value.includes('stable-diffusion') || value.includes('sdxl')) tags.add('stability')
+  if (value.includes('flux')) tags.add('flux')
+
+  return Array.from(tags)
+}
+
 export function SettingsPanel(props: SettingsPanelProps) {
   const {
     sideMode,
     settingsBySide,
     models,
     channels,
+    showAdvancedVariables,
     onSideModeChange,
     onSettingsChange,
     onModelChange,
     onModelParamChange,
     onChannelsChange,
+    onShowAdvancedVariablesChange,
   } = props
 
   const [activeSideTab, setActiveSideTab] = useState<'A' | 'B'>('A')
   const [isDrawerOpen, setIsDrawerOpen] = useState(false)
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [editingChannelId, setEditingChannelId] = useState<string | null>(null)
+  const [modelTagBySide, setModelTagBySide] = useState<Record<Side, string>>({
+    single: ALL_MODEL_TAG,
+    A: ALL_MODEL_TAG,
+    B: ALL_MODEL_TAG,
+  })
   const [channelForm] = Form.useForm<ChannelFormValues>()
+
+  const availableModelTags = useMemo(() => {
+    const tags = new Set<string>()
+    for (const model of models) {
+      for (const tag of inferModelTags(model)) {
+        tags.add(tag)
+      }
+    }
+    return Array.from(tags).sort()
+  }, [models])
 
   const renderSettingForm = (side: Side) => {
     const settings = settingsBySide[side]
-    const activeModel = models.find((item) => item.id === settings.modelId) ?? models[0]
+    const selectedTag = modelTagBySide[side] ?? ALL_MODEL_TAG
+    const filteredModels =
+      selectedTag === ALL_MODEL_TAG
+        ? models
+        : models.filter((item) => inferModelTags(item).includes(selectedTag))
+    const activeModel =
+      filteredModels.find((item) => item.id === settings.modelId) ??
+      models.find((item) => item.id === settings.modelId) ??
+      filteredModels[0] ??
+      models[0]
     const currentChannel = channels.find((item) => item.id === settings.channelId) ?? null
 
     return (
       <Space direction="vertical" size={16} className="full-width">
         <Card title="生成设置" size="small">
           <Form layout="vertical">
-            <Form.Item label="分辨率">
-              <Select
-                value={settings.resolution}
-                options={[
-                  { label: '512x512', value: '512x512' },
-                  { label: '768x768', value: '768x768' },
-                  { label: '1024x1024', value: '1024x1024' },
-                  { label: '1216x832', value: '1216x832' },
-                ]}
-                onChange={(value) => onSettingsChange(side, { resolution: value })}
-              />
-            </Form.Item>
-
-            <Form.Item label="长宽比">
-              <Select
-                value={settings.aspectRatio}
-                options={[
-                  { label: '1:1', value: '1:1' },
-                  { label: '3:2', value: '3:2' },
-                  { label: '2:3', value: '2:3' },
-                  { label: '16:9', value: '16:9' },
-                  { label: '9:16', value: '9:16' },
-                ]}
-                onChange={(value) => onSettingsChange(side, { aspectRatio: value })}
-              />
-            </Form.Item>
-
             <Form.Item label="单次生成张数">
               <InputNumber
                 className="full-width"
@@ -188,10 +208,32 @@ export function SettingsPanel(props: SettingsPanelProps) {
         <Card title="模型与参数" size="small">
           <Space direction="vertical" className="full-width" size={10}>
             <Form layout="vertical">
+              <Form.Item label="模型厂商">
+                <Select
+                  value={selectedTag}
+                  options={[
+                    { label: '全部', value: ALL_MODEL_TAG },
+                    ...availableModelTags.map((tag) => ({ label: tag, value: tag })),
+                  ]}
+                  onChange={(value) => {
+                    setModelTagBySide((prev) => ({ ...prev, [side]: value }))
+
+                    if (value === ALL_MODEL_TAG) {
+                      return
+                    }
+
+                    const vendorModels = models.filter((item) => inferModelTags(item).includes(value))
+                    const currentMatches = vendorModels.some((item) => item.id === settings.modelId)
+                    if (!currentMatches && vendorModels[0]) {
+                      onModelChange(side, vendorModels[0].id)
+                    }
+                  }}
+                />
+              </Form.Item>
               <Form.Item label="模型">
                 <Select
                   value={activeModel?.id}
-                  options={models.map((item) => ({ label: item.name, value: item.id }))}
+                  options={filteredModels.map((item) => ({ label: item.name, value: item.id }))}
                   onChange={(value) => onModelChange(side, value)}
                 />
               </Form.Item>
@@ -280,6 +322,13 @@ export function SettingsPanel(props: SettingsPanelProps) {
         <Space>
           <Switch checked={sideMode === 'ab'} onChange={(checked) => onSideModeChange(checked ? 'ab' : 'single')} />
           <Text>{sideMode === 'ab' ? 'A/B 对照已开启' : '单窗口模式'}</Text>
+        </Space>
+      </Card>
+
+      <Card title="高级功能" size="small" style={{ marginBottom: 16 }}>
+        <Space>
+          <Switch checked={showAdvancedVariables} onChange={onShowAdvancedVariablesChange} />
+          <Text>显示输入框高级变量</Text>
         </Space>
       </Card>
 

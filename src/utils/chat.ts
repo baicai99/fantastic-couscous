@@ -226,7 +226,7 @@ export function appendMessagesToConversation(
     id: makeId(),
     createdAt: now,
     role: 'assistant',
-    content: '已生成 mock 结果，点击图片可预览。',
+    content: '已完成生成请求，点击图片可预览。',
     runs,
   }
 

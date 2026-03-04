@@ -49,6 +49,16 @@ function parseModel(raw: unknown): ModelSpec | null {
 
   const id = typeof raw.id === 'string' ? raw.id : ''
   const name = typeof raw.name === 'string' ? raw.name : id
+  const tags = Array.isArray(raw.tags)
+    ? Array.from(
+        new Set(
+          raw.tags
+            .filter((item): item is string => typeof item === 'string')
+            .map((item) => item.trim().toLowerCase())
+            .filter(Boolean),
+        ),
+      )
+    : undefined
   const paramsRaw = Array.isArray(raw.params) ? raw.params : []
   const params = paramsRaw.map(parseParam).filter((item): item is ModelParamSpec => item !== null)
 
@@ -56,7 +66,7 @@ function parseModel(raw: unknown): ModelSpec | null {
     return null
   }
 
-  return { id, name, params }
+  return { id, name, tags, params }
 }
 
 export function getModelCatalog(): ModelCatalog {

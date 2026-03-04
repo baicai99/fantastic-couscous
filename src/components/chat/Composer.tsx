@@ -8,6 +8,7 @@ const { Text } = Typography
 interface ComposerProps {
   draft: string
   sendError: string
+  showAdvancedVariables: boolean
   variableMode: VariableInputMode
   tableVariables: TableVariableRow[]
   inlineVariablesText: string
@@ -37,6 +38,7 @@ export function Composer(props: ComposerProps) {
   const {
     draft,
     sendError,
+    showAdvancedVariables,
     variableMode,
     tableVariables,
     inlineVariablesText,
@@ -204,77 +206,83 @@ export function Composer(props: ComposerProps) {
           }}
         />
 
-        <Tabs
-          activeKey={variableMode}
-          onChange={(value) => onVariableModeChange(value as VariableInputMode)}
-          items={[
-            {
-              key: 'table',
-              label: '表格变量',
-              children: (
-                <Space direction="vertical" className="full-width" size={8}>
-                  <Button
-                    size="small"
-                    onClick={() => onTableVariablesChange([...tableVariables, { id: makeId(), key: '', value: '' }])}
-                  >
-                    新增变量
-                  </Button>
-                  <Table<TableVariableRow>
-                    size="small"
-                    rowKey="id"
-                    columns={tableColumns}
-                    dataSource={tableVariables}
-                    pagination={false}
-                  />
-                </Space>
-              ),
-            },
-            {
-              key: 'inline',
-              label: '内联 k=v',
-              children: (
-                <Input.TextArea
-                  value={inlineVariablesText}
-                  onChange={(event) => onInlineVariablesTextChange(event.target.value)}
-                  placeholder={'subject=cat\nstyle=anime'}
-                  autoSize={{ minRows: 4, maxRows: 8 }}
-                />
-              ),
-            },
-            {
-              key: 'panel',
-              label: '变量面板',
-              children: (
-                <Space direction="vertical" className="full-width" size={8}>
-                  <Button
-                    size="small"
-                    onClick={() =>
-                      onPanelVariablesChange([
-                        ...panelVariables,
-                        { id: makeId(), key: '', valuesText: '', selectedValue: '' },
-                      ])
-                    }
-                  >
-                    新增变量定义
-                  </Button>
-                  <Table<PanelVariableRow>
-                    size="small"
-                    rowKey="id"
-                    columns={panelColumns}
-                    dataSource={panelVariables}
-                    pagination={false}
-                  />
-                </Space>
-              ),
-            },
-          ]}
-        />
+        {showAdvancedVariables ? (
+          <>
+            <Tabs
+              activeKey={variableMode}
+              onChange={(value) => onVariableModeChange(value as VariableInputMode)}
+              items={[
+                {
+                  key: 'table',
+                  label: '表格变量',
+                  children: (
+                    <Space direction="vertical" className="full-width" size={8}>
+                      <Button
+                        size="small"
+                        onClick={() =>
+                          onTableVariablesChange([...tableVariables, { id: makeId(), key: '', value: '' }])
+                        }
+                      >
+                        新增变量
+                      </Button>
+                      <Table<TableVariableRow>
+                        size="small"
+                        rowKey="id"
+                        columns={tableColumns}
+                        dataSource={tableVariables}
+                        pagination={false}
+                      />
+                    </Space>
+                  ),
+                },
+                {
+                  key: 'inline',
+                  label: '内联 k=v',
+                  children: (
+                    <Input.TextArea
+                      value={inlineVariablesText}
+                      onChange={(event) => onInlineVariablesTextChange(event.target.value)}
+                      placeholder={'subject=cat\nstyle=anime'}
+                      autoSize={{ minRows: 4, maxRows: 8 }}
+                    />
+                  ),
+                },
+                {
+                  key: 'panel',
+                  label: '变量面板',
+                  children: (
+                    <Space direction="vertical" className="full-width" size={8}>
+                      <Button
+                        size="small"
+                        onClick={() =>
+                          onPanelVariablesChange([
+                            ...panelVariables,
+                            { id: makeId(), key: '', valuesText: '', selectedValue: '' },
+                          ])
+                        }
+                      >
+                        新增变量定义
+                      </Button>
+                      <Table<PanelVariableRow>
+                        size="small"
+                        rowKey="id"
+                        columns={panelColumns}
+                        dataSource={panelVariables}
+                        pagination={false}
+                      />
+                    </Space>
+                  ),
+                },
+              ]}
+            />
 
-        <Text type="secondary">当前变量：{renderResolvedVars(resolvedVariables)}</Text>
-        <Text type="secondary">最终 prompt：{finalPromptPreview || '-'}</Text>
-        {missingKeys.length > 0 ? <Alert type="warning" message={`缺少变量: ${missingKeys.join(', ')}`} /> : null}
-        {unusedVariableKeys.length > 0 ? (
-          <Alert type="info" message={`多余变量(未使用): ${unusedVariableKeys.join(', ')}`} />
+            <Text type="secondary">当前变量：{renderResolvedVars(resolvedVariables)}</Text>
+            <Text type="secondary">最终 prompt：{finalPromptPreview || '-'}</Text>
+            {missingKeys.length > 0 ? <Alert type="warning" message={`缺少变量: ${missingKeys.join(', ')}`} /> : null}
+            {unusedVariableKeys.length > 0 ? (
+              <Alert type="info" message={`多余变量(未使用): ${unusedVariableKeys.join(', ')}`} />
+            ) : null}
+          </>
         ) : null}
         {sendError ? <Alert type="error" message={sendError} /> : null}
 

@@ -25,6 +25,7 @@ export interface ModelParamSpec {
 export interface ModelSpec {
   id: string
   name: string
+  tags?: string[]
   params: ModelParamSpec[]
 }
 
