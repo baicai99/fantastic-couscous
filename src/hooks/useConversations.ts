@@ -3,12 +3,13 @@ import { getModelCatalogFromChannels } from '../services/modelCatalog'
 import type {
   Conversation,
   ConversationSummary,
+  Message,
   Run,
   Side,
   SideMode,
   SingleSideSettings,
 } from '../types/chat'
-import { appendMessagesToConversation, createConversation, toSummary } from '../utils/chat'
+import { appendMessagesToConversation, createConversation, makeId, toSummary } from '../utils/chat'
 import { createConversationOrchestrator } from '../features/conversation/application/conversationOrchestrator'
 import { createRunExecutor } from '../features/conversation/application/runExecutor'
 import {
@@ -65,6 +66,8 @@ export function useConversations() {
   }, [state])
 
   const modelCatalog = useMemo(() => getModelCatalogFromChannels(state.channels), [state.channels])
+  const [replayingRunIds, setReplayingRunIds] = useState<string[]>([])
+  const replayingRunIdsRef = useRef<Set<string>>(new Set())
 
   const activeConversation = conversationSelectors.selectActiveConversation(state)
   const { activeSideMode, activeSideCount, activeSettingsBySide } = conversationSelectors.selectActiveSettings(state)
@@ -337,6 +340,16 @@ export function useConversations() {
     persistConversation(updatedConversation)
   }
 
+  const findRunInConversation = (conversation: Conversation, runId: string): Run | null => {
+    for (const message of conversation.messages) {
+      const target = (message.runs ?? []).find((item) => item.id === runId)
+      if (target) {
+        return target
+      }
+    }
+    return null
+  }
+
   const sendDraft = async () => {
     const snapshot = stateRef.current
     if (snapshot.isSending) {
@@ -466,6 +479,110 @@ export function useConversations() {
     })
   }
 
+  const editRunTemplate = (runId: string) => {
+    const snapshot = stateRef.current
+    const currentActive = snapshot.activeId ? snapshot.contents[snapshot.activeId] ?? null : null
+    if (!currentActive) {
+      return
+    }
+
+    const sourceRun = findRunInConversation(currentActive, runId)
+    if (!sourceRun) {
+      return
+    }
+
+    actions.setDraft(sourceRun.templatePrompt)
+    dispatch({ type: 'send/clearError' })
+  }
+
+  const replayRunAsNewMessage = async (runId: string) => {
+    if (replayingRunIdsRef.current.has(runId)) {
+      return
+    }
+    replayingRunIdsRef.current.add(runId)
+    setReplayingRunIds((prev) => [...prev, runId])
+
+    try {
+      const snapshot = stateRef.current
+      const currentActive = snapshot.activeId ? snapshot.contents[snapshot.activeId] ?? null : null
+      const plan = orchestrator.planReplay(currentActive, runId, {
+        channels: snapshot.channels,
+        modelCatalog,
+      })
+
+      if (!plan || !currentActive) {
+        return
+      }
+
+      const now = new Date().toISOString()
+      const pendingRun: Run = {
+        id: makeId(),
+        batchId: plan.batchId,
+        createdAt: now,
+        sideMode: plan.sourceRun.sideMode,
+        side: plan.sourceRun.side,
+        prompt: plan.sourceRun.finalPrompt,
+        imageCount: plan.settings.imageCount,
+        channelId: plan.channel?.id ?? null,
+        channelName: plan.channel?.name ?? plan.sourceRun.channelName ?? null,
+        modelId: plan.modelId,
+        modelName: plan.modelName,
+        templatePrompt: plan.sourceRun.templatePrompt,
+        finalPrompt: plan.sourceRun.finalPrompt,
+        variablesSnapshot: { ...plan.sourceRun.variablesSnapshot },
+        paramsSnapshot: { ...plan.paramsSnapshot },
+        settingsSnapshot: {
+          ...plan.sourceRun.settingsSnapshot,
+          imageCount: plan.settings.imageCount,
+        },
+        retryAttempt: 0,
+        images: Array.from({ length: plan.settings.imageCount }, (_, index) => ({
+          id: makeId(),
+          seq: index + 1,
+          status: 'pending' as const,
+        })),
+      }
+
+      const replayMessage: Message = {
+        id: makeId(),
+        createdAt: now,
+        role: 'assistant',
+        content: '已提交“再来一次”请求，完成后可预览。',
+        runs: [pendingRun],
+      }
+
+      persistConversation({
+        ...currentActive,
+        updatedAt: now,
+        messages: [...currentActive.messages, replayMessage],
+      })
+
+      const completedRun = await orchestrator.executeReplay({
+        batchId: plan.batchId,
+        sideMode: plan.sourceRun.sideMode,
+        side: plan.sourceRun.side,
+        settings: plan.settings,
+        templatePrompt: plan.sourceRun.templatePrompt,
+        finalPrompt: plan.sourceRun.finalPrompt,
+        variablesSnapshot: { ...plan.sourceRun.variablesSnapshot },
+        modelId: plan.modelId,
+        modelName: plan.modelName,
+        paramsSnapshot: { ...plan.paramsSnapshot },
+        channel: plan.channel,
+      })
+
+      const stableRun: Run = {
+        ...completedRun,
+        id: pendingRun.id,
+        createdAt: pendingRun.createdAt,
+      }
+      replaceRunsInConversation(currentActive.id, new Map([[pendingRun.id, stableRun]]))
+    } finally {
+      replayingRunIdsRef.current.delete(runId)
+      setReplayingRunIds((prev) => prev.filter((id) => id !== runId))
+    }
+  }
+
   return {
     summaries: state.summaries,
     activeConversation,
@@ -506,5 +623,8 @@ export function useConversations() {
     setChannels,
     sendDraft,
     retryRun,
+    editRunTemplate,
+    replayRunAsNewMessage,
+    replayingRunIds,
   }
 }

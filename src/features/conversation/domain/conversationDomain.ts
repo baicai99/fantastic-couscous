@@ -69,6 +69,16 @@ export interface RetryPlan {
   channel: ApiChannel | undefined
 }
 
+export interface ReplayPlan {
+  sourceRun: Run
+  batchId: string
+  settings: SingleSideSettings
+  modelId: string
+  modelName: string
+  paramsSnapshot: Record<string, SettingPrimitive>
+  channel: ApiChannel | undefined
+}
+
 function legacySideAlias(side: Side): Side | null {
   if (side === 'win-1') return 'A'
   if (side === 'win-2') return 'B'
@@ -491,6 +501,54 @@ export function buildRetryPlan(input: {
     sourceRun,
     rootRunId,
     nextRetryAttempt: maxRetryAttempt + 1,
+    settings,
+    modelId: model?.id ?? sourceRun.modelId,
+    modelName: model?.name ?? sourceRun.modelName,
+    paramsSnapshot: { ...sourceRun.paramsSnapshot },
+    channel: channel ?? fallbackChannel,
+  }
+}
+
+export function buildReplayPlan(input: {
+  activeConversation: Conversation | null
+  runId: string
+  channels: ApiChannel[]
+  modelCatalog: ModelCatalog
+}): ReplayPlan | null {
+  const { activeConversation, runId, channels, modelCatalog } = input
+  if (!activeConversation) {
+    return null
+  }
+
+  const allRuns = activeConversation.messages.flatMap((message) => message.runs ?? [])
+  const sourceRun = allRuns.find((item) => item.id === runId)
+  if (!sourceRun) {
+    return null
+  }
+
+  const settings: SingleSideSettings = {
+    resolution: normalizeSizeTier(sourceRun.settingsSnapshot?.resolution),
+    aspectRatio: sourceRun.settingsSnapshot?.aspectRatio ?? ASPECT_RATIO_DEFAULT,
+    imageCount: sourceRun.settingsSnapshot?.imageCount ?? sourceRun.imageCount,
+    gridColumns: sourceRun.settingsSnapshot?.gridColumns ?? 4,
+    sizeMode: sourceRun.settingsSnapshot?.sizeMode ?? 'preset',
+    customWidth: sourceRun.settingsSnapshot?.customWidth ?? 1024,
+    customHeight: sourceRun.settingsSnapshot?.customHeight ?? 1024,
+    autoSave: sourceRun.settingsSnapshot?.autoSave ?? true,
+    channelId: sourceRun.channelId,
+    modelId: sourceRun.modelId,
+    paramValues: { ...sourceRun.paramsSnapshot },
+  }
+
+  const model = getModelById(modelCatalog, sourceRun.modelId) ?? getDefaultModel(modelCatalog)
+  const channel = channels.find((item) => item.id === sourceRun.channelId)
+  const fallbackChannel = sourceRun.channelName
+    ? { id: sourceRun.channelId ?? makeId(), name: sourceRun.channelName, baseUrl: '', apiKey: '' }
+    : undefined
+
+  return {
+    sourceRun,
+    batchId: makeId(),
     settings,
     modelId: model?.id ?? sourceRun.modelId,
     modelName: model?.name ?? sourceRun.modelName,

@@ -222,6 +222,33 @@
   background: #fafafa;
 }
 
+.run-record-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.run-record-head .run-meta-collapse {
+  flex: 1;
+}
+
+.run-head-actions {
+  flex-shrink: 0;
+}
+
+.run-head-actions .ant-btn-sm {
+  height: 34px;
+  padding-inline: 14px;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+}
+
+.run-edit-top-btn {
+  margin-top: 0;
+}
+
 .run-meta-collapse > .ant-collapse-item > .ant-collapse-header {
   padding: 0 !important;
 }

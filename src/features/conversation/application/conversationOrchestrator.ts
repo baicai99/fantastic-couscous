@@ -1,6 +1,6 @@
 import type { Conversation, ModelCatalog, Run, SettingPrimitive } from '../../../types/chat'
 import type { CreateRunInput } from './runExecutor'
-import { buildRetryPlan, planRunBatch } from '../domain/conversationDomain'
+import { buildReplayPlan, buildRetryPlan, planRunBatch } from '../domain/conversationDomain'
 import type { ConversationState } from '../state/conversationState'
 
 export interface ConversationOrchestratorDeps {
@@ -83,6 +83,18 @@ export function createConversationOrchestrator(deps: ConversationOrchestratorDep
       })
     },
 
+    planReplay(conversation: Conversation | null, runId: string, input: {
+      channels: ConversationState['channels']
+      modelCatalog: ModelCatalog
+    }) {
+      return buildReplayPlan({
+        activeConversation: conversation,
+        runId,
+        channels: input.channels,
+        modelCatalog: input.modelCatalog,
+      })
+    },
+
     executeRetry(options: {
       batchId: string
       sideMode: Conversation['sideMode']
@@ -112,6 +124,34 @@ export function createConversationOrchestrator(deps: ConversationOrchestratorDep
         channel: options.channel,
         retryOfRunId: options.retryOfRunId,
         retryAttempt: options.retryAttempt,
+      })
+    },
+
+    executeReplay(options: {
+      batchId: string
+      sideMode: Conversation['sideMode']
+      side: string
+      settings: CreateRunInput['settings']
+      templatePrompt: string
+      finalPrompt: string
+      variablesSnapshot: Record<string, string>
+      modelId: string
+      modelName: string
+      paramsSnapshot: Record<string, SettingPrimitive>
+      channel: CreateRunInput['channel']
+    }) {
+      return deps.createRun({
+        batchId: options.batchId,
+        sideMode: options.sideMode,
+        side: options.side,
+        settings: options.settings,
+        templatePrompt: options.templatePrompt,
+        finalPrompt: options.finalPrompt,
+        variablesSnapshot: options.variablesSnapshot,
+        modelId: options.modelId,
+        modelName: options.modelName,
+        paramsSnapshot: options.paramsSnapshot,
+        channel: options.channel,
       })
     },
   }

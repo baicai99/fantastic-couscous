@@ -71,6 +71,9 @@ export function ConversationWorkspace() {
     setChannels,
     sendDraft,
     retryRun,
+    editRunTemplate,
+    replayRunAsNewMessage,
+    replayingRunIds,
   } = useConversationController()
 
   const {
@@ -145,6 +148,9 @@ export function ConversationWorkspace() {
                       sideView={sideId}
                       onOpenPreview={openPreview}
                       onRetryRun={retryRun}
+                      onEditRunTemplate={editRunTemplate}
+                      onReplayRun={replayRunAsNewMessage}
+                      replayingRunIds={replayingRunIds}
                     />
                   </Card>
                 </Col>
@@ -156,6 +162,9 @@ export function ConversationWorkspace() {
               sideView="single"
               onOpenPreview={openPreview}
               onRetryRun={retryRun}
+              onEditRunTemplate={editRunTemplate}
+              onReplayRun={replayRunAsNewMessage}
+              replayingRunIds={replayingRunIds}
             />
           )}
         </Content>

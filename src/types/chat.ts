@@ -100,6 +100,7 @@ export interface Run {
 export interface Message {
   id: string
   createdAt: string
+  displayCreatedAt?: string
   role: MessageRole
   content: string
   runs?: Run[]
