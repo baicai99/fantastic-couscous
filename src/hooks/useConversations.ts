@@ -39,12 +39,14 @@ import {
 } from '../utils/chat'
 import { parseInlineAssignments, parseTemplateKeys, renderTemplate } from '../utils/template'
 import { generateImages } from '../services/imageGeneration'
+import { normalizeSizeTier } from '../services/imageSizing'
 
-const RESOLUTION_DEFAULT = '1024x1024'
 const ASPECT_RATIO_DEFAULT = '1:1'
 const EMPTY_MODEL_CATALOG: ModelCatalog = { models: [] }
 const MIN_MULTI_SIDE_COUNT = 2
 const MAX_MULTI_SIDE_COUNT = 8
+const CUSTOM_SIZE_MIN = 256
+const CUSTOM_SIZE_MAX = 8192
 
 export type VariableInputMode = 'table' | 'inline' | 'panel'
 
@@ -89,10 +91,13 @@ function normalizeSettings(
       : null
 
   return {
-    resolution: settings?.resolution ?? RESOLUTION_DEFAULT,
+    resolution: normalizeSizeTier(settings?.resolution),
     aspectRatio: settings?.aspectRatio ?? ASPECT_RATIO_DEFAULT,
     imageCount: clamp(Math.floor(settings?.imageCount ?? 4), 1, 8),
     gridColumns: clamp(Math.floor(settings?.gridColumns ?? 4), 1, 8),
+    sizeMode: settings?.sizeMode === 'custom' ? 'custom' : 'preset',
+    customWidth: clamp(Math.floor(settings?.customWidth ?? 1024), CUSTOM_SIZE_MIN, CUSTOM_SIZE_MAX),
+    customHeight: clamp(Math.floor(settings?.customHeight ?? 1024), CUSTOM_SIZE_MIN, CUSTOM_SIZE_MAX),
     autoSave: settings?.autoSave ?? true,
     channelId,
     modelId: model?.id ?? '',
@@ -240,10 +245,13 @@ function normalizeRun(run: Run): Run {
     variablesSnapshot: raw.variablesSnapshot ?? {},
     retryAttempt: raw.retryAttempt ?? 0,
     settingsSnapshot: run.settingsSnapshot ?? {
-      resolution: RESOLUTION_DEFAULT,
+      resolution: '1K',
       aspectRatio: ASPECT_RATIO_DEFAULT,
       imageCount: run.imageCount,
       gridColumns: 4,
+      sizeMode: 'preset',
+      customWidth: 1024,
+      customHeight: 1024,
       autoSave: true,
     },
   }
@@ -312,6 +320,36 @@ function classifyFailure(message: string): FailureCode {
   }
 
   return 'unknown'
+}
+
+function gcd(a: number, b: number): number {
+  let x = Math.abs(a)
+  let y = Math.abs(b)
+  while (y !== 0) {
+    const t = y
+    y = x % y
+    x = t
+  }
+  return x || 1
+}
+
+function toAspectRatioBySize(width: number, height: number): string {
+  const d = gcd(width, height)
+  return `${Math.floor(width / d)}:${Math.floor(height / d)}`
+}
+
+function getEffectiveSize(settings: SingleSideSettings): string {
+  if (settings.sizeMode === 'custom') {
+    return `${settings.customWidth}x${settings.customHeight}`
+  }
+  return settings.resolution
+}
+
+function getEffectiveAspectRatio(settings: SingleSideSettings): string {
+  if (settings.sizeMode === 'custom') {
+    return toAspectRatioBySize(settings.customWidth, settings.customHeight)
+  }
+  return settings.aspectRatio
 }
 
 export function useConversations() {
@@ -398,10 +436,13 @@ export function useConversations() {
   }
 
   const createNewConversation = () => {
+    const seedMode = activeSideMode
+    const seedSideCount = activeSideCount
+    const seedSettings = normalizeSettingsBySide(activeSettingsBySide, channels, modelCatalog, seedSideCount)
     const conversation = createConversation(
-      stagedSettingsBySide,
-      stagedSideMode,
-      stagedSideCount,
+      seedSettings,
+      seedMode,
+      seedSideCount,
       `对话 ${summaries.length + 1}`,
     )
     persistConversation(conversation)
@@ -421,16 +462,20 @@ export function useConversations() {
     settingsBySide: Record<Side, SingleSideSettings>,
   ) => {
     const normalizedCount = clampSideCount(sideCount)
+    const normalizedSettings = normalizeSettingsBySide(settingsBySide, channels, modelCatalog, normalizedCount)
+
     saveStagedSettingsToStorage({
       sideMode: mode,
       sideCount: normalizedCount,
-      settingsBySide,
+      settingsBySide: normalizedSettings,
     })
 
+    // Always keep staged settings in sync so new conversation and refresh use latest user choices.
+    setStagedSideMode(mode)
+    setStagedSideCount(normalizedCount)
+    setStagedSettingsBySide(normalizedSettings)
+
     if (!activeConversation) {
-      setStagedSideMode(mode)
-      setStagedSideCount(normalizedCount)
-      setStagedSettingsBySide(settingsBySide)
       return
     }
 
@@ -439,7 +484,7 @@ export function useConversations() {
       updatedAt: new Date().toISOString(),
       sideMode: mode,
       sideCount: normalizedCount,
-      settingsBySide,
+      settingsBySide: normalizedSettings,
     }
 
     persistConversation(nextConversation)
@@ -739,7 +784,11 @@ export function useConversations() {
     const runPlans = sides.map((side) => {
       const settings = settingsBySide[side]
       const model = getModelById(modelCatalog, settings.modelId) ?? getDefaultModel(modelCatalog)
-      const paramsSnapshot = normalizeParamValues(model, settings.paramValues)
+      const paramsSnapshot: Record<string, SettingPrimitive> = {
+        ...normalizeParamValues(model, settings.paramValues),
+        size: getEffectiveSize(settings),
+        aspectRatio: getEffectiveAspectRatio(settings),
+      }
       const channel = channels.find((item) => item.id === settings.channelId)
       const imageCount = clamp(Math.floor(settings.imageCount), 1, 8)
       const createdAt = new Date().toISOString()
@@ -876,10 +925,13 @@ export function useConversations() {
     }, 0)
 
     const settings = {
-      resolution: targetRun.settingsSnapshot?.resolution ?? RESOLUTION_DEFAULT,
+      resolution: normalizeSizeTier(targetRun.settingsSnapshot?.resolution),
       aspectRatio: targetRun.settingsSnapshot?.aspectRatio ?? ASPECT_RATIO_DEFAULT,
       imageCount: targetRun.settingsSnapshot?.imageCount ?? targetRun.imageCount,
       gridColumns: targetRun.settingsSnapshot?.gridColumns ?? 4,
+      sizeMode: targetRun.settingsSnapshot?.sizeMode ?? 'preset',
+      customWidth: targetRun.settingsSnapshot?.customWidth ?? 1024,
+      customHeight: targetRun.settingsSnapshot?.customHeight ?? 1024,
       autoSave: targetRun.settingsSnapshot?.autoSave ?? true,
       channelId: targetRun.channelId,
       modelId: targetRun.modelId,

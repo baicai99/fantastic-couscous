@@ -1,4 +1,5 @@
-﻿import { Button, Card, Space, Tag, Typography } from 'antd'
+﻿import { useLayoutEffect, useRef } from 'react'
+import { Button, Card, Space, Tag, Typography } from 'antd'
 import type { Conversation, FailureCode, ImageItem, Message, Run, Side } from '../../types/chat'
 import { gridColumnCount, sortImagesBySeq } from '../../utils/chat'
 
@@ -137,6 +138,11 @@ function renderRunCard(
 
 export function MessageList(props: MessageListProps) {
   const { activeConversation, sideView, onOpenPreview, onRetryRun } = props
+  const bottomRef = useRef<HTMLDivElement | null>(null)
+
+  useLayoutEffect(() => {
+    bottomRef.current?.scrollIntoView({ block: 'end' })
+  }, [activeConversation?.id, activeConversation?.updatedAt, sideView])
 
   if (!activeConversation || activeConversation.messages.length === 0) {
     return (
@@ -177,6 +183,7 @@ export function MessageList(props: MessageListProps) {
           </Space>
         </Card>
       ))}
+      <div ref={bottomRef} />
     </Space>
   )
 }

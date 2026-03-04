@@ -46,6 +46,9 @@ export interface SingleSideSettings {
   aspectRatio: string
   imageCount: number
   gridColumns: number
+  sizeMode: 'preset' | 'custom'
+  customWidth: number
+  customHeight: number
   autoSave: boolean
   channelId: string | null
   modelId: string
@@ -57,6 +60,9 @@ export interface RunSettingsSnapshot {
   aspectRatio: string
   imageCount: number
   gridColumns: number
+  sizeMode: 'preset' | 'custom'
+  customWidth: number
+  customHeight: number
   autoSave: boolean
 }
 

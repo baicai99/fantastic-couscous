@@ -1,4 +1,5 @@
 ﻿import type { ApiChannel, SettingPrimitive } from '../types/chat'
+import { getResolutionRule } from './imageSizing'
 
 interface GenerateImagesInput {
   channel: ApiChannel
@@ -16,6 +17,7 @@ interface RawImageItem {
   url?: unknown
   b64_json?: unknown
 }
+
 
 function normalizeBaseUrl(value: string): string {
   return value.replace(/\/+$/, '')
@@ -109,26 +111,32 @@ function buildRequestBody(
   paramValues: Record<string, SettingPrimitive>,
 ): Record<string, unknown> {
   const responseFormat = getStringParam(paramValues, 'responseFormat', 'url')
-  const selectedSize = getStringParam(paramValues, 'size', '1:1')
+  const selectedSize = getStringParam(paramValues, 'size', '1K')
   const selectedAspectRatio = getStringParam(paramValues, 'aspectRatio', '1:1')
+  const resolutionRule = getResolutionRule(selectedSize)
   const selectedTier = parseFixedTier(selectedModelId)
   const requestTier = parseFixedTier(requestModelId)
+  const resolvedAspectRatio = resolutionRule?.aspectRatio ?? selectedAspectRatio
+  const resolvedSize =
+    resolutionRule && resolutionRule.tier
+      ? resolutionRule.tier
+      : selectedSize
 
   const body: Record<string, unknown> = {
     model: requestModelId,
     prompt,
     response_format: responseFormat,
-    size: selectedSize,
+    size: resolvedSize,
   }
 
   if (selectedTier && !requestTier && isGemini3Series(requestModelId)) {
     body.size = selectedTier
-    body.aspect_ratio = isAspectRatio(selectedSize) ? selectedSize : selectedAspectRatio
+    body.aspect_ratio = isAspectRatio(selectedSize) ? selectedSize : resolvedAspectRatio
     return body
   }
 
   if (isGemini3Series(requestModelId) && !isFixedTierModel(requestModelId)) {
-    body.aspect_ratio = selectedAspectRatio
+    body.aspect_ratio = isAspectRatio(selectedSize) ? selectedSize : resolvedAspectRatio
   }
 
   return body

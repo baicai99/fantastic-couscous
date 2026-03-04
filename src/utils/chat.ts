@@ -127,6 +127,9 @@ export function toSettingsSnapshot(settings: SingleSideSettings): RunSettingsSna
     aspectRatio: settings.aspectRatio,
     imageCount: settings.imageCount,
     gridColumns: settings.gridColumns,
+    sizeMode: settings.sizeMode,
+    customWidth: settings.customWidth,
+    customHeight: settings.customHeight,
     autoSave: settings.autoSave,
   }
 }

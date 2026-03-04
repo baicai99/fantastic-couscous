@@ -1,6 +1,7 @@
 ﻿import { useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import {
+  Alert,
   Button,
   Card,
   Drawer,
@@ -9,6 +10,7 @@ import {
   InputNumber,
   Modal,
   Popconfirm,
+  Radio,
   Select,
   Space,
   Switch,
@@ -28,6 +30,7 @@ import type {
   SingleSideSettings,
 } from '../../types/chat'
 import { fetchChannelModels } from '../../services/channelModels'
+import { getAspectRatioOptions, getComputedPresetResolution, getSizeTierOptions, normalizeSizeTier } from '../../services/imageSizing'
 import { makeId } from '../../utils/chat'
 
 const { Text } = Typography
@@ -194,6 +197,15 @@ export function SettingsPanel(props: SettingsPanelProps) {
     return Array.from(tags).sort()
   }, [models])
 
+  const aspectRatioOptions = useMemo(
+    () => getAspectRatioOptions().map((value) => ({ label: value, value })),
+    [],
+  )
+  const sizeTierOptions = useMemo(
+    () => getSizeTierOptions().map((value) => ({ label: value.toLowerCase(), value })),
+    [],
+  )
+
   const renderSettingForm = (side: Side) => {
     const settings = settingsBySide[side]
     if (!settings) {
@@ -216,7 +228,10 @@ export function SettingsPanel(props: SettingsPanelProps) {
       filteredModels[0] ??
       scopedModels[0] ??
       models[0]
-
+    const computedResolution =
+      settings.sizeMode === 'custom'
+        ? `${settings.customWidth}x${settings.customHeight}`
+        : getComputedPresetResolution(settings.aspectRatio, normalizeSizeTier(settings.resolution)) ?? settings.resolution
     return (
       <Space direction="vertical" size={16} className="full-width">
         <Card title="生成设置" size="small">
@@ -329,6 +344,64 @@ export function SettingsPanel(props: SettingsPanelProps) {
                   }}
                   onChange={(value) => onModelChange(side, value)}
                 />
+              </Form.Item>
+              <Form.Item label="尺寸模式">
+                <Radio.Group
+                  value={settings.sizeMode}
+                  optionType="button"
+                  buttonStyle="solid"
+                  options={[
+                    { label: '预设', value: 'preset' },
+                    { label: '自定义', value: 'custom' },
+                  ]}
+                  onChange={(event) => onSettingsChange(side, { sizeMode: event.target.value })}
+                />
+              </Form.Item>
+              {settings.sizeMode === 'preset' ? (
+                <Form.Item label="比例">
+                  <Select
+                    value={settings.aspectRatio}
+                    options={aspectRatioOptions}
+                    onChange={(value) => onSettingsChange(side, { aspectRatio: value })}
+                  />
+                </Form.Item>
+              ) : null}
+              {settings.sizeMode === 'preset' ? (
+                <Form.Item label="预设尺寸">
+                  <Select
+                    value={settings.resolution}
+                    options={sizeTierOptions}
+                    onChange={(value) => onSettingsChange(side, { resolution: value })}
+                  />
+                </Form.Item>
+              ) : null}
+              {settings.sizeMode === 'custom' ? (
+                <Form.Item label="自定义宽高">
+                  <Space className="full-width">
+                    <InputNumber
+                      className="full-width"
+                      min={256}
+                      max={8192}
+                      value={settings.customWidth}
+                      onChange={(value) =>
+                        onSettingsChange(side, { customWidth: typeof value === 'number' ? value : 1024 })
+                      }
+                    />
+                    <Text type="secondary">x</Text>
+                    <InputNumber
+                      className="full-width"
+                      min={256}
+                      max={8192}
+                      value={settings.customHeight}
+                      onChange={(value) =>
+                        onSettingsChange(side, { customHeight: typeof value === 'number' ? value : 1024 })
+                      }
+                    />
+                  </Space>
+                </Form.Item>
+              ) : null}
+              <Form.Item label="当前尺寸">
+                <Alert type="info" showIcon message={computedResolution} />
               </Form.Item>
             </Form>
 

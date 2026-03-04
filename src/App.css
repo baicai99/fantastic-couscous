@@ -62,6 +62,15 @@
   width: 100%;
 }
 
+.ant-radio-group {
+  display: inline-flex;
+  border-radius: 8px;
+}
+
+.ant-alert-info {
+  border-radius: 8px;
+}
+
 .form-item-grow {
   flex: 1;
   margin-bottom: 0 !important;
