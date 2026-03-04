@@ -1,4 +1,4 @@
-import type { ApiChannel, Conversation, ConversationSummary, Side, SideMode, SingleSideSettings } from '../types/chat'
+import type { ApiChannel, Conversation, ConversationSummary, Message, Side, SideMode, SingleSideSettings } from '../types/chat'
 
 const STORAGE_INDEX_KEY = 'm1:conversation-index'
 const STORAGE_ACTIVE_KEY = 'm1:active-conversation-id'
@@ -10,6 +10,21 @@ export interface StagedSettingsState {
   sideMode: SideMode
   sideCount?: number
   settingsBySide?: Partial<Record<Side, SingleSideSettings>>
+}
+
+function latestUserPrompt(messages: Message[] | undefined): string {
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return '暂无消息'
+  }
+
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const item = messages[index]
+    if (item?.role === 'user' && typeof item.content === 'string' && item.content.trim()) {
+      return item.content
+    }
+  }
+
+  return '暂无消息'
 }
 
 function contentStorageKey(conversationId: string): string {
@@ -45,8 +60,20 @@ export function loadConversationsFromStorage(): {
       }
     }
 
-    const activeId = rawActiveId && contents[rawActiveId] ? rawActiveId : summaries[0]?.id ?? null
-    return { summaries, contents, activeId }
+    const normalizedSummaries = summaries.map((summary) => {
+      const content = contents[summary.id]
+      if (!content) {
+        return summary
+      }
+      return {
+        ...summary,
+        updatedAt: content.updatedAt ?? summary.updatedAt,
+        lastMessagePreview: latestUserPrompt(content.messages),
+      }
+    })
+
+    const activeId = rawActiveId && contents[rawActiveId] ? rawActiveId : normalizedSummaries[0]?.id ?? null
+    return { summaries: normalizedSummaries, contents, activeId }
   } catch {
     return { summaries: [], contents: {}, activeId: null }
   }
@@ -62,6 +89,22 @@ export function saveConversationContent(conversation: Conversation): void {
 
 export function saveActiveConversationId(conversationId: string): void {
   localStorage.setItem(STORAGE_ACTIVE_KEY, conversationId)
+}
+
+export function clearConversationsFromStorage(): void {
+  localStorage.removeItem(STORAGE_INDEX_KEY)
+  localStorage.removeItem(STORAGE_ACTIVE_KEY)
+
+  for (let index = localStorage.length - 1; index >= 0; index -= 1) {
+    const key = localStorage.key(index)
+    if (key && key.startsWith(STORAGE_CONTENT_PREFIX)) {
+      localStorage.removeItem(key)
+    }
+  }
+}
+
+export function removeConversationContentFromStorage(conversationId: string): void {
+  localStorage.removeItem(contentStorageKey(conversationId))
 }
 
 export function loadChannelsFromStorage(): ApiChannel[] {

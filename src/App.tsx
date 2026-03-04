@@ -61,6 +61,8 @@ export default function App() {
     setInlineVariablesText,
     setPanelVariables,
     createNewConversation,
+    clearAllConversations,
+    removeConversation,
     switchConversation,
     updateSideMode,
     updateSideCount,
@@ -101,6 +103,8 @@ export default function App() {
             summaries={summaries}
             activeId={activeId}
             onCreateConversation={createNewConversation}
+            onClearAllConversations={clearAllConversations}
+            onDeleteConversation={removeConversation}
             onSwitchConversation={switchConversation}
           />
         </Sider>

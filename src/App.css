@@ -157,12 +157,40 @@
   transition: background-color 0.2s ease;
 }
 
+.conversation-toolbar {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.conversation-create-btn {
+  flex: 1;
+}
+
 .conversation-item:hover {
   background: #f6f8fa;
 }
 
 .conversation-item.active {
   background: #e6f4ff;
+}
+
+.conversation-item .ant-list-item-extra {
+  margin-inline-start: 8px;
+}
+
+.conversation-item-meta {
+  min-width: 0;
+}
+
+.conversation-subtitle {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .message-card {
@@ -184,6 +212,22 @@
 .run-grid {
   display: grid;
   gap: 10px;
+  margin-top: 8px;
+}
+
+.run-record {
+  border: 1px solid #f0f0f0;
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: #fafafa;
+}
+
+.run-meta-collapse > .ant-collapse-item > .ant-collapse-header {
+  padding: 0 !important;
+}
+
+.run-meta-collapse .ant-collapse-content > .ant-collapse-content-box {
+  padding: 8px 0 0 !important;
 }
 
 .run-grid-item {

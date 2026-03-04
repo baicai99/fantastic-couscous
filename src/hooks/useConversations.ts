@@ -1,7 +1,9 @@
 ﻿import { useMemo, useState } from 'react'
 import {
+  clearConversationsFromStorage,
   loadChannelsFromStorage,
   loadConversationsFromStorage,
+  removeConversationContentFromStorage,
   loadStagedSettingsFromStorage,
   saveActiveConversationId,
   saveChannelsToStorage,
@@ -439,21 +441,54 @@ export function useConversations() {
     const seedMode = activeSideMode
     const seedSideCount = activeSideCount
     const seedSettings = normalizeSettingsBySide(activeSettingsBySide, channels, modelCatalog, seedSideCount)
-    const conversation = createConversation(
-      seedSettings,
-      seedMode,
-      seedSideCount,
-      `对话 ${summaries.length + 1}`,
-    )
-    persistConversation(conversation)
 
-    setActiveId(conversation.id)
-    saveActiveConversationId(conversation.id)
+    // "新建对话" should switch to an unsaved draft session. Persist history only after first successful send.
+    saveStagedSettingsToStorage({
+      sideMode: seedMode,
+      sideCount: seedSideCount,
+      settingsBySide: seedSettings,
+    })
+    setStagedSideMode(seedMode)
+    setStagedSideCount(seedSideCount)
+    setStagedSettingsBySide(seedSettings)
+
+    setActiveId(null)
+    saveActiveConversationId('')
+    setDraft('')
+    setSendError('')
   }
 
   const switchConversation = (conversationId: string) => {
     setActiveId(conversationId)
     saveActiveConversationId(conversationId)
+  }
+
+  const clearAllConversations = () => {
+    setSummaries([])
+    setContents({})
+    setActiveId(null)
+    setDraft('')
+    setSendError('')
+    clearConversationsFromStorage()
+  }
+
+  const removeConversation = (conversationId: string) => {
+    const nextSummaries = summaries.filter((item) => item.id !== conversationId)
+    setSummaries(nextSummaries)
+    saveIndex(nextSummaries)
+
+    setContents((prev) => {
+      const next = { ...prev }
+      delete next[conversationId]
+      return next
+    })
+    removeConversationContentFromStorage(conversationId)
+
+    if (activeId === conversationId) {
+      const nextActiveId = nextSummaries[0]?.id ?? null
+      setActiveId(nextActiveId)
+      saveActiveConversationId(nextActiveId ?? '')
+    }
   }
 
   const updateConversationState = (
@@ -1021,6 +1056,8 @@ export function useConversations() {
       setSendError('')
     },
     createNewConversation,
+    clearAllConversations,
+    removeConversation,
     switchConversation,
     updateSideMode,
     updateSideCount,

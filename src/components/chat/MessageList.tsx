@@ -1,5 +1,5 @@
-﻿import { useLayoutEffect, useRef } from 'react'
-import { Button, Card, Space, Tag, Typography } from 'antd'
+﻿import { Fragment, useLayoutEffect, useRef } from 'react'
+import { Button, Card, Collapse, Space, Tag, Typography } from 'antd'
 import type { Conversation, FailureCode, ImageItem, Message, Run, Side } from '../../types/chat'
 import { gridColumnCount, sortImagesBySeq } from '../../utils/chat'
 
@@ -108,31 +108,46 @@ function renderRunCard(
   const hasFailed = run.images.some((item) => item.status === 'failed')
 
   return (
-    <Card key={run.id} size="small">
-      <Space direction="vertical" size={8} className="full-width">
-        <Text strong>Run 记录</Text>
-        <Text type="secondary">
-          side={run.side} | images={run.imageCount} | mode={run.sideMode} | batch={run.batchId}
-        </Text>
-        <Text type="secondary">
-          retry={run.retryAttempt ?? 0}
-          {run.retryOfRunId ? ` | source=${run.retryOfRunId}` : ''}
-        </Text>
-        <Text type="secondary">渠道：{run.channelName ?? '未选择'}</Text>
-        <Text type="secondary">模型：{run.modelName ?? run.modelId ?? '未记录'}</Text>
-        <Text type="secondary">参数：{formatParamSnapshot(run.paramsSnapshot)}</Text>
-        <Text type="secondary">模板: {run.templatePrompt}</Text>
-        <Text type="secondary">变量: {formatParamSnapshot(run.variablesSnapshot)}</Text>
-        <Text type="secondary">最终 prompt: {run.finalPrompt}</Text>
-        {failureSummary ? <Text type="warning">失败摘要：{failureSummary}</Text> : null}
-        {hasFailed ? (
-          <Button size="small" onClick={() => onRetryRun(run.id)}>
-            重试失败项
-          </Button>
-        ) : null}
-        {renderImages(rows, run, linkedRun, onOpenPreview)}
-      </Space>
-    </Card>
+    <Fragment key={run.id}>
+      <div className="run-record">
+        <Space direction="vertical" size={8} className="full-width">
+          <Collapse
+            className="run-meta-collapse"
+            ghost
+            items={[
+              {
+                key: 'meta',
+                label: <Text strong>Run 记录</Text>,
+                children: (
+                  <Space direction="vertical" size={8} className="full-width">
+                    <Text type="secondary">
+                      side={run.side} | images={run.imageCount} | mode={run.sideMode} | batch={run.batchId}
+                    </Text>
+                    <Text type="secondary">
+                      retry={run.retryAttempt ?? 0}
+                      {run.retryOfRunId ? ` | source=${run.retryOfRunId}` : ''}
+                    </Text>
+                    <Text type="secondary">渠道：{run.channelName ?? '未选择'}</Text>
+                    <Text type="secondary">模型：{run.modelName ?? run.modelId ?? '未记录'}</Text>
+                    <Text type="secondary">参数：{formatParamSnapshot(run.paramsSnapshot)}</Text>
+                    <Text type="secondary">模板: {run.templatePrompt}</Text>
+                    <Text type="secondary">变量: {formatParamSnapshot(run.variablesSnapshot)}</Text>
+                    <Text type="secondary">最终 prompt: {run.finalPrompt}</Text>
+                  </Space>
+                ),
+              },
+            ]}
+          />
+          {failureSummary ? <Text type="warning">失败摘要：{failureSummary}</Text> : null}
+          {hasFailed ? (
+            <Button size="small" onClick={() => onRetryRun(run.id)}>
+              重试失败项
+            </Button>
+          ) : null}
+        </Space>
+      </div>
+      {renderImages(rows, run, linkedRun, onOpenPreview)}
+    </Fragment>
   )
 }
 

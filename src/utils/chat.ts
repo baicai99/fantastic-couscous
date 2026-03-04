@@ -55,14 +55,14 @@ export function createConversation(
 }
 
 export function toSummary(conversation: Conversation): ConversationSummary {
-  const lastMessage = conversation.messages.at(-1)
+  const latestUserMessage = [...conversation.messages].reverse().find((message) => message.role === 'user')
 
   return {
     id: conversation.id,
     title: conversation.title,
     createdAt: conversation.createdAt,
     updatedAt: conversation.updatedAt,
-    lastMessagePreview: lastMessage?.content ?? '暂无消息',
+    lastMessagePreview: latestUserMessage?.content ?? '暂无消息',
   }
 }
 
