@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+﻿import { useEffect, useState } from 'react'
 import { HistoryOutlined, SettingOutlined } from '@ant-design/icons'
 import { Button, Card, Col, Layout, Row, Space, Tag, Typography } from 'antd'
 import { Composer } from '../../../components/chat/Composer'
@@ -39,10 +39,9 @@ export function ConversationWorkspace() {
     sendError,
     isSending,
     showAdvancedVariables,
-    variableMode,
-    tableVariables,
-    inlineVariablesText,
+    dynamicPromptEnabled,
     panelVariables,
+    runConcurrency,
     resolvedVariables,
     templatePreview,
     unusedVariableKeys,
@@ -55,10 +54,9 @@ export function ConversationWorkspace() {
     channels,
     setDraft,
     setShowAdvancedVariables,
-    setVariableMode,
-    setTableVariables,
-    setInlineVariablesText,
+    setDynamicPromptEnabled,
     setPanelVariables,
+    setRunConcurrency,
     createNewConversation,
     clearAllConversations,
     removeConversation,
@@ -70,6 +68,9 @@ export function ConversationWorkspace() {
     setSideModelParam,
     setChannels,
     sendDraft,
+    isSendBlocked,
+    panelBatchError,
+    panelMismatchRowIds,
     retryRun,
     editRunTemplate,
     replayRunAsNewMessage,
@@ -124,17 +125,17 @@ export function ConversationWorkspace() {
               <div className="chat-header-card-content">
                 <Space size={8} wrap>
                   <Button icon={<HistoryOutlined />} onClick={() => setIsLeftPanelCollapsed((prev) => !prev)}>
-                    {isLeftPanelCollapsed ? '展开历史栏' : '收起历史栏'}
+                    {isLeftPanelCollapsed ? '展开左侧面板' : '收起左侧面板'}
                   </Button>
                   <Button icon={<SettingOutlined />} onClick={() => setIsRightPanelCollapsed((prev) => !prev)}>
-                    {isRightPanelCollapsed ? '展开设置栏' : '收起设置栏'}
+                    {isRightPanelCollapsed ? '展开右侧面板' : '收起右侧面板'}
                   </Button>
                 </Space>
                 <Space size={10} wrap>
                   <Text type="secondary">当前会话</Text>
-                  <Tag color="blue">{activeConversation ? '已选择' : '未选择'}</Tag>
+                  <Tag color="blue">{activeConversation ? '已选中' : '未选择'}</Tag>
                   <Title level={5} className="panel-title">
-                    {activeConversation?.title ?? '未选择对话'}
+                    {activeConversation?.title ?? '未选择会话'}
                   </Title>
                 </Space>
               </div>
@@ -147,7 +148,7 @@ export function ConversationWorkspace() {
             <Row gutter={[12, 12]} wrap={false} className="ab-windows-row">
               {activeSides.map((sideId, index) => (
                 <Col key={sideId} flex={`0 0 ${100 / activeSideCount}%`} className="ab-window-col">
-                  <Card title={`窗口 ${index + 1}`} size="small" className="ab-window-card">
+                  <Card title={`Window ${index + 1}`} size="small" className="ab-window-card">
                     <MessageList
                       activeConversation={activeConversation}
                       sideView={sideId}
@@ -178,19 +179,17 @@ export function ConversationWorkspace() {
           draft={draft}
           sendError={sendError}
           isSending={isSending}
+          isSendBlocked={isSendBlocked}
+          panelBatchError={panelBatchError}
+          panelMismatchRowIds={panelMismatchRowIds}
           showAdvancedVariables={showAdvancedVariables}
-          variableMode={variableMode}
-          tableVariables={tableVariables}
-          inlineVariablesText={inlineVariablesText}
+          dynamicPromptEnabled={dynamicPromptEnabled}
           panelVariables={panelVariables}
           resolvedVariables={resolvedVariables}
           finalPromptPreview={templatePreview.ok ? templatePreview.finalPrompt : ''}
           missingKeys={templatePreview.missingKeys}
           unusedVariableKeys={unusedVariableKeys}
           onDraftChange={setDraft}
-          onVariableModeChange={setVariableMode}
-          onTableVariablesChange={setTableVariables}
-          onInlineVariablesTextChange={setInlineVariablesText}
           onPanelVariablesChange={setPanelVariables}
           onSend={sendDraft}
         />
@@ -207,6 +206,8 @@ export function ConversationWorkspace() {
             models={modelCatalog.models}
             channels={channels}
             showAdvancedVariables={showAdvancedVariables}
+            dynamicPromptEnabled={dynamicPromptEnabled}
+            runConcurrency={runConcurrency}
             onSideModeChange={updateSideMode}
             onSideCountChange={updateSideCount}
             onSettingsChange={updateSideSettings}
@@ -214,6 +215,8 @@ export function ConversationWorkspace() {
             onModelParamChange={setSideModelParam}
             onChannelsChange={setChannels}
             onShowAdvancedVariablesChange={setShowAdvancedVariables}
+            onDynamicPromptEnabledChange={setDynamicPromptEnabled}
+            onRunConcurrencyChange={setRunConcurrency}
           />
         </Sider>
       ) : null}
@@ -245,3 +248,7 @@ export function ConversationWorkspace() {
     </Layout>
   )
 }
+
+
+
+

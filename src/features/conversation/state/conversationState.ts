@@ -2,14 +2,14 @@ import { useMemo, useReducer } from 'react'
 import type { ApiChannel, Conversation, ConversationSummary, ModelCatalog, Side, SideMode, SingleSideSettings } from '../../../types/chat'
 import { makeId } from '../../../utils/chat'
 import {
+  clampSideCount,
   collectVariables,
   getUnusedVariableKeys,
   normalizeConversation,
   normalizeSettingsBySide,
   previewTemplate,
-  clampSideCount,
 } from '../domain/conversationDomain'
-import type { PanelVariableRow, TableVariableRow, VariableInputMode } from '../domain/types'
+import type { PanelVariableRow } from '../domain/types'
 
 export interface ConversationState {
   summaries: ConversationSummary[]
@@ -19,10 +19,9 @@ export interface ConversationState {
   sendError: string
   isSending: boolean
   showAdvancedVariables: boolean
-  variableMode: VariableInputMode
-  tableVariables: TableVariableRow[]
-  inlineVariablesText: string
+  dynamicPromptEnabled: boolean
   panelVariables: PanelVariableRow[]
+  runConcurrency: number
   stagedSideMode: SideMode
   stagedSideCount: number
   stagedSettingsBySide: Record<Side, SingleSideSettings>
@@ -35,10 +34,8 @@ export type ConversationAction =
   | { type: 'send/succeed' }
   | { type: 'send/fail'; payload: string }
   | { type: 'send/clearError' }
-  | { type: 'variables/setMode'; payload: VariableInputMode }
-  | { type: 'variables/setTableRows'; payload: TableVariableRow[] }
-  | { type: 'variables/setInlineText'; payload: string }
   | { type: 'variables/setPanelRows'; payload: PanelVariableRow[] }
+  | { type: 'settings/setRunConcurrency'; payload: number }
   | { type: 'conversation/sync'; payload: { summaries: ConversationSummary[]; contents: Record<string, Conversation> } }
   | { type: 'conversation/switch'; payload: string | null }
   | { type: 'conversation/clear' }
@@ -52,10 +49,7 @@ export type ConversationAction =
     }
   | { type: 'channels/set'; payload: ApiChannel[] }
   | { type: 'ui/setAdvancedVariables'; payload: boolean }
-
-function defaultTableRows(): TableVariableRow[] {
-  return [{ id: makeId(), key: '', value: '' }]
-}
+  | { type: 'ui/setDynamicPromptEnabled'; payload: boolean }
 
 function defaultPanelRows(): PanelVariableRow[] {
   return [{ id: makeId(), key: '', valuesText: '', selectedValue: '' }]
@@ -73,6 +67,8 @@ export function createInitialConversationState(input: {
     sideMode: SideMode
     sideCount?: number
     settingsBySide?: Partial<Record<Side, SingleSideSettings>>
+    runConcurrency?: number
+    dynamicPromptEnabled?: boolean
   } | null
 }): ConversationState {
   const { channels, modelCatalog, initialLoad, initialStaged } = input
@@ -91,10 +87,9 @@ export function createInitialConversationState(input: {
     sendError: '',
     isSending: false,
     showAdvancedVariables: false,
-    variableMode: 'table',
-    tableVariables: defaultTableRows(),
-    inlineVariablesText: '',
+    dynamicPromptEnabled: initialStaged?.dynamicPromptEnabled ?? true,
     panelVariables: defaultPanelRows(),
+    runConcurrency: Math.max(1, Math.floor(initialStaged?.runConcurrency ?? 4)),
     stagedSideMode: initialStaged?.sideMode ?? 'single',
     stagedSideCount,
     stagedSettingsBySide: normalizeSettingsBySide(initialStaged?.settingsBySide, channels, modelCatalog, stagedSideCount),
@@ -114,14 +109,10 @@ export function conversationReducer(state: ConversationState, action: Conversati
       return { ...state, isSending: false, sendError: action.payload }
     case 'send/clearError':
       return { ...state, sendError: '' }
-    case 'variables/setMode':
-      return { ...state, variableMode: action.payload }
-    case 'variables/setTableRows':
-      return { ...state, tableVariables: action.payload, sendError: '' }
-    case 'variables/setInlineText':
-      return { ...state, inlineVariablesText: action.payload, sendError: '' }
     case 'variables/setPanelRows':
       return { ...state, panelVariables: action.payload, sendError: '' }
+    case 'settings/setRunConcurrency':
+      return { ...state, runConcurrency: Math.max(1, Math.floor(action.payload)), sendError: '' }
     case 'conversation/sync':
       return {
         ...state,
@@ -150,6 +141,8 @@ export function conversationReducer(state: ConversationState, action: Conversati
       return { ...state, channels: action.payload }
     case 'ui/setAdvancedVariables':
       return { ...state, showAdvancedVariables: action.payload }
+    case 'ui/setDynamicPromptEnabled':
+      return { ...state, dynamicPromptEnabled: action.payload, sendError: '' }
     default:
       return state
   }
@@ -183,12 +176,19 @@ export const conversationSelectors: ConversationSelectors = {
     }
   },
   selectTemplatePreview: (state) => {
-    const resolvedVariables = collectVariables(
-      state.variableMode,
-      state.tableVariables,
-      state.inlineVariablesText,
-      state.panelVariables,
-    )
+    if (!state.dynamicPromptEnabled) {
+      return {
+        resolvedVariables: {},
+        templatePreview: {
+          ok: true as const,
+          finalPrompt: state.draft,
+          missingKeys: [],
+        },
+        unusedVariableKeys: [],
+      }
+    }
+
+    const resolvedVariables = collectVariables(state.panelVariables)
 
     return {
       resolvedVariables,
@@ -205,11 +205,9 @@ export function useConversationState(initial: ConversationState) {
   const actions = useMemo(
     () => ({
       setDraft: (value: string) => dispatch({ type: 'draft/set', payload: value }),
-      setVariableMode: (value: VariableInputMode) => dispatch({ type: 'variables/setMode', payload: value }),
-      setTableVariables: (value: TableVariableRow[]) => dispatch({ type: 'variables/setTableRows', payload: value }),
-      setInlineVariablesText: (value: string) => dispatch({ type: 'variables/setInlineText', payload: value }),
       setPanelVariables: (value: PanelVariableRow[]) => dispatch({ type: 'variables/setPanelRows', payload: value }),
       setAdvancedVariables: (value: boolean) => dispatch({ type: 'ui/setAdvancedVariables', payload: value }),
+      setDynamicPromptEnabled: (value: boolean) => dispatch({ type: 'ui/setDynamicPromptEnabled', payload: value }),
     }),
     [],
   )

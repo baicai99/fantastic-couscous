@@ -2,6 +2,7 @@ import type { Conversation, ModelCatalog, Run, SettingPrimitive } from '../../..
 import type { CreateRunInput } from './runExecutor'
 import { buildReplayPlan, buildRetryPlan, planRunBatch } from '../domain/conversationDomain'
 import type { ConversationState } from '../state/conversationState'
+import { Semaphore } from './utils/semaphore'
 
 export interface ConversationOrchestratorDeps {
   createRun: (input: CreateRunInput) => Promise<Run>
@@ -17,10 +18,8 @@ export function createConversationOrchestrator(deps: ConversationOrchestratorDep
     }) {
       return planRunBatch({
         draft: state.draft,
-        variableMode: state.variableMode,
-        tableVariables: state.tableVariables,
-        inlineVariablesText: state.inlineVariablesText,
         panelVariables: state.panelVariables,
+        dynamicPromptEnabled: state.dynamicPromptEnabled,
         mode: input.mode,
         sideCount: input.sideCount,
         settingsBySide: input.settingsBySide,
@@ -43,22 +42,25 @@ export function createConversationOrchestrator(deps: ConversationOrchestratorDep
       channel: CreateRunInput['channel']
       pendingRunId: string
       pendingCreatedAt: string
-    }>): Promise<Run[]> {
+    }>, concurrency = runPlans.length): Promise<Run[]> {
+      const semaphore = new Semaphore(Math.max(1, Math.floor(concurrency)))
       const completedRuns = await Promise.all(
         runPlans.map(async (plan) => {
-          const result = await deps.createRun({
-            batchId: plan.batchId,
-            sideMode: plan.sideMode,
-            side: plan.side,
-            settings: plan.settings,
-            templatePrompt: plan.templatePrompt,
-            finalPrompt: plan.finalPrompt,
-            variablesSnapshot: plan.variablesSnapshot,
-            modelId: plan.modelId,
-            modelName: plan.modelName,
-            paramsSnapshot: plan.paramsSnapshot,
-            channel: plan.channel,
-          })
+          const result = await semaphore.use(() =>
+            deps.createRun({
+              batchId: plan.batchId,
+              sideMode: plan.sideMode,
+              side: plan.side,
+              settings: plan.settings,
+              templatePrompt: plan.templatePrompt,
+              finalPrompt: plan.finalPrompt,
+              variablesSnapshot: plan.variablesSnapshot,
+              modelId: plan.modelId,
+              modelName: plan.modelName,
+              paramsSnapshot: plan.paramsSnapshot,
+              channel: plan.channel,
+            }),
+          )
 
           return {
             ...result,
@@ -156,3 +158,5 @@ export function createConversationOrchestrator(deps: ConversationOrchestratorDep
     },
   }
 }
+
+

@@ -1,7 +1,7 @@
 ﻿import { SendOutlined } from '@ant-design/icons'
-import { Alert, Button, Card, Input, Select, Space, Table, Tabs, Typography } from 'antd'
+import { Alert, Button, Card, Input, Space, Table, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
-import type { PanelVariableRow, TableVariableRow, VariableInputMode } from '../../features/conversation/domain/types'
+import type { PanelVariableRow } from '../../features/conversation/domain/types'
 import { makeId } from '../../utils/chat'
 
 const { Text } = Typography
@@ -10,19 +10,17 @@ interface ComposerProps {
   draft: string
   sendError: string
   showAdvancedVariables: boolean
-  variableMode: VariableInputMode
-  tableVariables: TableVariableRow[]
-  inlineVariablesText: string
+  dynamicPromptEnabled: boolean
   panelVariables: PanelVariableRow[]
   resolvedVariables: Record<string, string>
   finalPromptPreview: string
   missingKeys: string[]
   unusedVariableKeys: string[]
   isSending: boolean
+  isSendBlocked: boolean
+  panelBatchError: string
+  panelMismatchRowIds: string[]
   onDraftChange: (value: string) => void
-  onVariableModeChange: (mode: VariableInputMode) => void
-  onTableVariablesChange: (rows: TableVariableRow[]) => void
-  onInlineVariablesTextChange: (value: string) => void
   onPanelVariablesChange: (rows: PanelVariableRow[]) => void
   onSend: () => void
 }
@@ -41,75 +39,25 @@ export function Composer(props: ComposerProps) {
     draft,
     sendError,
     showAdvancedVariables,
-    variableMode,
-    tableVariables,
-    inlineVariablesText,
+    dynamicPromptEnabled,
     panelVariables,
     resolvedVariables,
     finalPromptPreview,
     missingKeys,
     unusedVariableKeys,
     isSending,
+    isSendBlocked,
+    panelBatchError,
+    panelMismatchRowIds,
     onDraftChange,
-    onVariableModeChange,
-    onTableVariablesChange,
-    onInlineVariablesTextChange,
     onPanelVariablesChange,
     onSend,
   } = props
 
-  const tableColumns: ColumnsType<TableVariableRow> = [
-    {
-      title: 'key',
-      dataIndex: 'key',
-      render: (_: unknown, row) => (
-        <Input
-          value={row.key}
-          placeholder="如 subject"
-          onChange={(event) => {
-            onTableVariablesChange(
-              tableVariables.map((item) =>
-                item.id === row.id ? { ...item, key: event.target.value } : item,
-              ),
-            )
-          }}
-        />
-      ),
-    },
-    {
-      title: 'value',
-      dataIndex: 'value',
-      render: (_: unknown, row) => (
-        <Input
-          value={row.value}
-          placeholder="如 cat"
-          onChange={(event) => {
-            onTableVariablesChange(
-              tableVariables.map((item) =>
-                item.id === row.id ? { ...item, value: event.target.value } : item,
-              ),
-            )
-          }}
-        />
-      ),
-    },
-    {
-      title: '操作',
-      width: 80,
-      render: (_: unknown, row) => (
-        <Button
-          size="small"
-          danger
-          onClick={() => {
-            const next = tableVariables.filter((item) => item.id !== row.id)
-            onTableVariablesChange(next.length > 0 ? next : [{ id: makeId(), key: '', value: '' }])
-          }}
-        >
-          删除
-        </Button>
-      ),
-    },
-  ]
+  const mismatchSet = new Set(panelMismatchRowIds)
+  const draftPlaceholder = dynamicPromptEnabled
+    ? '输入模板 prompt，例如：a {{style}} portrait of {{subject}}'
+    : '输入普通 prompt，例如：a cinematic portrait of a girl'
 
   const panelColumns: ColumnsType<PanelVariableRow> = [
     {
@@ -118,7 +66,8 @@ export function Composer(props: ComposerProps) {
       render: (_: unknown, row) => (
         <Input
           value={row.key}
-          placeholder="如 style"
+          placeholder="如 hair"
+          status={mismatchSet.has(row.id) ? 'error' : undefined}
           onChange={(event) => {
             onPanelVariablesChange(
               panelVariables.map((item) =>
@@ -130,12 +79,13 @@ export function Composer(props: ComposerProps) {
       ),
     },
     {
-      title: '值集合',
+      title: 'value 列表',
       dataIndex: 'valuesText',
       render: (_: unknown, row) => (
         <Input
           value={row.valuesText}
-          placeholder="realistic, anime, sketch"
+          status={mismatchSet.has(row.id) ? 'error' : undefined}
+          placeholder="long hair, short hair, black hair"
           onChange={(event) => {
             onPanelVariablesChange(
               panelVariables.map((item) =>
@@ -145,33 +95,6 @@ export function Composer(props: ComposerProps) {
           }}
         />
       ),
-    },
-    {
-      title: '选中值',
-      dataIndex: 'selectedValue',
-      render: (_: unknown, row) => {
-        const options = row.valuesText
-          .split(/[\n,;|]/)
-          .map((item) => item.trim())
-          .filter(Boolean)
-          .map((item) => ({ label: item, value: item }))
-
-        return (
-          <Select
-            value={row.selectedValue || undefined}
-            placeholder="选择一个值"
-            options={options}
-            onChange={(value) => {
-              onPanelVariablesChange(
-                panelVariables.map((item) =>
-                  item.id === row.id ? { ...item, selectedValue: value } : item,
-                ),
-              )
-            }}
-            allowClear
-          />
-        )
-      },
     },
     {
       title: '操作',
@@ -201,11 +124,11 @@ export function Composer(props: ComposerProps) {
             <Input.TextArea
               value={draft}
               onChange={(event) => onDraftChange(event.target.value)}
-              placeholder="输入模板 prompt，例如：a {{style}} portrait of {{subject}}"
+              placeholder={draftPlaceholder}
               autoSize={{ minRows: 2, maxRows: 6 }}
               className="composer-textarea"
               onPressEnter={(event) => {
-                if (!event.shiftKey && !isSending) {
+                if (!event.shiftKey && !isSending && !isSendBlocked) {
                   event.preventDefault()
                   onSend()
                 }
@@ -220,7 +143,7 @@ export function Composer(props: ComposerProps) {
                 icon={<SendOutlined />}
                 onClick={onSend}
                 loading={isSending}
-                disabled={isSending}
+                disabled={isSending || isSendBlocked}
                 className="composer-send-btn"
               >
                 发送
@@ -231,73 +154,27 @@ export function Composer(props: ComposerProps) {
           {showAdvancedVariables ? (
             <Card size="small" className="composer-advanced-card" title="高级变量">
               <Space direction="vertical" className="full-width" size={10}>
-                <Tabs
-                  activeKey={variableMode}
-                  onChange={(value) => onVariableModeChange(value as VariableInputMode)}
-                  items={[
-                    {
-                      key: 'table',
-                      label: '表格变量',
-                      children: (
-                        <Space direction="vertical" className="full-width" size={8}>
-                          <Button
-                            size="small"
-                            onClick={() =>
-                              onTableVariablesChange([...tableVariables, { id: makeId(), key: '', value: '' }])
-                            }
-                          >
-                            新增变量
-                          </Button>
-                          <Table<TableVariableRow>
-                            size="small"
-                            rowKey="id"
-                            columns={tableColumns}
-                            dataSource={tableVariables}
-                            pagination={false}
-                          />
-                        </Space>
-                      ),
-                    },
-                    {
-                      key: 'inline',
-                      label: '内联 k=v',
-                      children: (
-                        <Input.TextArea
-                          value={inlineVariablesText}
-                          onChange={(event) => onInlineVariablesTextChange(event.target.value)}
-                          placeholder={'subject=cat\nstyle=anime'}
-                          autoSize={{ minRows: 4, maxRows: 8 }}
-                        />
-                      ),
-                    },
-                    {
-                      key: 'panel',
-                      label: '变量面板',
-                      children: (
-                        <Space direction="vertical" className="full-width" size={8}>
-                          <Button
-                            size="small"
-                            onClick={() =>
-                              onPanelVariablesChange([
-                                ...panelVariables,
-                                { id: makeId(), key: '', valuesText: '', selectedValue: '' },
-                              ])
-                            }
-                          >
-                            新增变量定义
-                          </Button>
-                          <Table<PanelVariableRow>
-                            size="small"
-                            rowKey="id"
-                            columns={panelColumns}
-                            dataSource={panelVariables}
-                            pagination={false}
-                          />
-                        </Space>
-                      ),
-                    },
-                  ]}
-                />
+                <Space direction="vertical" className="full-width" size={8}>
+                  <Button
+                    size="small"
+                    onClick={() =>
+                      onPanelVariablesChange([
+                        ...panelVariables,
+                        { id: makeId(), key: '', valuesText: '', selectedValue: '' },
+                      ])
+                    }
+                  >
+                    新增变量定义
+                  </Button>
+                  <Table<PanelVariableRow>
+                    size="small"
+                    rowKey="id"
+                    columns={panelColumns}
+                    dataSource={panelVariables}
+                    pagination={false}
+                  />
+                  {panelBatchError ? <Alert type="error" message={panelBatchError} /> : null}
+                </Space>
 
                 <Text type="secondary">当前变量：{renderResolvedVars(resolvedVariables)}</Text>
                 <Text type="secondary">最终 prompt：{finalPromptPreview || '-'}</Text>

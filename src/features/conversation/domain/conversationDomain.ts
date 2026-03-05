@@ -22,8 +22,8 @@ import {
   makeId,
   toSettingsSnapshot,
 } from '../../../utils/chat'
-import { parseInlineAssignments, parseTemplateKeys, renderTemplate } from '../../../utils/template'
-import type { PanelVariableRow, TableVariableRow, VariableInputMode } from './types'
+import { parseTemplateKeys, renderTemplate } from '../../../utils/template'
+import type { PanelVariableRow } from './types'
 
 const ASPECT_RATIO_DEFAULT = '1:1'
 const EMPTY_MODEL_CATALOG: ModelCatalog = { models: [] }
@@ -44,6 +44,7 @@ export interface PlannedRun {
 
 export interface SendDraftPlan {
   batchId: string
+  userPrompt: string
   templatePrompt: string
   finalPrompt: string
   variablesSnapshot: Record<string, string>
@@ -57,6 +58,12 @@ export interface SendDraftPlan {
 export type SendDraftPlanResult =
   | { ok: false; error: string }
   | { ok: true; value: SendDraftPlan }
+
+export interface PanelVariableBatchValidation {
+  ok: boolean
+  mismatchRowIds: string[]
+  error: string
+}
 
 export interface RetryPlan {
   sourceRun: Run
@@ -90,6 +97,50 @@ function parseValuesText(valuesText: string): string[] {
     .split(/[\n,;|]/)
     .map((value) => value.trim())
     .filter(Boolean)
+}
+
+
+export function buildPanelVariableBatches(rows: PanelVariableRow[]): {
+  validation: PanelVariableBatchValidation
+  batches: Record<string, string>[]
+} {
+  const parsed = rows
+    .map((row) => ({ row, key: row.key.trim(), values: parseValuesText(row.valuesText) }))
+    .filter((item) => item.key.length > 0)
+
+  if (parsed.length === 0) {
+    return {
+      validation: { ok: true, mismatchRowIds: [], error: '' },
+      batches: [{}],
+    }
+  }
+
+  const nonEmptyLengths = parsed.map((item) => item.values.length).filter((length) => length > 0)
+  const targetLength = nonEmptyLengths.length > 0 ? nonEmptyLengths[0] : 0
+  const mismatchRows = parsed.filter((item) => item.values.length !== targetLength)
+
+  if (targetLength === 0 || mismatchRows.length > 0) {
+    return {
+      validation: {
+        ok: false,
+        mismatchRowIds: mismatchRows.map((item) => item.row.id),
+        error: 'Panel variable lists must have the same non-zero length.',
+      },
+      batches: [],
+    }
+  }
+
+  const batches: Record<string, string>[] = Array.from({ length: targetLength }, () => ({}))
+  for (const item of parsed) {
+    for (let index = 0; index < targetLength; index += 1) {
+      batches[index][item.key] = item.values[index] ?? ''
+    }
+  }
+
+  return {
+    validation: { ok: true, mismatchRowIds: [], error: '' },
+    batches,
+  }
 }
 
 function gcd(a: number, b: number): number {
@@ -289,40 +340,9 @@ export function normalizeConversation(
   }
 }
 
-export function collectVariables(
-  mode: VariableInputMode,
-  tableRows: TableVariableRow[],
-  inlineText: string,
-  panelRows: PanelVariableRow[],
-): Record<string, string> {
-  if (mode === 'inline') {
-    return parseInlineAssignments(inlineText)
-  }
-
-  if (mode === 'panel') {
-    const result: Record<string, string> = {}
-    for (const row of panelRows) {
-      const key = row.key.trim()
-      if (!key) {
-        continue
-      }
-      const values = parseValuesText(row.valuesText)
-      const selected = row.selectedValue || values[0] || ''
-      result[key] = selected
-    }
-    return result
-  }
-
-  const result: Record<string, string> = {}
-  for (const row of tableRows) {
-    const key = row.key.trim()
-    if (!key) {
-      continue
-    }
-    result[key] = row.value
-  }
-
-  return result
+export function collectVariables(panelRows: PanelVariableRow[]): Record<string, string> {
+  const panelBatch = buildPanelVariableBatches(panelRows)
+  return panelBatch.batches[0] ?? {}
 }
 
 export function classifyFailure(message: string): FailureCode {
@@ -351,10 +371,8 @@ export function getEffectiveAspectRatio(settings: SingleSideSettings): string {
 
 export function planRunBatch(input: {
   draft: string
-  variableMode: VariableInputMode
-  tableVariables: TableVariableRow[]
-  inlineVariablesText: string
   panelVariables: PanelVariableRow[]
+  dynamicPromptEnabled?: boolean
   mode: SideMode
   sideCount: number
   settingsBySide: Record<Side, SingleSideSettings>
@@ -363,23 +381,17 @@ export function planRunBatch(input: {
 }): SendDraftPlanResult {
   const templatePrompt = input.draft.trim()
   if (!templatePrompt) {
-    return { ok: false, error: '请输入模板 prompt' }
+    return { ok: false, error: 'Please enter a template prompt.' }
   }
-
-  const variablesSnapshot = collectVariables(
-    input.variableMode,
-    input.tableVariables,
-    input.inlineVariablesText,
-    input.panelVariables,
-  )
-  const rendered = renderTemplate(templatePrompt, variablesSnapshot)
-  if (!rendered.ok) {
-    return { ok: false, error: `缺少变量：${rendered.missingKeys.join(', ')}` }
-  }
-
-  const finalPrompt = rendered.finalPrompt.trim()
-  if (!finalPrompt) {
-    return { ok: false, error: '替换后 prompt 为空，无法发送' }
+  const dynamicPromptEnabled = input.dynamicPromptEnabled ?? true
+  const variableBatches = dynamicPromptEnabled
+    ? buildPanelVariableBatches(input.panelVariables)
+    : {
+        validation: { ok: true, mismatchRowIds: [], error: '' },
+        batches: [{}],
+      }
+  if (!variableBatches.validation.ok) {
+    return { ok: false, error: variableBatches.validation.error }
   }
 
   const sideCount = clampSideCount(input.sideCount)
@@ -387,62 +399,84 @@ export function planRunBatch(input: {
   const settingsBySide = normalizeSettingsBySide(input.settingsBySide, input.channels, input.modelCatalog, sideCount)
   const batchId = makeId()
   const sides = mode === 'single' ? (['single'] as Side[]) : getMultiSideIds(sideCount)
+  const iterationCount = variableBatches.batches.length
 
-  const runPlans = sides.map((side) => {
-    const settings = settingsBySide[side]
-    const model = getModelById(input.modelCatalog, settings.modelId) ?? getDefaultModel(input.modelCatalog)
-    const paramsSnapshot: Record<string, SettingPrimitive> = {
-      ...normalizeParamValues(model, settings.paramValues),
-      size: getEffectiveSize(settings),
-      aspectRatio: getEffectiveAspectRatio(settings),
+  const runPlans: PlannedRun[] = []
+  for (const variablesSnapshot of variableBatches.batches) {
+    let finalPrompt = templatePrompt
+    if (dynamicPromptEnabled) {
+      const rendered = renderTemplate(templatePrompt, variablesSnapshot)
+      if (!rendered.ok) {
+        return { ok: false, error: `Missing variables: ${rendered.missingKeys.join(', ')}` }
+      }
+      finalPrompt = rendered.finalPrompt.trim()
     }
-    const channel = input.channels.find((item) => item.id === settings.channelId)
-    const imageCount = clamp(Math.floor(settings.imageCount), 1, 8)
-    const createdAt = new Date().toISOString()
+    if (!finalPrompt) {
+      return { ok: false, error: 'Prompt is empty after variable replacement.' }
+    }
 
-    const pendingRun: Run = {
-      id: makeId(),
-      batchId,
-      createdAt,
-      sideMode: mode,
-      side,
-      prompt: finalPrompt,
-      imageCount,
-      channelId: channel?.id ?? null,
-      channelName: channel?.name ?? null,
-      modelId: model?.id ?? settings.modelId,
-      modelName: model?.name ?? settings.modelId,
-      templatePrompt,
-      finalPrompt,
-      variablesSnapshot,
-      paramsSnapshot,
-      settingsSnapshot: toSettingsSnapshot(settings),
-      retryAttempt: 0,
-      images: Array.from({ length: imageCount }, (_, index) => ({
+    for (const side of sides) {
+      const settings = settingsBySide[side]
+      const model = getModelById(input.modelCatalog, settings.modelId) ?? getDefaultModel(input.modelCatalog)
+      const paramsSnapshot: Record<string, SettingPrimitive> = {
+        ...normalizeParamValues(model, settings.paramValues),
+        size: getEffectiveSize(settings),
+        aspectRatio: getEffectiveAspectRatio(settings),
+      }
+      const channel = input.channels.find((item) => item.id === settings.channelId)
+      const imageCount = clamp(Math.floor(settings.imageCount), 1, 8)
+      const createdAt = new Date().toISOString()
+
+      const pendingRun: Run = {
         id: makeId(),
-        seq: index + 1,
-        status: 'pending' as const,
-      })),
-    }
+        batchId,
+        createdAt,
+        sideMode: mode,
+        side,
+        prompt: finalPrompt,
+        imageCount,
+        channelId: channel?.id ?? null,
+        channelName: channel?.name ?? null,
+        modelId: model?.id ?? settings.modelId,
+        modelName: model?.name ?? settings.modelId,
+        templatePrompt,
+        finalPrompt,
+        variablesSnapshot: dynamicPromptEnabled ? variablesSnapshot : {},
+        paramsSnapshot,
+        settingsSnapshot: toSettingsSnapshot(settings),
+        retryAttempt: 0,
+        images: Array.from({ length: imageCount }, (_, index) => ({
+          id: makeId(),
+          seq: index + 1,
+          status: 'pending' as const,
+        })),
+      }
 
-    return {
-      side,
-      settings,
-      modelId: model?.id ?? settings.modelId,
-      modelName: model?.name ?? settings.modelId,
-      paramsSnapshot,
-      channel,
-      pendingRun,
+      runPlans.push({
+        side,
+        settings,
+        modelId: model?.id ?? settings.modelId,
+        modelName: model?.name ?? settings.modelId,
+        paramsSnapshot,
+        channel,
+        pendingRun,
+      })
     }
-  })
+  }
+
+  const firstRun = runPlans[0]?.pendingRun
+  if (!firstRun) {
+    return { ok: false, error: 'No runnable plans generated.' }
+  }
 
   return {
     ok: true,
     value: {
       batchId,
+      userPrompt: iterationCount > 1 ? `${templatePrompt} (${iterationCount} runs)` : firstRun.finalPrompt,
       templatePrompt,
-      finalPrompt,
-      variablesSnapshot,
+      finalPrompt: firstRun.finalPrompt,
+      variablesSnapshot: firstRun.variablesSnapshot,
       mode,
       sideCount,
       settingsBySide,
@@ -565,3 +599,4 @@ export function getUnusedVariableKeys(draft: string, resolvedVariables: Record<s
 export function previewTemplate(draft: string, resolvedVariables: Record<string, string>) {
   return renderTemplate(draft, resolvedVariables)
 }
+

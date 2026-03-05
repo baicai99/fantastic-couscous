@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { normalizeSettingsBySide, collectVariables, planRunBatch } from '../conversationDomain'
+import { buildPanelVariableBatches, normalizeSettingsBySide, collectVariables, planRunBatch } from '../conversationDomain'
 import type { ApiChannel, ModelCatalog, Side, SingleSideSettings } from '../../../../types/chat'
 
 const catalog: ModelCatalog = {
@@ -25,23 +25,15 @@ const channels: ApiChannel[] = [
 ]
 
 describe('conversationDomain variables', () => {
-  it('collects variables consistently across table/inline/panel modes', () => {
-    const table = collectVariables('table', [{ id: '1', key: 'subject', value: 'cat' }], '', [])
-    const inline = collectVariables('inline', [], 'subject=cat', [])
-    const panel = collectVariables('panel', [], '', [{ id: '2', key: 'subject', valuesText: 'cat,dog', selectedValue: 'cat' }])
-
-    expect(table).toEqual({ subject: 'cat' })
-    expect(inline).toEqual({ subject: 'cat' })
+  it('collects variables from panel mode', () => {
+    const panel = collectVariables([{ id: '2', key: 'subject', valuesText: 'cat,dog', selectedValue: '' }])
     expect(panel).toEqual({ subject: 'cat' })
   })
 
   it('returns missing variables error when template has unresolved keys', () => {
     const result = planRunBatch({
       draft: 'a {{style}} portrait of {{subject}}',
-      variableMode: 'table',
-      tableVariables: [{ id: '1', key: 'subject', value: 'cat' }],
-      inlineVariablesText: '',
-      panelVariables: [],
+      panelVariables: [{ id: '1', key: 'subject', valuesText: 'cat', selectedValue: '' }],
       mode: 'single',
       sideCount: 2,
       settingsBySide: normalizeSettingsBySide(undefined, channels, catalog, 2),
@@ -51,8 +43,81 @@ describe('conversationDomain variables', () => {
 
     expect(result.ok).toBe(false)
     if (!result.ok) {
-      expect(result.error).toContain('缺少变量')
+      expect(result.error).toContain('Missing variables')
       expect(result.error).toContain('style')
+    }
+  })
+
+  it('builds N batches from one panel list key', () => {
+    const result = planRunBatch({
+      draft: 'a {{hair}} portrait',
+      panelVariables: [{ id: 'p1', key: 'hair', valuesText: 'long hair,short hair,black hair', selectedValue: '' }],
+      mode: 'single',
+      sideCount: 2,
+      settingsBySide: normalizeSettingsBySide(undefined, channels, catalog, 2),
+      channels,
+      modelCatalog: catalog,
+    })
+
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.value.runPlans).toHaveLength(3)
+      expect(result.value.runPlans[0].pendingRun.finalPrompt).toContain('long hair')
+      expect(result.value.runPlans[1].pendingRun.finalPrompt).toContain('short hair')
+      expect(result.value.runPlans[2].pendingRun.finalPrompt).toContain('black hair')
+    }
+  })
+
+  it('aligns multi-key panel lists by index', () => {
+    const batches = buildPanelVariableBatches([
+      { id: 'a', key: 'hair', valuesText: 'long,short', selectedValue: '' },
+      { id: 'b', key: 'color', valuesText: 'black,blonde', selectedValue: '' },
+    ])
+
+    expect(batches.validation.ok).toBe(true)
+    expect(batches.batches).toEqual([
+      { hair: 'long', color: 'black' },
+      { hair: 'short', color: 'blonde' },
+    ])
+  })
+
+  it('blocks panel submit when list lengths mismatch', () => {
+    const result = planRunBatch({
+      draft: 'a {{hair}} {{color}} portrait',
+      panelVariables: [
+        { id: 'a', key: 'hair', valuesText: 'long,short,black', selectedValue: '' },
+        { id: 'b', key: 'color', valuesText: 'red,blue', selectedValue: '' },
+      ],
+      mode: 'single',
+      sideCount: 2,
+      settingsBySide: normalizeSettingsBySide(undefined, channels, catalog, 2),
+      channels,
+      modelCatalog: catalog,
+    })
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.error).toContain('same non-zero length')
+    }
+  })
+
+  it('skips dynamic replacement when disabled', () => {
+    const result = planRunBatch({
+      draft: 'a {{hair}} portrait',
+      panelVariables: [{ id: 'a', key: 'hair', valuesText: 'long,short', selectedValue: '' }],
+      dynamicPromptEnabled: false,
+      mode: 'single',
+      sideCount: 2,
+      settingsBySide: normalizeSettingsBySide(undefined, channels, catalog, 2),
+      channels,
+      modelCatalog: catalog,
+    })
+
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.value.runPlans).toHaveLength(1)
+      expect(result.value.runPlans[0].pendingRun.finalPrompt).toBe('a {{hair}} portrait')
+      expect(result.value.runPlans[0].pendingRun.variablesSnapshot).toEqual({})
     }
   })
 })

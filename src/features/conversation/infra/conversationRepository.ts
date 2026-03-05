@@ -23,6 +23,8 @@ export interface ConversationRepository {
     sideMode: SideMode
     sideCount?: number
     settingsBySide?: Partial<Record<Side, SingleSideSettings>>
+    runConcurrency?: number
+    dynamicPromptEnabled?: boolean
   } | null
   saveIndex: (summaries: ConversationSummary[]) => void
   saveConversation: (conversation: Conversation) => void
@@ -34,6 +36,8 @@ export interface ConversationRepository {
     sideMode: SideMode
     sideCount: number
     settingsBySide: Record<Side, SingleSideSettings>
+    runConcurrency: number
+    dynamicPromptEnabled: boolean
   }) => void
 }
 
@@ -48,8 +52,8 @@ export function createConversationRepository(): ConversationRepository {
     clearConversations: clearConversationsFromStorage,
     saveActiveId: (conversationId) => saveActiveConversationId(conversationId ?? ''),
     saveChannels: saveChannelsToStorage,
-    saveStagedSettings: ({ sideMode, sideCount, settingsBySide }) => {
-      saveStagedSettingsToStorage({ sideMode, sideCount, settingsBySide })
+    saveStagedSettings: ({ sideMode, sideCount, settingsBySide, runConcurrency, dynamicPromptEnabled }) => {
+      saveStagedSettingsToStorage({ sideMode, sideCount, settingsBySide, runConcurrency, dynamicPromptEnabled })
     },
   }
 }

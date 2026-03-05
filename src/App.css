@@ -249,6 +249,35 @@
   padding: 0 !important;
 }
 
+.run-meta-title {
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.run-meta-title-fixed {
+  flex-shrink: 0;
+}
+
+.run-meta-title-prompt {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-meta-title-prompt.expanded {
+  white-space: normal;
+  word-break: break-word;
+}
+
+.run-meta-title-toggle {
+  flex-shrink: 0;
+  padding-inline: 0 !important;
+}
+
 .run-meta-collapse .ant-collapse-content > .ant-collapse-content-box {
   padding: 8px 0 0 !important;
 }

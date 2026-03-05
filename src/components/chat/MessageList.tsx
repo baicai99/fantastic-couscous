@@ -7,6 +7,7 @@ import { ENABLE_MESSAGE_WINDOWING } from '../../features/performance/flags'
 
 const { Paragraph, Text } = Typography
 const DEFAULT_ESTIMATED_MESSAGE_HEIGHT = 220
+const PROMPT_SUMMARY_MAX_CHARS = 100
 
 interface MessageListProps {
   activeConversation: Conversation | null
@@ -70,6 +71,57 @@ function getFailureSummary(run: Run): string | null {
     .join(' | ')
 }
 
+function getFailureDetails(run: Run): string[] {
+  const details = run.images
+    .filter((item) => item.status === 'failed')
+    .map((item) => item.error?.trim())
+    .filter((detail): detail is string => Boolean(detail))
+
+  return Array.from(new Set(details))
+}
+
+function truncatePrompt(prompt: string, maxChars = PROMPT_SUMMARY_MAX_CHARS): { text: string; truncated: boolean } {
+  const value = prompt.trim()
+  if (value.length <= maxChars) {
+    return { text: value, truncated: false }
+  }
+  return { text: `${value.slice(0, maxChars)}...`, truncated: true }
+}
+
+function renderRunMetaTitle(input: {
+  run: Run
+  runNumber: number
+  expanded: boolean
+  onToggle: (runId: string) => void
+}) {
+  const { run, runNumber, expanded, onToggle } = input
+  const prompt = truncatePrompt(run.finalPrompt)
+  const promptText = expanded ? run.finalPrompt : prompt.text
+  const canToggle = prompt.truncated
+
+  return (
+    <div className="run-meta-title">
+      <Text strong className="run-meta-title-fixed">{`Run #${runNumber}`}</Text>
+      <Text className={`run-meta-title-prompt ${expanded ? 'expanded' : ''}`}>
+        {`Prompt: ${promptText || '无'}`}
+      </Text>
+      {canToggle ? (
+        <Button
+          type="link"
+          size="small"
+          className="run-meta-title-toggle"
+          onClick={(event) => {
+            event.stopPropagation()
+            onToggle(run.id)
+          }}
+        >
+          {expanded ? '收起' : '展开'}
+        </Button>
+      ) : null}
+    </div>
+  )
+}
+
 function renderImages(
   rows: DisplayImage[],
   run: Run | undefined,
@@ -87,7 +139,7 @@ function renderImages(
           {row.item?.status === 'pending' ? (
             <div className="run-image-skeleton" />
           ) : row.item?.status === 'failed' ? (
-            <div className="run-image-fallback">失败: {row.item.error ?? '未知错误'}</div>
+            <div className="run-image-fallback">生成失败</div>
           ) : row.item?.status === 'success' && row.item.fileRef && run ? (
             <button
               className="image-button"
@@ -108,12 +160,16 @@ function renderImages(
 
 function renderRunCard(
   run: Run,
+  runNumber: number,
   rows: DisplayImage[],
   linkedRun: Run | undefined,
   onOpenPreview: (run: Run, imageId: string, linkedRun?: Run) => void,
   onRetryRun: (runId: string) => void,
+  isPromptExpanded: boolean,
+  onTogglePrompt: (runId: string) => void,
 ) {
   const failureSummary = getFailureSummary(run)
+  const failureDetails = getFailureDetails(run)
   const hasFailed = run.images.some((item) => item.status === 'failed')
 
   return (
@@ -126,7 +182,12 @@ function renderRunCard(
             items={[
               {
                 key: 'meta',
-                label: <Text strong>Run 记录</Text>,
+                label: renderRunMetaTitle({
+                  run,
+                  runNumber,
+                  expanded: isPromptExpanded,
+                  onToggle: onTogglePrompt,
+                }),
                 children: (
                   <Space direction="vertical" size={8} className="full-width">
                     <Text type="secondary">
@@ -148,6 +209,15 @@ function renderRunCard(
             ]}
           />
           {failureSummary ? <Text type="warning">失败摘要：{failureSummary}</Text> : null}
+          {failureDetails.length > 0 ? (
+            <Space direction="vertical" size={2} className="full-width">
+              {failureDetails.map((detail, index) => (
+                <Text key={`${run.id}-failure-${index}`} type="secondary">
+                  {detail}
+                </Text>
+              ))}
+            </Space>
+          ) : null}
           {hasFailed ? (
             <Space size={8} wrap>
               <Button size="small" type="dashed" icon={<RetweetOutlined />} onClick={() => onRetryRun(run.id)}>
@@ -180,6 +250,7 @@ function MessageListComponent(props: MessageListProps) {
   const bottomRef = useRef<HTMLDivElement | null>(null)
   const [scrollTop, setScrollTop] = useState(0)
   const [viewportHeight, setViewportHeight] = useState(0)
+  const [expandedPromptByRunId, setExpandedPromptByRunId] = useState<Record<string, boolean>>({})
 
   const messages = activeConversation?.messages ?? []
 
@@ -243,6 +314,12 @@ function MessageListComponent(props: MessageListProps) {
   }
 
   const visibleMessages = messages.slice(windowed.start, windowed.end)
+  const togglePromptExpanded = (runId: string) => {
+    setExpandedPromptByRunId((prev) => ({
+      ...prev,
+      [runId]: !prev[runId],
+    }))
+  }
 
   return (
     <div ref={viewportRef} className="full-width" style={{ height: '100%', overflowY: 'auto' }}>
@@ -297,27 +374,33 @@ function MessageListComponent(props: MessageListProps) {
               <Paragraph style={{ marginBottom: 0 }}>{message.content}</Paragraph>
 
               {message.role === 'assistant' && sideView === 'single'
-                ? getSingleRuns(message).map((run) => {
+                ? getSingleRuns(message).map((run, index) => {
                     const rows = sortImagesBySeq(run.images).map((item) => ({ seq: item.seq, item }))
                     return renderRunCard(
                       run,
+                      index + 1,
                       rows,
                       undefined,
                       onOpenPreview,
                       onRetryRun,
+                      Boolean(expandedPromptByRunId[run.id]),
+                      togglePromptExpanded,
                     )
                   })
                 : null}
 
               {message.role === 'assistant' && sideView !== 'single'
-                ? getSideRuns(message, sideView).map((run) => {
+                ? getSideRuns(message, sideView).map((run, index) => {
                     const rows = sortImagesBySeq(run.images).map((item) => ({ seq: item.seq, item }))
                     return renderRunCard(
                       run,
+                      index + 1,
                       rows,
                       undefined,
                       onOpenPreview,
                       onRetryRun,
+                      Boolean(expandedPromptByRunId[run.id]),
+                      togglePromptExpanded,
                     )
                   })
                 : null}

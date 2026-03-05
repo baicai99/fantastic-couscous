@@ -10,11 +10,13 @@ export interface StagedSettingsState {
   sideMode: SideMode
   sideCount?: number
   settingsBySide?: Partial<Record<Side, SingleSideSettings>>
+  runConcurrency?: number
+  dynamicPromptEnabled?: boolean
 }
 
 function latestUserPrompt(messages: Message[] | undefined): string {
   if (!Array.isArray(messages) || messages.length === 0) {
-    return '暂无消息'
+    return '鏆傛棤娑堟伅'
   }
 
   for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -24,7 +26,7 @@ function latestUserPrompt(messages: Message[] | undefined): string {
     }
   }
 
-  return '暂无消息'
+  return '鏆傛棤娑堟伅'
 }
 
 function contentStorageKey(conversationId: string): string {
@@ -145,13 +147,23 @@ export function loadStagedSettingsFromStorage(): StagedSettingsState | null {
       return null
     }
 
-    const parsed = JSON.parse(raw) as { sideMode?: string; sideCount?: unknown; settingsBySide?: unknown }
+    const parsed = JSON.parse(raw) as {
+      sideMode?: string
+      sideCount?: unknown
+      settingsBySide?: unknown
+      runConcurrency?: unknown
+      dynamicPromptEnabled?: unknown
+    }
     const sideMode: SideMode = parsed?.sideMode === 'multi' || parsed?.sideMode === 'ab' ? 'multi' : 'single'
     const sideCount = typeof parsed?.sideCount === 'number' ? Math.max(2, Math.floor(parsed.sideCount)) : undefined
     const settingsBySide =
       parsed?.settingsBySide && typeof parsed.settingsBySide === 'object' ? parsed.settingsBySide : undefined
+    const runConcurrency =
+      typeof parsed?.runConcurrency === 'number' ? Math.max(1, Math.floor(parsed.runConcurrency)) : undefined
+    const dynamicPromptEnabled =
+      typeof parsed?.dynamicPromptEnabled === 'boolean' ? parsed.dynamicPromptEnabled : undefined
 
-    return { sideMode, sideCount, settingsBySide }
+    return { sideMode, sideCount, settingsBySide, runConcurrency, dynamicPromptEnabled }
   } catch {
     return null
   }

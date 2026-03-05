@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { ReloadOutlined } from '@ant-design/icons'
 import {
@@ -56,6 +56,8 @@ interface SettingsPanelProps {
   models: ModelSpec[]
   channels: ApiChannel[]
   showAdvancedVariables: boolean
+  dynamicPromptEnabled: boolean
+  runConcurrency: number
   onSideModeChange: (mode: SideMode) => void
   onSideCountChange: (count: number) => void
   onSettingsChange: (side: Side, patch: Partial<SingleSideSettings>) => void
@@ -63,6 +65,8 @@ interface SettingsPanelProps {
   onModelParamChange: (side: Side, paramKey: string, value: SettingPrimitive) => void
   onChannelsChange: (channels: ApiChannel[]) => void
   onShowAdvancedVariablesChange: (enabled: boolean) => void
+  onDynamicPromptEnabledChange: (enabled: boolean) => void
+  onRunConcurrencyChange: (value: number) => void
 }
 
 type SettingsPanelCollapseState = {
@@ -233,6 +237,8 @@ export function SettingsPanel(props: SettingsPanelProps) {
     models,
     channels,
     showAdvancedVariables,
+    dynamicPromptEnabled,
+    runConcurrency,
     onSideModeChange,
     onSideCountChange,
     onSettingsChange,
@@ -240,6 +246,8 @@ export function SettingsPanel(props: SettingsPanelProps) {
     onModelParamChange,
     onChannelsChange,
     onShowAdvancedVariablesChange,
+    onDynamicPromptEnabledChange,
+    onRunConcurrencyChange,
   } = props
 
   const [activeSideTab, setActiveSideTab] = useState<Side>(sideIds[0] ?? 'single')
@@ -722,13 +730,29 @@ export function SettingsPanel(props: SettingsPanelProps) {
               </Space>
             ),
           },
-          {
+                    {
             key: 'advanced',
             label: '高级功能',
             children: (
-              <Space>
-                <Switch checked={showAdvancedVariables} onChange={onShowAdvancedVariablesChange} />
-                <Text>显示输入框高级变量</Text>
+              <Space direction="vertical" className="full-width" size={10}>
+                <Space>
+                  <Switch checked={showAdvancedVariables} onChange={onShowAdvancedVariablesChange} />
+                  <Text>显示输入框高级变量</Text>
+                </Space>
+                <Space>
+                  <Switch checked={dynamicPromptEnabled} onChange={onDynamicPromptEnabledChange} />
+                  <Text>启用动态提示词</Text>
+                </Space>
+                <Form layout="vertical">
+                  <Form.Item label="循环并发" style={{ marginBottom: 0 }}>
+                    <InputNumber
+                      className="full-width"
+                      min={1}
+                      value={runConcurrency}
+                      onChange={(value) => onRunConcurrencyChange(typeof value === 'number' ? value : 1)}
+                    />
+                  </Form.Item>
+                </Form>
               </Space>
             ),
           },
@@ -849,4 +873,3 @@ export function SettingsPanel(props: SettingsPanelProps) {
     </div>
   )
 }
-

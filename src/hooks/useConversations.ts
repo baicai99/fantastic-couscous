@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+﻿import { useEffect, useMemo, useRef, useState } from 'react'
 import { getModelCatalogFromChannels } from '../services/modelCatalog'
 import type {
   Conversation,
@@ -13,10 +13,11 @@ import { appendMessagesToConversation, createConversation, makeId, toSummary } f
 import { createConversationOrchestrator } from '../features/conversation/application/conversationOrchestrator'
 import { createRunExecutor } from '../features/conversation/application/runExecutor'
 import {
+  buildPanelVariableBatches,
   getMultiSideIds,
   normalizeSettingsBySide,
 } from '../features/conversation/domain/conversationDomain'
-import type { PanelVariableRow, TableVariableRow, VariableInputMode } from '../features/conversation/domain/types'
+import type { PanelVariableRow } from '../features/conversation/domain/types'
 import { createConversationRepository } from '../features/conversation/infra/conversationRepository'
 import {
   conversationSelectors,
@@ -43,7 +44,7 @@ function upsertConversationState(
   return { nextSummaries, nextContents }
 }
 
-export type { VariableInputMode, TableVariableRow, PanelVariableRow }
+export type { PanelVariableRow }
 
 export function useConversations() {
   const repository = useMemo(() => createConversationRepository(), [])
@@ -72,6 +73,8 @@ export function useConversations() {
   const activeConversation = conversationSelectors.selectActiveConversation(state)
   const { activeSideMode, activeSideCount, activeSettingsBySide } = conversationSelectors.selectActiveSettings(state)
   const { resolvedVariables, templatePreview, unusedVariableKeys } = conversationSelectors.selectTemplatePreview(state)
+  const panelBatchValidation = useMemo(() => buildPanelVariableBatches(state.panelVariables).validation, [state.panelVariables])
+  const isPanelBatchInvalid = state.dynamicPromptEnabled && !panelBatchValidation.ok
 
   const activeSides = useMemo(
     () => (activeSideMode === 'single' ? (['single'] as Side[]) : getMultiSideIds(activeSideCount)),
@@ -104,11 +107,15 @@ export function useConversations() {
     mode: SideMode,
     sideCount: number,
     settingsBySide: Record<Side, SingleSideSettings>,
+    runConcurrency: number,
+    dynamicPromptEnabled: boolean,
   ) => {
     repository.saveStagedSettings({
       sideMode: mode,
       sideCount,
       settingsBySide,
+      runConcurrency,
+      dynamicPromptEnabled,
     })
 
     dispatch({
@@ -129,7 +136,13 @@ export function useConversations() {
     const normalizedCount = Math.max(2, Math.floor(sideCount))
     const normalizedSettings = normalizeSettingsBySide(settingsBySide, state.channels, modelCatalog, normalizedCount)
 
-    saveStagedSettings(mode, normalizedCount, normalizedSettings)
+    saveStagedSettings(
+      mode,
+      normalizedCount,
+      normalizedSettings,
+      stateRef.current.runConcurrency,
+      stateRef.current.dynamicPromptEnabled,
+    )
 
     const current = stateRef.current
     const currentActive = current.activeId ? current.contents[current.activeId] ?? null : null
@@ -151,7 +164,13 @@ export function useConversations() {
     const seedSideCount = activeSideCount
     const seedSettings = normalizeSettingsBySide(activeSettingsBySide, state.channels, modelCatalog, seedSideCount)
 
-    saveStagedSettings(seedMode, seedSideCount, seedSettings)
+    saveStagedSettings(
+      seedMode,
+      seedSideCount,
+      seedSettings,
+      stateRef.current.runConcurrency,
+      stateRef.current.dynamicPromptEnabled,
+    )
 
     setActiveConversation(null)
     actions.setDraft('')
@@ -268,6 +287,8 @@ export function useConversations() {
       sideMode: activeSideMode,
       sideCount: activeSideCount,
       settingsBySide: normalized,
+      runConcurrency: stateRef.current.runConcurrency,
+      dynamicPromptEnabled: stateRef.current.dynamicPromptEnabled,
     })
 
     dispatch({
@@ -292,6 +313,43 @@ export function useConversations() {
     }
   }
 
+
+  const setRunConcurrency = (value: number) => {
+    const next = Math.max(1, Math.floor(value))
+    dispatch({ type: 'settings/setRunConcurrency', payload: next })
+
+    const snapshot = stateRef.current
+    repository.saveStagedSettings({
+      sideMode: activeSideMode,
+      sideCount: activeSideCount,
+      settingsBySide: activeSettingsBySide,
+      runConcurrency: next,
+      dynamicPromptEnabled: snapshot.dynamicPromptEnabled,
+    })
+
+    stateRef.current = {
+      ...snapshot,
+      runConcurrency: next,
+    }
+  }
+
+  const setDynamicPromptEnabled = (value: boolean) => {
+    actions.setDynamicPromptEnabled(value)
+
+    const snapshot = stateRef.current
+    repository.saveStagedSettings({
+      sideMode: activeSideMode,
+      sideCount: activeSideCount,
+      settingsBySide: activeSettingsBySide,
+      runConcurrency: snapshot.runConcurrency,
+      dynamicPromptEnabled: value,
+    })
+
+    stateRef.current = {
+      ...snapshot,
+      dynamicPromptEnabled: value,
+    }
+  }
   const replaceRunsInConversation = (conversationId: string, nextRunsById: Map<string, Run>) => {
     const snapshot = stateRef.current
     const currentConversation = snapshot.contents[conversationId]
@@ -382,9 +440,9 @@ export function useConversations() {
         plan.settingsBySide,
         plan.mode,
         plan.sideCount,
-        `对话 ${snapshot.summaries.length + 1}`,
+        `Conversation ${snapshot.summaries.length + 1}`,
       )
-      const updatedConversation = appendMessagesToConversation(conversation, plan.finalPrompt, plan.pendingRuns)
+      const updatedConversation = appendMessagesToConversation(conversation, plan.userPrompt, plan.pendingRuns)
       persistConversation(updatedConversation)
       setActiveConversation(updatedConversation.id)
       targetConversationId = updatedConversation.id
@@ -396,7 +454,7 @@ export function useConversations() {
           sideCount: plan.sideCount,
           settingsBySide: plan.settingsBySide,
         },
-        plan.finalPrompt,
+        plan.userPrompt,
         plan.pendingRuns,
       )
       persistConversation(updatedConversation)
@@ -412,9 +470,9 @@ export function useConversations() {
           sideMode: plan.mode,
           side: runPlan.side,
           settings: runPlan.settings,
-          templatePrompt: plan.templatePrompt,
-          finalPrompt: plan.finalPrompt,
-          variablesSnapshot: plan.variablesSnapshot,
+          templatePrompt: runPlan.pendingRun.templatePrompt,
+          finalPrompt: runPlan.pendingRun.finalPrompt,
+          variablesSnapshot: runPlan.pendingRun.variablesSnapshot,
           modelId: runPlan.modelId,
           modelName: runPlan.modelName,
           paramsSnapshot: runPlan.paramsSnapshot,
@@ -422,13 +480,14 @@ export function useConversations() {
           pendingRunId: runPlan.pendingRun.id,
           pendingCreatedAt: runPlan.pendingRun.createdAt,
         })),
+        snapshot.runConcurrency,
       )
 
       const map = new Map(completedRuns.map((run) => [run.id, run]))
       replaceRunsInConversation(targetConversationId, map)
       dispatch({ type: 'send/succeed' })
     } catch (error) {
-      const message = error instanceof Error ? error.message : '发送失败'
+      const message = error instanceof Error ? error.message : 'Unknown error'
       dispatch({ type: 'send/fail', payload: message })
     }
   }
@@ -547,7 +606,7 @@ export function useConversations() {
         id: makeId(),
         createdAt: now,
         role: 'assistant',
-        content: '已提交“再来一次”请求，完成后可预览。',
+        content: 'Replay request submitted. Click images to preview.',
         runs: [pendingRun],
       }
 
@@ -591,10 +650,9 @@ export function useConversations() {
     sendError: state.sendError,
     isSending: state.isSending,
     showAdvancedVariables: state.showAdvancedVariables,
-    variableMode: state.variableMode,
-    tableVariables: state.tableVariables,
-    inlineVariablesText: state.inlineVariablesText,
+    dynamicPromptEnabled: state.dynamicPromptEnabled,
     panelVariables: state.panelVariables,
+    runConcurrency: state.runConcurrency,
     resolvedVariables,
     templatePreview,
     unusedVariableKeys,
@@ -607,10 +665,9 @@ export function useConversations() {
     channels: state.channels,
     setDraft: actions.setDraft,
     setShowAdvancedVariables: actions.setAdvancedVariables,
-    setVariableMode: actions.setVariableMode,
-    setTableVariables: actions.setTableVariables,
-    setInlineVariablesText: actions.setInlineVariablesText,
+    setDynamicPromptEnabled,
     setPanelVariables: actions.setPanelVariables,
+    setRunConcurrency,
     createNewConversation,
     clearAllConversations,
     removeConversation,
@@ -622,9 +679,14 @@ export function useConversations() {
     setSideModelParam,
     setChannels,
     sendDraft,
+    isSendBlocked: isPanelBatchInvalid,
+    panelBatchError: isPanelBatchInvalid ? panelBatchValidation.error : '',
+    panelMismatchRowIds: panelBatchValidation.mismatchRowIds,
     retryRun,
     editRunTemplate,
     replayRunAsNewMessage,
     replayingRunIds,
   }
 }
+
+
