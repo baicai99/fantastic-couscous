@@ -495,7 +495,6 @@ export function SettingsPanel(props: SettingsPanelProps) {
                 />
                 <Space>
                   <Button onClick={() => setIsDrawerOpen(true)}>管理渠道</Button>
-                  {currentChannel ? <Tag color="blue">当前：{currentChannel.name}</Tag> : <Tag>未选择</Tag>}
                 </Space>
               </Space>
             ),

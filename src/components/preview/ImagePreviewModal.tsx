@@ -115,6 +115,12 @@ export function ImagePreviewModal(props: ImagePreviewModalProps) {
   } = props
 
   const stageRef = useRef<HTMLDivElement | null>(null)
+  const previewIdentity = useMemo(() => {
+    if (previewMode === 'ab') {
+      return `${currentPreviewPair?.seq ?? '-'}:${currentPreviewPair?.left?.id ?? '-'}:${currentPreviewPair?.right?.id ?? '-'}`
+    }
+    return currentPreviewImage?.id ?? '-'
+  }, [currentPreviewImage?.id, currentPreviewPair?.left?.id, currentPreviewPair?.right?.id, currentPreviewPair?.seq, previewMode])
 
   const previewLength = previewMode === 'ab' ? previewPairs.length : previewImages.length
   const hintParts = useMemo(() => previewHint.split('|').map((item) => item.trim()).filter(Boolean), [previewHint])
@@ -284,6 +290,14 @@ export function ImagePreviewModal(props: ImagePreviewModalProps) {
       window.clearTimeout(timer)
     }
   }, [focusStage, isPreviewOpen])
+
+  useEffect(() => {
+    if (!isPreviewOpen) {
+      return
+    }
+    // Ensure each newly opened/switched image starts in true fit mode.
+    resetTransform()
+  }, [isPreviewOpen, previewIdentity, resetTransform])
 
   useEffect(() => {
     if (!isPreviewOpen || zoom <= 1 || isDragging) {
