@@ -1,5 +1,5 @@
 ﻿import type { ApiChannel, SettingPrimitive } from '../types/chat'
-import { getResolutionRule } from './imageSizing'
+import { getComputedPresetResolution, normalizeSizeTier } from './imageSizing'
 
 interface GenerateImagesInput {
   channel: ApiChannel
@@ -17,7 +17,6 @@ interface RawImageItem {
   url?: unknown
   b64_json?: unknown
 }
-
 
 function normalizeBaseUrl(value: string): string {
   return value.replace(/\/+$/, '')
@@ -51,31 +50,22 @@ function getStringParam(
   return typeof value === 'string' && value.trim() ? value.trim() : fallback
 }
 
-function isGemini3Series(modelId: string): boolean {
-  return modelId.startsWith('gemini-3') || modelId.startsWith('nano-banana-pro')
+function isPixelSize(value: string): boolean {
+  return /^\d+x\d+$/i.test(value)
 }
 
-function isFixedTierModel(modelId: string): boolean {
-  const value = modelId.toLowerCase()
-  return value.endsWith('-0.5k') || value.endsWith('-2k') || value.endsWith('-4k')
-}
+function toPixelSize(rawSize: string, aspectRatio: string): string {
+  if (isPixelSize(rawSize)) {
+    return rawSize
+  }
 
-function parseFixedTier(modelId: string): '0.5K' | '2K' | '4K' | null {
-  const value = modelId.toLowerCase()
-  if (value.endsWith('-0.5k')) {
-    return '0.5K'
+  if (/^\d+:\d+$/.test(rawSize)) {
+    const computedByAspect = getComputedPresetResolution(rawSize, '1K')
+    return computedByAspect ?? '1024x1024'
   }
-  if (value.endsWith('-2k')) {
-    return '2K'
-  }
-  if (value.endsWith('-4k')) {
-    return '4K'
-  }
-  return null
-}
 
-function isAspectRatio(value: string): boolean {
-  return /^\d+:\d+$/.test(value)
+  const computedByTier = getComputedPresetResolution(aspectRatio, normalizeSizeTier(rawSize))
+  return computedByTier ?? '1024x1024'
 }
 
 function getModelCandidates(modelId: string): string[] {
@@ -105,41 +95,21 @@ function getModelCandidates(modelId: string): string[] {
 }
 
 function buildRequestBody(
-  selectedModelId: string,
   requestModelId: string,
   prompt: string,
   paramValues: Record<string, SettingPrimitive>,
 ): Record<string, unknown> {
   const responseFormat = getStringParam(paramValues, 'responseFormat', 'url')
-  const selectedSize = getStringParam(paramValues, 'size', '1K')
+  const selectedSize = getStringParam(paramValues, 'size', '1024x1024')
   const selectedAspectRatio = getStringParam(paramValues, 'aspectRatio', '1:1')
-  const resolutionRule = getResolutionRule(selectedSize)
-  const selectedTier = parseFixedTier(selectedModelId)
-  const requestTier = parseFixedTier(requestModelId)
-  const resolvedAspectRatio = resolutionRule?.aspectRatio ?? selectedAspectRatio
-  const resolvedSize =
-    resolutionRule && resolutionRule.tier
-      ? resolutionRule.tier
-      : selectedSize
+  const resolvedSize = toPixelSize(selectedSize, selectedAspectRatio)
 
-  const body: Record<string, unknown> = {
+  return {
     model: requestModelId,
     prompt,
     response_format: responseFormat,
     size: resolvedSize,
   }
-
-  if (selectedTier && !requestTier && isGemini3Series(requestModelId)) {
-    body.size = selectedTier
-    body.aspect_ratio = isAspectRatio(selectedSize) ? selectedSize : resolvedAspectRatio
-    return body
-  }
-
-  if (isGemini3Series(requestModelId) && !isFixedTierModel(requestModelId)) {
-    body.aspect_ratio = isAspectRatio(selectedSize) ? selectedSize : resolvedAspectRatio
-  }
-
-  return body
 }
 
 function toImageSrc(item: RawImageItem): string | null {
@@ -193,7 +163,7 @@ export async function generateImages(input: GenerateImagesInput): Promise<Genera
       : null
 
   async function doRequest(url: string, requestModelId: string): Promise<string> {
-    const body = buildRequestBody(modelId, requestModelId, prompt, paramValues)
+    const body = buildRequestBody(requestModelId, prompt, paramValues)
     const response = await fetch(url, {
       method: 'POST',
       headers: {

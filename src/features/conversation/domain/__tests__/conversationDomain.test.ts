@@ -150,4 +150,64 @@ describe('conversationDomain settings normalization', () => {
     expect(normalized['win-1'].modelId).toBe('model-a')
     expect(normalized['win-2'].paramValues.quality).toBe('hd')
   })
+
+  it('maps preset size to pixel size in params snapshot', () => {
+    const base = normalizeSettingsBySide(undefined, channels, catalog, 2)
+    const settingsBySide = {
+      ...base,
+      single: {
+        ...base.single,
+        sizeMode: 'preset' as const,
+        resolution: '2K',
+        aspectRatio: '16:9',
+      },
+    }
+
+    const result = planRunBatch({
+      draft: 'pixel preset',
+      panelVariables: [],
+      mode: 'single',
+      sideCount: 2,
+      settingsBySide,
+      channels,
+      modelCatalog: catalog,
+    })
+
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      const params = result.value.runPlans[0].paramsSnapshot
+      expect(params.size).toBe('2752x1536')
+      expect(params).not.toHaveProperty('aspectRatio')
+    }
+  })
+
+  it('maps custom width/height to pixel size in params snapshot', () => {
+    const base = normalizeSettingsBySide(undefined, channels, catalog, 2)
+    const settingsBySide = {
+      ...base,
+      single: {
+        ...base.single,
+        sizeMode: 'custom' as const,
+        customWidth: 640,
+        customHeight: 960,
+      },
+    }
+
+    const result = planRunBatch({
+      draft: 'pixel custom',
+      panelVariables: [],
+      mode: 'single',
+      sideCount: 2,
+      settingsBySide,
+      channels,
+      modelCatalog: catalog,
+    })
+
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      const params = result.value.runPlans[0].paramsSnapshot
+      expect(params.size).toBe('640x960')
+      expect(params).not.toHaveProperty('aspectRatio')
+    }
+  })
 })

@@ -58,6 +58,9 @@ npm run test:watch  # 监听模式测试
 - 模型列表拉取：`GET /v1/models`（也兼容 `/models`）
 - 图片生成：`POST /v1/images/generations`（失败时会尝试 `/v1/image/generations`）
 - 鉴权方式：`Authorization: Bearer <API_KEY>`
+- 尺寸参数：最终请求仅提交 `size: "宽x高"`（例如 `1024x1024`），不提交 `aspect_ratio`
+
+UI 中的“比例/预设尺寸”仅用于交互选择，发送请求前会统一换算为像素宽高字符串。
 
 `baseUrl` 可填写：
 

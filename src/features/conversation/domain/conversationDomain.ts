@@ -4,7 +4,7 @@ import {
   getModelById,
   normalizeParamValues,
 } from '../../../services/modelCatalog'
-import { normalizeSizeTier } from '../../../services/imageSizing'
+import { getComputedPresetResolution, normalizeSizeTier } from '../../../services/imageSizing'
 import type {
   ApiChannel,
   Conversation,
@@ -359,7 +359,11 @@ export function getEffectiveSize(settings: SingleSideSettings): string {
   if (settings.sizeMode === 'custom') {
     return `${settings.customWidth}x${settings.customHeight}`
   }
-  return settings.resolution
+  if (/^\d+x\d+$/i.test(settings.resolution)) {
+    return settings.resolution
+  }
+  const computed = getComputedPresetResolution(settings.aspectRatio, normalizeSizeTier(settings.resolution))
+  return computed ?? '1024x1024'
 }
 
 export function getEffectiveAspectRatio(settings: SingleSideSettings): string {
@@ -421,7 +425,6 @@ export function planRunBatch(input: {
       const paramsSnapshot: Record<string, SettingPrimitive> = {
         ...normalizeParamValues(model, settings.paramValues),
         size: getEffectiveSize(settings),
-        aspectRatio: getEffectiveAspectRatio(settings),
       }
       const channel = input.channels.find((item) => item.id === settings.channelId)
       const imageCount = clamp(Math.floor(settings.imageCount), 1, 8)
