@@ -57,6 +57,19 @@ function getSideRuns(message: Message, sideView: Side): Run[] {
   return (message.runs ?? []).filter((run) => run.sideMode === 'multi' && run.side === sideView)
 }
 
+function shouldRenderAssistantMessage(message: Message, sideView: Side): boolean {
+  const runs = message.runs ?? []
+  if (runs.length === 0) {
+    return true
+  }
+
+  if (sideView === 'single') {
+    return getSingleRuns(message).length > 0
+  }
+
+  return getSideRuns(message, sideView).length > 0
+}
+
 function getFailureSummary(run: Run): string | null {
   const failed = run.images.filter((item) => item.status === 'failed')
   if (failed.length === 0) {
@@ -367,7 +380,9 @@ function MessageListComponent(props: MessageListProps) {
     <div ref={viewportRef} className="full-width" style={{ height: '100%', overflowY: 'auto' }}>
       <Space direction="vertical" size={12} className="full-width">
         {windowed.topSpacer > 0 ? <div style={{ height: `${windowed.topSpacer}px` }} /> : null}
-        {visibleMessages.map((message) => (
+        {visibleMessages
+          .filter((message) => (message.role === 'assistant' ? shouldRenderAssistantMessage(message, sideView) : true))
+          .map((message) => (
           <Card key={message.id} size="small" className={`message-card ${message.role}`}>
             <Space direction="vertical" size={8} className="full-width">
               <div className="message-head-row">

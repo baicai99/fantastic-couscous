@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+﻿import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { vi } from 'vitest'
 import { MessageList } from './MessageList'
@@ -107,6 +107,84 @@ function makeUserConversation(content = 'user prompt content'): Conversation {
         role: 'user',
         content,
         runs: [],
+      },
+    ],
+  }
+}
+
+function makeMultiConversationWithSideOnlyRun(targetSide: string): Conversation {
+  return {
+    id: 'c-multi',
+    title: 'Multi Conversation',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    sideMode: 'multi',
+    sideCount: 2,
+    settingsBySide: {
+      side_1: {
+        resolution: '1K',
+        aspectRatio: '1:1',
+        imageCount: 1,
+        gridColumns: 1,
+        sizeMode: 'preset',
+        customWidth: 1024,
+        customHeight: 1024,
+        autoSave: true,
+        channelId: null,
+        modelId: 'm',
+        paramValues: {},
+      },
+      side_2: {
+        resolution: '1K',
+        aspectRatio: '1:1',
+        imageCount: 1,
+        gridColumns: 1,
+        sizeMode: 'preset',
+        customWidth: 1024,
+        customHeight: 1024,
+        autoSave: true,
+        channelId: null,
+        modelId: 'm',
+        paramValues: {},
+      },
+    },
+    messages: [
+      {
+        id: 'm-side-only',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        role: 'assistant',
+        content: 'Replay request submitted. Click images to preview.',
+        runs: [
+          {
+            id: 'r-side-only',
+            batchId: 'b-side-only',
+            createdAt: '2026-01-01T00:00:00.000Z',
+            sideMode: 'multi',
+            side: targetSide,
+            prompt: 'p',
+            imageCount: 1,
+            channelId: null,
+            channelName: null,
+            modelId: 'm',
+            modelName: 'M',
+            templatePrompt: 'template',
+            finalPrompt: 'final',
+            variablesSnapshot: {},
+            paramsSnapshot: {},
+            settingsSnapshot: {
+              resolution: '1K',
+              aspectRatio: '1:1',
+              imageCount: 1,
+              gridColumns: 1,
+              sizeMode: 'preset',
+              customWidth: 1024,
+              customHeight: 1024,
+              autoSave: true,
+            },
+            retryAttempt: 0,
+            images: [{ id: 'i-side-only', seq: 1, status: 'pending' }],
+          },
+        ],
       },
     ],
   }
@@ -334,4 +412,35 @@ describe('MessageList', () => {
     await user.click(screen.getByRole('button', { name: /发送到输入框/ }))
     expect(onUseUserPrompt).toHaveBeenCalledWith(prompt)
   })
+  it('hides assistant messages that have no run for current multi side', () => {
+    const conversation = makeMultiConversationWithSideOnlyRun('side_2')
+    const { rerender } = render(
+      <div style={{ height: 600 }}>
+        <MessageList
+          activeConversation={conversation}
+          sideView="side_1"
+          onOpenPreview={() => {}}
+          onRetryRun={() => {}}
+          onReplayRun={() => {}}
+        />
+      </div>,
+    )
+
+    expect(screen.queryByText('Replay request submitted. Click images to preview.')).not.toBeInTheDocument()
+
+    rerender(
+      <div style={{ height: 600 }}>
+        <MessageList
+          activeConversation={conversation}
+          sideView="side_2"
+          onOpenPreview={() => {}}
+          onRetryRun={() => {}}
+          onReplayRun={() => {}}
+        />
+      </div>,
+    )
+
+    expect(screen.getByText('Replay request submitted. Click images to preview.')).toBeInTheDocument()
+  })
 })
+
