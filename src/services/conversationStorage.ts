@@ -1,5 +1,6 @@
 import type { ApiChannel, Conversation, ConversationSummary, Message, Side, SideMode, SingleSideSettings } from '../types/chat'
 import type { PanelValueFormat } from '../features/conversation/domain/types'
+import { getFirstUserPrompt, summarizePromptAsTitle } from '../utils/chat'
 
 const STORAGE_INDEX_KEY = 'm1:conversation-index'
 const STORAGE_ACTIVE_KEY = 'm1:active-conversation-id'
@@ -33,6 +34,14 @@ function latestUserPrompt(messages: Message[] | undefined): string {
   return '鏆傛棤娑堟伅'
 }
 
+function resolveConversationTitle(content: Conversation, fallbackTitle: string): string {
+  const firstPrompt = getFirstUserPrompt(content.messages)
+  if (firstPrompt) {
+    return summarizePromptAsTitle(firstPrompt)
+  }
+  return content.title?.trim() || fallbackTitle
+}
+
 function contentStorageKey(conversationId: string): string {
   return `${STORAGE_CONTENT_PREFIX}${conversationId}`
 }
@@ -62,7 +71,10 @@ export function loadConversationsFromStorage(): {
 
       const parsed = JSON.parse(rawContent) as Conversation
       if (parsed?.id) {
-        contents[parsed.id] = parsed
+        contents[parsed.id] = {
+          ...parsed,
+          title: resolveConversationTitle(parsed, parsed.title ?? summary.title),
+        }
       }
     }
 
@@ -73,6 +85,7 @@ export function loadConversationsFromStorage(): {
       }
       return {
         ...summary,
+        title: resolveConversationTitle(content, summary.title),
         updatedAt: content.updatedAt ?? summary.updatedAt,
         lastMessagePreview: latestUserPrompt(content.messages),
       }

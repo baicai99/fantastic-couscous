@@ -44,7 +44,7 @@ export function createConversation(
 
   return {
     id: makeId(),
-    title: title ?? `对话 ${new Date().toLocaleTimeString()}`,
+    title: title ?? '未命名',
     createdAt: now,
     updatedAt: now,
     sideMode,
@@ -52,6 +52,36 @@ export function createConversation(
     settingsBySide: copiedSettings,
     messages: [],
   }
+}
+
+const CONVERSATION_TITLE_MAX_CHARS = 36
+
+export function getFirstUserPrompt(messages: Message[] | undefined): string | null {
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return null
+  }
+
+  for (const message of messages) {
+    if (message?.role === 'user' && typeof message.content === 'string') {
+      const value = message.content.trim()
+      if (value) {
+        return value
+      }
+    }
+  }
+
+  return null
+}
+
+export function summarizePromptAsTitle(prompt: string, maxChars = CONVERSATION_TITLE_MAX_CHARS): string {
+  const normalized = prompt.replace(/\s+/g, ' ').trim()
+  if (!normalized) {
+    return '未命名'
+  }
+  if (normalized.length <= maxChars) {
+    return normalized
+  }
+  return `${normalized.slice(0, maxChars).trimEnd()}...`
 }
 
 export function toSummary(conversation: Conversation): ConversationSummary {
@@ -247,8 +277,12 @@ export function appendMessagesToConversation(
     runs,
   }
 
+  const hadUserMessage = Boolean(getFirstUserPrompt(conversation.messages))
+  const nextTitle = !hadUserMessage ? summarizePromptAsTitle(userPrompt) : conversation.title
+
   return {
     ...conversation,
+    title: nextTitle,
     updatedAt: now,
     messages: [...conversation.messages, userMessage, assistantMessage],
   }

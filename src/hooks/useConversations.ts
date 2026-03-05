@@ -703,7 +703,6 @@ export function useConversations() {
         plan.settingsBySide,
         plan.mode,
         plan.sideCount,
-        `Conversation ${snapshot.summaries.length + 1}`,
       )
       const updatedConversation = appendMessagesToConversation(conversation, plan.userPrompt, plan.pendingRuns)
       persistConversation(updatedConversation)
@@ -1097,4 +1096,3 @@ export function useConversations() {
     replayingRunIds,
   }
 }
-

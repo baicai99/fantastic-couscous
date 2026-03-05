@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
-import { HistoryOutlined, SettingOutlined } from '@ant-design/icons'
+import { SettingOutlined } from '@ant-design/icons'
 import { Button, Card, Col, Layout, Row, Space, Tag, Typography } from 'antd'
 import { Composer } from '../../../components/chat/Composer'
 import { MessageList } from '../../../components/chat/MessageList'
@@ -187,18 +187,27 @@ export function ConversationWorkspace() {
 
   return (
     <Layout className="app-shell">
-      {!isLeftPanelCollapsed ? (
-        <Sider width={280} className="panel">
-          <ConversationList
-            summaries={summaries}
-            activeId={activeId}
-            onCreateConversation={createNewConversation}
-            onClearAllConversations={clearAllConversations}
-            onDeleteConversation={removeConversation}
-            onSwitchConversation={switchConversation}
-          />
-        </Sider>
-      ) : null}
+      <Sider
+        width={280}
+        collapsedWidth={72}
+        collapsible
+        trigger={null}
+        collapsed={isLeftPanelCollapsed}
+        breakpoint="lg"
+        onBreakpoint={(broken) => setIsLeftPanelCollapsed(broken)}
+        className="panel panel-left"
+      >
+        <ConversationList
+          summaries={summaries}
+          activeId={activeId}
+          isCollapsed={isLeftPanelCollapsed}
+          onToggleCollapse={() => setIsLeftPanelCollapsed((prev) => !prev)}
+          onCreateConversation={createNewConversation}
+          onClearAllConversations={clearAllConversations}
+          onDeleteConversation={removeConversation}
+          onSwitchConversation={switchConversation}
+        />
+      </Sider>
 
       <Layout className="panel-center">
         <div className="chat-stage" style={chatStageStyle}>
@@ -207,9 +216,6 @@ export function ConversationWorkspace() {
               <Card size="small" className="chat-header-card" bordered={false}>
                 <div className="chat-header-card-content">
                   <Space size={8} wrap>
-                    <Button icon={<HistoryOutlined />} onClick={() => setIsLeftPanelCollapsed((prev) => !prev)}>
-                      {isLeftPanelCollapsed ? '展开左侧面板' : '收起左侧面板'}
-                    </Button>
                     <Button icon={<SettingOutlined />} onClick={() => setIsRightPanelCollapsed((prev) => !prev)}>
                       {isRightPanelCollapsed ? '展开右侧面板' : '收起右侧面板'}
                     </Button>
