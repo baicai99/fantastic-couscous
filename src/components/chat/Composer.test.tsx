@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import type { PanelValueFormat, PanelVariableRow } from '../../features/conversation/domain/types'
+import type { SideMode } from '../../types/chat'
 import { Composer } from './Composer'
 
 function makeRows(): PanelVariableRow[] {
@@ -15,13 +16,17 @@ function renderComposer(
   isSending = false,
   draft = '',
   onDraftChange = vi.fn(),
+  dynamicPromptEnabled = true,
+  onDynamicPromptEnabledChange = vi.fn(),
+  sideMode: SideMode = 'single',
+  onSideModeChange = vi.fn(),
 ) {
   return render(
     <Composer
       draft={draft}
       sendError=""
       showAdvancedVariables
-      dynamicPromptEnabled
+      dynamicPromptEnabled={dynamicPromptEnabled}
       panelValueFormat={format}
       panelVariables={makeRows()}
       resolvedVariables={{}}
@@ -32,9 +37,12 @@ function renderComposer(
       isSendBlocked={false}
       panelBatchError=""
       panelMismatchRowIds={[]}
+      sideMode={sideMode}
       onDraftChange={onDraftChange}
       onPanelValueFormatChange={onFormatChange}
       onPanelVariablesChange={onPanelVariablesChange}
+      onDynamicPromptEnabledChange={onDynamicPromptEnabledChange}
+      onSideModeChange={onSideModeChange}
       onSend={onSend}
     />,
   )
@@ -133,7 +141,8 @@ describe('Composer panel value format', () => {
     fireEvent.change(textarea, { target: { value: '/', selectionStart: 1, selectionEnd: 1 } })
 
     expect(screen.getByRole('listbox', { name: '快捷功能选择' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '创建图片' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '动态提示词' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '对照模式' })).toBeInTheDocument()
   })
 
   it('does not open quick picker when "/" is not at line start', () => {
@@ -154,32 +163,116 @@ describe('Composer panel value format', () => {
     expect(screen.getByRole('listbox', { name: '快捷功能选择' })).toBeInTheDocument()
   })
 
-  it('clicking quick picker item renders chip and does not send', () => {
+  it('clicking quick picker item enables dynamic prompt and does not send', () => {
     const onDraftChange = vi.fn()
     const onSend = vi.fn()
-    renderComposer('json', vi.fn(), vi.fn(), onSend, false, '', onDraftChange)
+    const onDynamicPromptEnabledChange = vi.fn()
+    renderComposer('json', vi.fn(), vi.fn(), onSend, false, '', onDraftChange, false, onDynamicPromptEnabledChange)
 
-    const textarea = screen.getByPlaceholderText('输入模板 prompt，例如：a {{style}} portrait of {{subject}}')
+    const textarea = screen.getByPlaceholderText('输入普通 prompt，例如：a cinematic portrait of a girl')
     fireEvent.change(textarea, { target: { value: '/', selectionStart: 1, selectionEnd: 1 } })
-    fireEvent.click(screen.getByRole('button', { name: '创建图片' }))
+    fireEvent.click(screen.getByRole('button', { name: '动态提示词' }))
 
-    expect(screen.getByText('创建图片')).toBeInTheDocument()
     expect(onDraftChange).toHaveBeenLastCalledWith('')
+    expect(onDynamicPromptEnabledChange).toHaveBeenCalledWith(true)
     expect(onSend).not.toHaveBeenCalled()
     expect(screen.queryByRole('listbox', { name: '快捷功能选择' })).not.toBeInTheDocument()
   })
 
-  it('shows remove icon on hover and allows deleting selected chip', () => {
-    renderComposer('json')
+  it('deleting dynamic prompt chip disables dynamic prompt', () => {
+    const onDynamicPromptEnabledChange = vi.fn()
+    renderComposer('json', vi.fn(), vi.fn(), vi.fn(), false, '', vi.fn(), true, onDynamicPromptEnabledChange)
+
+    const removeButton = screen.getByRole('button', { name: '移除 动态提示词' })
+    fireEvent.click(removeButton)
+
+    expect(onDynamicPromptEnabledChange).toHaveBeenCalledWith(false)
+  })
+
+  it('reflects dynamic prompt chip from external setting state', () => {
+    const { rerender } = renderComposer('json', vi.fn(), vi.fn(), vi.fn(), false, '', vi.fn(), false)
+    expect(screen.queryByText('动态提示词')).not.toBeInTheDocument()
+
+    rerender(
+      <Composer
+        draft=""
+        sendError=""
+        showAdvancedVariables
+        dynamicPromptEnabled
+        panelValueFormat="json"
+        panelVariables={makeRows()}
+        resolvedVariables={{}}
+        finalPromptPreview=""
+        missingKeys={[]}
+        unusedVariableKeys={[]}
+        isSending={false}
+        isSendBlocked={false}
+        panelBatchError=""
+        panelMismatchRowIds={[]}
+        sideMode="single"
+        onDraftChange={vi.fn()}
+        onPanelValueFormatChange={vi.fn()}
+        onPanelVariablesChange={vi.fn()}
+        onDynamicPromptEnabledChange={vi.fn()}
+        onSideModeChange={vi.fn()}
+        onSend={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByText('动态提示词')).toBeInTheDocument()
+  })
+
+  it('clicking quick picker comparison mode enables multi side mode', () => {
+    const onSideModeChange = vi.fn()
+    renderComposer('json', vi.fn(), vi.fn(), vi.fn(), false, '', vi.fn(), true, vi.fn(), 'single', onSideModeChange)
 
     const textarea = screen.getByPlaceholderText('输入模板 prompt，例如：a {{style}} portrait of {{subject}}')
     fireEvent.change(textarea, { target: { value: '/', selectionStart: 1, selectionEnd: 1 } })
-    fireEvent.click(screen.getByRole('button', { name: '创建图片' }))
+    fireEvent.click(screen.getByRole('button', { name: '对照模式' }))
 
-    const removeButton = screen.getByRole('button', { name: '移除 创建图片' })
+    expect(onSideModeChange).toHaveBeenCalledWith('multi')
+  })
+
+  it('deleting comparison mode chip disables multi side mode', () => {
+    const onSideModeChange = vi.fn()
+    renderComposer('json', vi.fn(), vi.fn(), vi.fn(), false, '', vi.fn(), true, vi.fn(), 'multi', onSideModeChange)
+
+    const removeButton = screen.getByRole('button', { name: '移除 对照模式' })
     fireEvent.click(removeButton)
+    expect(onSideModeChange).toHaveBeenCalledWith('single')
+  })
 
-    expect(screen.queryByText('创建图片')).not.toBeInTheDocument()
+  it('reflects comparison mode chip from external setting state', () => {
+    const { rerender } = renderComposer('json', vi.fn(), vi.fn(), vi.fn(), false, '', vi.fn(), true, vi.fn(), 'single')
+    expect(screen.queryByText('对照模式')).not.toBeInTheDocument()
+
+    rerender(
+      <Composer
+        draft=""
+        sendError=""
+        showAdvancedVariables
+        dynamicPromptEnabled
+        panelValueFormat="json"
+        panelVariables={makeRows()}
+        resolvedVariables={{}}
+        finalPromptPreview=""
+        missingKeys={[]}
+        unusedVariableKeys={[]}
+        isSending={false}
+        isSendBlocked={false}
+        panelBatchError=""
+        panelMismatchRowIds={[]}
+        sideMode="multi"
+        onDraftChange={vi.fn()}
+        onPanelValueFormatChange={vi.fn()}
+        onPanelVariablesChange={vi.fn()}
+        onDynamicPromptEnabledChange={vi.fn()}
+        onSideModeChange={vi.fn()}
+        onSend={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByText('对照模式')).toBeInTheDocument()
   })
 
   it('closes quick picker with Escape', () => {

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { SendOutlined, SettingOutlined } from '@ant-design/icons'
 import { Alert, Button, Card, Drawer, Input, Modal, Segmented, Select, Space, Table, Tabs, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
+import type { SideMode } from '../../types/chat'
 import {
   buildSyncPreview,
   parseBulkVariables,
@@ -42,13 +43,18 @@ interface ComposerProps {
   isSendBlocked: boolean
   panelBatchError: string
   panelMismatchRowIds: string[]
+  sideMode: SideMode
   onDraftChange: (value: string) => void
   onPanelValueFormatChange: (value: PanelValueFormat) => void
   onPanelVariablesChange: (rows: PanelVariableRow[]) => void
+  onDynamicPromptEnabledChange: (value: boolean) => void
+  onSideModeChange: (mode: SideMode) => void
   onSend: () => void
 }
 
-const QUICK_PICKER_ITEMS = ['创建图片', '深度研究', '智能购物', '网页搜索', '总结要点', '翻译润色']
+const DYNAMIC_PROMPT_QUICK_ACTION = '动态提示词'
+const COMPARISON_MODE_QUICK_ACTION = '对照模式'
+const QUICK_PICKER_ITEMS = [DYNAMIC_PROMPT_QUICK_ACTION, COMPARISON_MODE_QUICK_ACTION]
 
 function renderResolvedVars(variables: Record<string, string>) {
   const entries = Object.entries(variables)
@@ -100,9 +106,12 @@ export function Composer(props: ComposerProps) {
     isSendBlocked,
     panelBatchError,
     panelMismatchRowIds,
+    sideMode,
     onDraftChange,
     onPanelValueFormatChange,
     onPanelVariablesChange,
+    onDynamicPromptEnabledChange,
+    onSideModeChange,
     onSend,
   } = props
 
@@ -119,9 +128,12 @@ export function Composer(props: ComposerProps) {
   const [isQuickPickerOpen, setIsQuickPickerOpen] = useState(false)
   const [quickPickerRange, setQuickPickerRange] = useState<QuickPickerRange | null>(null)
   const [quickPickerActiveIndex, setQuickPickerActiveIndex] = useState(0)
-  const [selectedQuickActions, setSelectedQuickActions] = useState<string[]>([])
   const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null)
   const quickPickerRootRef = useRef<HTMLDivElement | null>(null)
+  const selectedQuickActions = [
+    ...(dynamicPromptEnabled ? [DYNAMIC_PROMPT_QUICK_ACTION] : []),
+    ...(sideMode === 'multi' ? [COMPARISON_MODE_QUICK_ACTION] : []),
+  ]
 
   useEffect(() => {
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
@@ -434,7 +446,12 @@ export function Composer(props: ComposerProps) {
     const nextCursor = quickPickerRange.start
 
     onDraftChange(nextDraft)
-    setSelectedQuickActions((prev) => (prev.includes(label) ? prev : [...prev, label]))
+    if (label === DYNAMIC_PROMPT_QUICK_ACTION && !dynamicPromptEnabled) {
+      onDynamicPromptEnabledChange(true)
+    }
+    if (label === COMPARISON_MODE_QUICK_ACTION && sideMode !== 'multi') {
+      onSideModeChange('multi')
+    }
     closeQuickPicker()
 
     window.requestAnimationFrame(() => {
@@ -448,14 +465,22 @@ export function Composer(props: ComposerProps) {
   }
 
   const removeQuickAction = (label: string) => {
-    setSelectedQuickActions((prev) => prev.filter((item) => item !== label))
+    if (label === DYNAMIC_PROMPT_QUICK_ACTION && dynamicPromptEnabled) {
+      onDynamicPromptEnabledChange(false)
+    }
+    if (label === COMPARISON_MODE_QUICK_ACTION && sideMode === 'multi') {
+      onSideModeChange('single')
+    }
   }
 
   return (
     <div className="chat-input">
       <Card variant="borderless" className="composer-card">
         <div className="composer-main-row">
-          <div className="composer-textarea-wrap" ref={quickPickerRootRef}>
+          <div
+            className={`composer-textarea-wrap ${selectedQuickActions.length > 0 ? 'has-chip-row' : ''}`}
+            ref={quickPickerRootRef}
+          >
             {selectedQuickActions.length > 0 ? (
               <div className="composer-chip-row" aria-label="已选快捷功能">
                 {selectedQuickActions.map((item) => (

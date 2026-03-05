@@ -283,8 +283,9 @@ export function useConversations() {
     if (isSideConfigLocked && mode !== activeSideMode) {
       return
     }
-    const normalized = normalizeSettingsBySide(activeSettingsBySide, state.channels, modelCatalog, activeSideCount)
-    updateConversationState(mode, activeSideCount, normalized)
+    const nextSideCount = mode === 'multi' && activeSideMode === 'single' ? 2 : activeSideCount
+    const normalized = normalizeSettingsBySide(activeSettingsBySide, state.channels, modelCatalog, nextSideCount)
+    updateConversationState(mode, nextSideCount, normalized)
   }
 
   const updateSideCount = (count: number) => {
@@ -1096,5 +1097,4 @@ export function useConversations() {
     replayingRunIds,
   }
 }
-
 
