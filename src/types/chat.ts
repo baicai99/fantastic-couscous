@@ -73,6 +73,11 @@ export interface ImageItem {
   seq: number
   status: ImageStatus
   fileRef?: string
+  thumbRef?: string
+  fullRef?: string
+  width?: number
+  height?: number
+  bytes?: number
   error?: string
   errorCode?: FailureCode
 }

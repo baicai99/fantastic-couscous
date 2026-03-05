@@ -607,6 +607,22 @@ export function SettingsPanel(props: SettingsPanelProps) {
                       />
                     </Form.Item>
                   ) : null}
+                  {settings.sizeMode === 'preset' && (normalizeSizeTier(settings.resolution) === '2K' || normalizeSizeTier(settings.resolution) === '4K') ? (
+                    <Alert
+                      type="warning"
+                      showIcon
+                      message={normalizeSizeTier(settings.resolution) === '4K' ? '4K 体积较大，可能导致滚动卡顿。' : '2K 会增加解码与渲染开销。'}
+                      style={{ marginBottom: 12 }}
+                    />
+                  ) : null}
+                  {settings.sizeMode === 'preset' && (normalizeSizeTier(settings.resolution) === '2K' || normalizeSizeTier(settings.resolution) === '4K') ? (
+                    <Alert
+                      type="warning"
+                      showIcon
+                      message={normalizeSizeTier(settings.resolution) === '4K' ? '4K 体积较大，可能导致滚动卡顿。' : '2K 会增加解码与渲染开销。'}
+                      style={{ marginBottom: 12 }}
+                    />
+                  ) : null}
                   {settings.sizeMode === 'custom' ? (
                     <Form.Item label="自定义宽高">
                       <Space className="full-width">

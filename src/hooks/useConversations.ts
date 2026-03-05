@@ -24,6 +24,11 @@ import {
   createInitialConversationState,
   useConversationState,
 } from '../features/conversation/state/conversationState'
+import { trackDuration, startMetric } from '../features/performance/runtimeMetrics'
+
+const PROGRESS_PERSIST_DEBOUNCE_MS = 250
+const MESSAGE_HISTORY_INITIAL_LIMIT = 100
+const MESSAGE_HISTORY_PAGE_SIZE = 50
 
 function upsertConversationState(
   summaries: ConversationSummary[],
@@ -69,6 +74,9 @@ export function useConversations() {
   const modelCatalog = useMemo(() => getModelCatalogFromChannels(state.channels), [state.channels])
   const [replayingRunIds, setReplayingRunIds] = useState<string[]>([])
   const replayingRunIdsRef = useRef<Set<string>>(new Set())
+  const [historyVisibleLimit, setHistoryVisibleLimit] = useState(MESSAGE_HISTORY_INITIAL_LIMIT)
+  const pendingPersistConversationIdsRef = useRef<Set<string>>(new Set())
+  const persistTimerRef = useRef<number | null>(null)
 
   const activeConversation = conversationSelectors.selectActiveConversation(state)
   const { activeSideMode, activeSideCount, activeSettingsBySide } = conversationSelectors.selectActiveSettings(state)
@@ -89,19 +97,79 @@ export function useConversations() {
   const runExecutor = useMemo(() => createRunExecutor(), [])
   const orchestrator = useMemo(() => createConversationOrchestrator({ createRun: runExecutor.createRun }), [runExecutor])
 
-  const syncAndPersist = (next: { summaries: ConversationSummary[]; contents: Record<string, Conversation> }) => {
+  const syncAndPersist = (
+    next: { summaries: ConversationSummary[]; contents: Record<string, Conversation> },
+    options?: { saveIndex?: boolean },
+  ) => {
     dispatch({ type: 'conversation/sync', payload: next })
-    repository.saveIndex(next.summaries)
+    if (options?.saveIndex ?? true) {
+      repository.saveIndex(next.summaries)
+    }
   }
 
-  const persistConversation = (conversation: Conversation) => {
+  const persistConversation = (
+    conversation: Conversation,
+    options?: { saveStorage?: boolean; saveIndex?: boolean },
+  ) => {
     const snapshot = stateRef.current
     const next = upsertConversationState(snapshot.summaries, snapshot.contents, conversation)
-    repository.saveConversation(conversation)
-    syncAndPersist({ summaries: next.nextSummaries, contents: next.nextContents })
+    syncAndPersist(
+      { summaries: next.nextSummaries, contents: next.nextContents },
+      { saveIndex: options?.saveIndex },
+    )
+    if (options?.saveStorage ?? true) {
+      repository.saveConversation(conversation)
+    }
   }
 
+  const flushPendingPersistence = async (): Promise<void> => {
+    if (persistTimerRef.current !== null) {
+      window.clearTimeout(persistTimerRef.current)
+      persistTimerRef.current = null
+    }
+
+    const snapshot = stateRef.current
+    if (pendingPersistConversationIdsRef.current.size === 0) {
+      return
+    }
+
+    const start = startMetric()
+    for (const conversationId of pendingPersistConversationIdsRef.current) {
+      const conversation = snapshot.contents[conversationId]
+      if (conversation) {
+        repository.saveConversation(conversation)
+      }
+    }
+    pendingPersistConversationIdsRef.current.clear()
+    repository.saveIndex(snapshot.summaries)
+    trackDuration('persistence.flushBatch', start)
+  }
+
+  const scheduleConversationPersistence = (conversationId: string) => {
+    pendingPersistConversationIdsRef.current.add(conversationId)
+    if (persistTimerRef.current !== null) {
+      return
+    }
+
+    persistTimerRef.current = window.setTimeout(() => {
+      void flushPendingPersistence()
+    }, PROGRESS_PERSIST_DEBOUNCE_MS)
+  }
+
+  useEffect(() => {
+    return () => {
+      if (persistTimerRef.current !== null) {
+        window.clearTimeout(persistTimerRef.current)
+        persistTimerRef.current = null
+      }
+      void flushPendingPersistence()
+      runExecutor.releaseObjectUrls?.()
+    }
+  }, [runExecutor])
+
   const setActiveConversation = (conversationId: string | null) => {
+    void flushPendingPersistence()
+    setHistoryVisibleLimit(MESSAGE_HISTORY_INITIAL_LIMIT)
     dispatch({ type: 'conversation/switch', payload: conversationId })
     repository.saveActiveId(conversationId)
   }
@@ -189,11 +257,13 @@ export function useConversations() {
   }
 
   const clearAllConversations = () => {
+    void flushPendingPersistence()
     dispatch({ type: 'conversation/clear' })
     repository.clearConversations()
   }
 
   const removeConversation = (conversationId: string) => {
+    void flushPendingPersistence()
     const snapshot = stateRef.current
     const nextSummaries = snapshot.summaries.filter((item) => item.id !== conversationId)
     const nextContents = { ...snapshot.contents }
@@ -434,6 +504,9 @@ export function useConversations() {
       seq: number
       status: 'success' | 'failed'
       fileRef?: string
+      thumbRef?: string
+      fullRef?: string
+      bytes?: number
       error?: string
       errorCode?: Run['images'][number]['errorCode']
     },
@@ -466,12 +539,18 @@ export function useConversations() {
             ...item,
             status: input.status,
             fileRef: input.fileRef,
+            thumbRef: input.thumbRef,
+            fullRef: input.fullRef,
+            bytes: input.bytes,
             error: input.error,
             errorCode: input.errorCode,
           }
           if (
             nextItem.status === item.status &&
             nextItem.fileRef === item.fileRef &&
+            nextItem.thumbRef === item.thumbRef &&
+            nextItem.fullRef === item.fullRef &&
+            nextItem.bytes === item.bytes &&
             nextItem.error === item.error &&
             nextItem.errorCode === item.errorCode
           ) {
@@ -509,7 +588,11 @@ export function useConversations() {
       ...currentConversation,
       updatedAt: new Date().toISOString(),
       messages: nextMessages,
+    }, {
+      saveStorage: false,
+      saveIndex: false,
     })
+    scheduleConversationPersistence(conversationId)
   }
 
   const findRunInConversation = (conversation: Conversation, runId: string): Run | null => {
@@ -544,6 +627,9 @@ export function useConversations() {
         ...current,
         status: retryImage.status,
         fileRef: retryImage.fileRef,
+        thumbRef: retryImage.thumbRef,
+        fullRef: retryImage.fullRef,
+        bytes: retryImage.bytes,
         error: retryImage.error,
         errorCode: retryImage.errorCode,
       }
@@ -571,6 +657,9 @@ export function useConversations() {
         ...item,
         status: 'pending' as const,
         fileRef: undefined,
+        thumbRef: undefined,
+        fullRef: undefined,
+        bytes: undefined,
         error: undefined,
         errorCode: undefined,
       }
@@ -869,7 +958,9 @@ export function useConversations() {
       return
     }
 
-    const successfulImages = sourceRun.images.filter((item) => item.status === 'success' && Boolean(item.fileRef))
+    const successfulImages = sourceRun.images.filter(
+      (item) => item.status === 'success' && Boolean(item.fullRef ?? item.fileRef ?? item.thumbRef),
+    )
     if (successfulImages.length === 0) {
       return
     }
@@ -877,7 +968,7 @@ export function useConversations() {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
 
     successfulImages.forEach((image) => {
-      const src = image.fileRef as string
+      const src = (image.fullRef ?? image.fileRef ?? image.thumbRef) as string
       const ext = inferImageExtension(src)
       const filename = sanitizeFileName(`${timestamp}_${sourceRun.batchId}_${sourceRun.id}_${image.seq}.${ext}`)
       triggerDownload(src, filename)
@@ -897,16 +988,17 @@ export function useConversations() {
     }
 
     const target = sourceRun.images.find(
-      (item) => item.id === imageId && item.status === 'success' && Boolean(item.fileRef),
+      (item) => item.id === imageId && item.status === 'success' && Boolean(item.fullRef ?? item.fileRef ?? item.thumbRef),
     )
-    if (!target?.fileRef) {
+    const src = target?.fullRef ?? target?.fileRef ?? target?.thumbRef
+    if (!target || !src) {
       return
     }
 
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
-    const ext = inferImageExtension(target.fileRef)
+    const ext = inferImageExtension(src)
     const filename = sanitizeFileName(`${timestamp}_${sourceRun.batchId}_${sourceRun.id}_${target.seq}.${ext}`)
-    triggerDownload(target.fileRef, filename)
+    triggerDownload(src, filename)
   }
 
   const downloadBatchRunImages = (runId: string) => {
@@ -925,7 +1017,7 @@ export function useConversations() {
     const batchRuns = allRuns.filter((item) => item.batchId === sourceRun.batchId && item.side === sourceRun.side)
     const successImages = batchRuns.flatMap((run) =>
       run.images
-        .filter((item) => item.status === 'success' && Boolean(item.fileRef))
+        .filter((item) => item.status === 'success' && Boolean(item.fullRef ?? item.fileRef ?? item.thumbRef))
         .map((item) => ({ run, image: item })),
     )
 
@@ -935,11 +1027,15 @@ export function useConversations() {
 
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
     successImages.forEach(({ run, image }) => {
-      const src = image.fileRef as string
+      const src = (image.fullRef ?? image.fileRef ?? image.thumbRef) as string
       const ext = inferImageExtension(src)
       const filename = sanitizeFileName(`${timestamp}_${run.batchId}_${run.id}_${image.seq}.${ext}`)
       triggerDownload(src, filename)
     })
+  }
+
+  const loadOlderMessages = () => {
+    setHistoryVisibleLimit((prev) => prev + MESSAGE_HISTORY_PAGE_SIZE)
   }
 
   return {
@@ -954,6 +1050,8 @@ export function useConversations() {
     panelValueFormat: state.panelValueFormat,
     panelVariables: state.panelVariables,
     runConcurrency: state.runConcurrency,
+    historyVisibleLimit,
+    historyPageSize: MESSAGE_HISTORY_PAGE_SIZE,
     resolvedVariables,
     templatePreview,
     unusedVariableKeys,
@@ -981,6 +1079,8 @@ export function useConversations() {
     setSideModelParam,
     setChannels,
     sendDraft,
+    loadOlderMessages,
+    flushPendingPersistence,
     isSendBlocked: state.draft.trim().length === 0 || isPanelBatchInvalid,
     panelBatchError: isPanelBatchInvalid ? panelBatchValidation.error : '',
     panelMismatchRowIds: panelBatchValidation.mismatchRowIds,

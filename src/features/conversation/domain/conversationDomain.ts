@@ -766,6 +766,17 @@ function normalizeRun(run: Run): Run {
     retryAttempt?: number
   }
 
+  const normalizedImages = (run.images ?? []).map((item) => {
+    const fullRef = item.fullRef ?? item.fileRef
+    const thumbRef = item.thumbRef ?? item.fileRef ?? item.fullRef
+    return {
+      ...item,
+      fullRef,
+      thumbRef,
+      fileRef: item.fileRef ?? fullRef ?? thumbRef,
+    }
+  })
+
   return {
     ...run,
     sideMode: raw.sideMode === 'ab' ? 'multi' : run.sideMode,
@@ -774,6 +785,7 @@ function normalizeRun(run: Run): Run {
     finalPrompt: raw.finalPrompt ?? run.prompt ?? '',
     variablesSnapshot: raw.variablesSnapshot ?? {},
     retryAttempt: raw.retryAttempt ?? 0,
+    images: normalizedImages,
     settingsSnapshot: run.settingsSnapshot ?? {
       resolution: '1K',
       aspectRatio: ASPECT_RATIO_DEFAULT,

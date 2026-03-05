@@ -213,11 +213,14 @@ export function createMockRun(options: CreateMockRunOptions): Run {
         return { id: makeId(), seq, status: 'pending' }
       }
 
+      const src = `https://picsum.photos/seed/${makeId()}/${width}/${height}`
       return {
         id: makeId(),
         seq,
         status: 'success',
-        fileRef: `https://picsum.photos/seed/${makeId()}/${width}/${height}`,
+        fileRef: src,
+        thumbRef: src,
+        fullRef: src,
       }
     }),
   }

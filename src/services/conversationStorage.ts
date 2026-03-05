@@ -6,6 +6,8 @@ const STORAGE_ACTIVE_KEY = 'm1:active-conversation-id'
 const STORAGE_CONTENT_PREFIX = 'm1:conversation:'
 const STORAGE_CHANNELS_KEY = 'm3:channels'
 const STORAGE_STAGED_SETTINGS_KEY = 'm3:staged-settings'
+const MAX_CONVERSATION_PAYLOAD_CHARS = 3_200_000
+const KEEP_FULL_IMAGE_RECENT_MESSAGE_COUNT = 20
 
 export interface StagedSettingsState {
   sideMode: SideMode
@@ -88,7 +90,39 @@ export function saveIndex(summaries: ConversationSummary[]): void {
 }
 
 export function saveConversationContent(conversation: Conversation): void {
-  localStorage.setItem(contentStorageKey(conversation.id), JSON.stringify(conversation))
+  const raw = JSON.stringify(conversation)
+  if (raw.length <= MAX_CONVERSATION_PAYLOAD_CHARS) {
+    localStorage.setItem(contentStorageKey(conversation.id), raw)
+    return
+  }
+
+  const cutoffIndex = Math.max(0, conversation.messages.length - KEEP_FULL_IMAGE_RECENT_MESSAGE_COUNT)
+  const compacted = {
+    ...conversation,
+    messages: conversation.messages.map((message, index) => {
+      if (!Array.isArray(message.runs) || message.runs.length === 0 || index >= cutoffIndex) {
+        return message
+      }
+
+      return {
+        ...message,
+        runs: message.runs.map((run) => ({
+          ...run,
+          images: run.images.map((image) => {
+            const thumbRef = image.thumbRef ?? image.fileRef
+            return {
+              ...image,
+              thumbRef,
+              fullRef: undefined,
+              fileRef: thumbRef,
+            }
+          }),
+        })),
+      }
+    }),
+  }
+
+  localStorage.setItem(contentStorageKey(conversation.id), JSON.stringify(compacted))
 }
 
 export function saveActiveConversationId(conversationId: string): void {

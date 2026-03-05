@@ -43,6 +43,8 @@ export function ConversationWorkspace() {
     panelValueFormat,
     panelVariables,
     runConcurrency,
+    historyVisibleLimit,
+    historyPageSize,
     resolvedVariables,
     templatePreview,
     unusedVariableKeys,
@@ -70,6 +72,7 @@ export function ConversationWorkspace() {
     setSideModelParam,
     setChannels,
     sendDraft,
+    loadOlderMessages,
     isSendBlocked,
     panelBatchError,
     panelMismatchRowIds,
@@ -173,6 +176,10 @@ export function ConversationWorkspace() {
                       onDownloadSingleImage={downloadSingleRunImage}
                       onDownloadBatchRun={downloadBatchRunImages}
                       replayingRunIds={replayingRunIds}
+                      initialMessageLimit={historyVisibleLimit}
+                      messagePageSize={historyPageSize}
+                      initialImagesPerRun={6}
+                      onLoadOlderMessages={loadOlderMessages}
                     />
                   </Card>
                 </Col>
@@ -190,6 +197,10 @@ export function ConversationWorkspace() {
               onDownloadSingleImage={downloadSingleRunImage}
               onDownloadBatchRun={downloadBatchRunImages}
               replayingRunIds={replayingRunIds}
+              initialMessageLimit={historyVisibleLimit}
+              messagePageSize={historyPageSize}
+              initialImagesPerRun={6}
+              onLoadOlderMessages={loadOlderMessages}
             />
           )}
         </Content>

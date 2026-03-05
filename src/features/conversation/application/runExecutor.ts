@@ -25,6 +25,9 @@ export interface CreateRunInput {
     seq: number
     status: 'success' | 'failed'
     fileRef?: string
+    thumbRef?: string
+    fullRef?: string
+    bytes?: number
     error?: string
     errorCode?: ReturnType<typeof classifyFailure>
   }) => void
@@ -38,8 +41,77 @@ export interface RunExecutorDeps {
 export function createRunExecutor(deps: RunExecutorDeps = {}) {
   const generateImagesFn = deps.generateImagesFn ?? generateImages
   const autoSaveImageFn = deps.autoSaveImageFn ?? autoSaveImage
+  const objectUrls = new Set<string>()
+
+  function estimateBase64Bytes(value: string): number {
+    const base64 = value.replace(/^data:[^,]+,/, '')
+    return Math.floor((base64.length * 3) / 4)
+  }
+
+  function dataUrlToBlob(value: string): Blob | null {
+    const match = value.match(/^data:([^;,]+)?(;base64)?,(.*)$/i)
+    if (!match) {
+      return null
+    }
+
+    const mime = match[1] || 'application/octet-stream'
+    const isBase64 = Boolean(match[2])
+    const payload = match[3] ?? ''
+    if (isBase64) {
+      const binary = atob(payload)
+      const bytes = new Uint8Array(binary.length)
+      for (let index = 0; index < binary.length; index += 1) {
+        bytes[index] = binary.charCodeAt(index)
+      }
+      return new Blob([bytes], { type: mime })
+    }
+
+    return new Blob([decodeURIComponent(payload)], { type: mime })
+  }
+
+  function toRefs(src: string, preferEphemeral: boolean): { thumbRef: string; fullRef: string; fileRef: string; bytes?: number } {
+    if (!src.startsWith('data:image/')) {
+      return {
+        thumbRef: src,
+        fullRef: src,
+        fileRef: src,
+      }
+    }
+
+    const bytes = estimateBase64Bytes(src)
+    if (preferEphemeral && typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {
+      const blob = dataUrlToBlob(src)
+      if (blob) {
+        const url = URL.createObjectURL(blob)
+        objectUrls.add(url)
+        return {
+          thumbRef: url,
+          fullRef: url,
+          fileRef: url,
+          bytes,
+        }
+      }
+    }
+
+    return {
+      thumbRef: src,
+      fullRef: src,
+      fileRef: src,
+      bytes,
+    }
+  }
 
   return {
+    releaseObjectUrls() {
+      for (const url of objectUrls) {
+        try {
+          URL.revokeObjectURL(url)
+        } catch {
+          // Ignore revoked or unsupported object URLs.
+        }
+      }
+      objectUrls.clear()
+    },
     async createRun(options: CreateRunInput): Promise<Run> {
       const {
         batchId,
@@ -114,12 +186,18 @@ export function createRunExecutor(deps: RunExecutorDeps = {}) {
             const errorMessage = item.error?.trim() ? item.error : '该序号未返回图片'
             const imageUpdate =
               item.src
-                ? {
+                ? (() => {
+                    const refs = toRefs(item.src, shouldAutoSave)
+                    return {
                     runId,
                     seq: item.seq,
                     status: 'success' as const,
-                    fileRef: item.src,
+                    fileRef: refs.fileRef,
+                    thumbRef: refs.thumbRef,
+                    fullRef: refs.fullRef,
+                    bytes: refs.bytes,
                   }
+                  })()
                 : {
                     runId,
                     seq: item.seq,
@@ -160,7 +238,7 @@ export function createRunExecutor(deps: RunExecutorDeps = {}) {
             id: makeId(),
             seq,
             status: 'success' as const,
-            fileRef: item.src,
+            ...toRefs(item.src, shouldAutoSave),
           }
         })
 

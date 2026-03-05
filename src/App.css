@@ -209,6 +209,11 @@
   width: 100%;
 }
 
+.message-history-more {
+  display: flex;
+  justify-content: center;
+}
+
 .message-card.user {
   border-color: #bae0ff;
 }
