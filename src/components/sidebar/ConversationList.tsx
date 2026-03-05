@@ -60,58 +60,65 @@ export function ConversationList(props: ConversationListProps) {
   }))
 
   return (
-    <div className={`panel-scroll conversation-menu-layout ${isCollapsed ? 'is-collapsed' : ''}`}>
-      <div className="conversation-menu-top">
-        <Tooltip title={isCollapsed ? '展开左侧导航' : '收起左侧导航'} placement="right">
-          <Button
-            icon={<HistoryOutlined />}
-            onClick={onToggleCollapse}
-            className={`conversation-top-action-btn ${isCollapsed ? 'is-collapsed' : ''}`}
-          >
-            <span className="conversation-top-action-label">收起左侧导航</span>
-          </Button>
-        </Tooltip>
-        <Tooltip title="新建对话" placement="right">
-          <Button
-            onClick={onCreateConversation}
-            className={`conversation-top-action-btn ${isCollapsed ? 'is-collapsed' : ''}`}
-            icon={<PlusOutlined />}
-          >
-            <span className="conversation-top-action-label">新建对话</span>
-          </Button>
-        </Tooltip>
-        <Popconfirm
-          title="确认清空所有对话？"
-          description="此操作不可恢复。"
-          okText="清空"
-          okButtonProps={{ danger: true }}
-          cancelText="取消"
-          onConfirm={onClearAllConversations}
-        >
-          <Tooltip title="清空记录" placement="right">
-            <Button
-              icon={<DeleteOutlined />}
-              aria-label="清空记录"
-              className={`conversation-top-action-btn ${isCollapsed ? 'is-collapsed' : ''}`}
-            >
-              <span className="conversation-top-action-label">清空记录</span>
+    <div className="conversation-shell">
+      <div className={`conversation-panel conversation-panel-expanded ${isCollapsed ? 'is-inactive' : 'is-active'}`}>
+        <div className="panel-scroll conversation-menu-layout">
+          <div className="conversation-menu-top">
+            <Button icon={<HistoryOutlined />} onClick={onToggleCollapse} className="conversation-top-action-btn">
+              <span className="conversation-top-action-label">收起左侧导航</span>
             </Button>
-          </Tooltip>
-        </Popconfirm>
+            <Button onClick={onCreateConversation} className="conversation-top-action-btn" icon={<PlusOutlined />}>
+              <span className="conversation-top-action-label">新建对话</span>
+            </Button>
+            <Popconfirm
+              title="确认清空所有对话？"
+              description="此操作不可恢复。"
+              okText="清空"
+              okButtonProps={{ danger: true }}
+              cancelText="取消"
+              onConfirm={onClearAllConversations}
+            >
+              <Button icon={<DeleteOutlined />} aria-label="清空记录" className="conversation-top-action-btn">
+                <span className="conversation-top-action-label">清空记录</span>
+              </Button>
+            </Popconfirm>
+          </div>
+
+          {summaries.length > 0 ? (
+            <Menu
+              mode="inline"
+              selectedKeys={activeId ? [activeId] : []}
+              items={items}
+              className="conversation-menu"
+              onClick={(event) => onSwitchConversation(String(event.key))}
+            />
+          ) : null}
+        </div>
       </div>
 
-      <div className={`conversation-history-region ${isCollapsed ? 'is-collapsed' : ''}`}>
-        {summaries.length > 0 ? (
-          <Menu
-            mode="inline"
-            selectedKeys={activeId ? [activeId] : []}
-            items={items}
-            className={`conversation-menu ${isCollapsed ? 'is-collapsed' : ''}`}
-            onClick={(event) => onSwitchConversation(String(event.key))}
-          />
-        ) : (
-          <div className="conversation-menu-empty">暂无对话</div>
-        )}
+      <div className={`conversation-panel conversation-panel-collapsed ${isCollapsed ? 'is-active' : 'is-inactive'}`}>
+        <div className="panel-scroll conversation-menu-layout-collapsed">
+          <div className="conversation-menu-top-collapsed">
+            <Tooltip title="展开左侧导航" placement="right">
+              <Button icon={<HistoryOutlined />} onClick={onToggleCollapse} className="conversation-collapsed-action-btn" />
+            </Tooltip>
+            <Tooltip title="新建对话" placement="right">
+              <Button onClick={onCreateConversation} className="conversation-collapsed-action-btn" icon={<PlusOutlined />} />
+            </Tooltip>
+            <Popconfirm
+              title="确认清空所有对话？"
+              description="此操作不可恢复。"
+              okText="清空"
+              okButtonProps={{ danger: true }}
+              cancelText="取消"
+              onConfirm={onClearAllConversations}
+            >
+              <Tooltip title="清空记录" placement="right">
+                <Button icon={<DeleteOutlined />} aria-label="清空记录" className="conversation-collapsed-action-btn" />
+              </Tooltip>
+            </Popconfirm>
+          </div>
+        </div>
       </div>
     </div>
   )

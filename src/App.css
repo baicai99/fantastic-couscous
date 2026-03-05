@@ -10,7 +10,11 @@
 }
 
 .panel-left.ant-layout-sider {
-  transition: all 0.26s ease !important;
+  transition: width 0.16s ease, min-width 0.16s ease, max-width 0.16s ease !important;
+  overflow: hidden;
+}
+
+.panel-left.ant-layout-sider .ant-layout-sider-children {
   overflow: hidden;
 }
 
@@ -438,25 +442,93 @@
   flex-direction: column;
   gap: 16px;
   overflow: hidden;
+  width: 248px;
+  min-width: 248px;
 }
 
-.conversation-menu-layout.is-collapsed {
-  padding: 12px 10px;
+.conversation-shell {
+  position: relative;
+  height: 100%;
+  overflow: hidden;
+}
+
+.conversation-panel {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.16s ease;
+}
+
+.conversation-panel.is-active {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.conversation-panel.is-inactive {
+  opacity: 0;
+  pointer-events: none;
 }
 
 .conversation-menu-top {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 0;
 }
 
-.conversation-top-action-btn {
+.conversation-top-action-btn.ant-btn {
   width: 100%;
-  height: 44px;
-  border-radius: 10px;
+  height: 56px;
+  line-height: 56px;
+  margin: 0 0 6px;
+  padding: 0 10px;
+  border-radius: 8px;
   display: inline-flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
+  border: none !important;
+  box-shadow: none !important;
+  background: transparent !important;
+  color: rgba(0, 0, 0, 0.88);
+  font-weight: 600;
+  transition: none !important;
+  outline: none !important;
+}
+
+.conversation-top-action-btn.ant-btn .ant-btn-icon {
+  margin-inline-end: 10px;
+}
+
+.conversation-top-action-btn.ant-btn:hover,
+.conversation-top-action-btn.ant-btn:focus {
+  color: rgba(0, 0, 0, 0.88) !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+.conversation-top-action-btn.ant-btn:hover {
+  background: #f6f8fa !important;
+  color: rgba(0, 0, 0, 0.88) !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+.conversation-top-action-btn.ant-btn:active {
+  background: transparent !important;
+  color: rgba(0, 0, 0, 0.88) !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+.conversation-top-action-btn.ant-btn:focus-visible {
+  background: transparent !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+.conversation-top-action-btn.ant-btn::after,
+.conversation-top-action-btn.ant-btn.ant-wave-target::after {
+  display: none !important;
 }
 
 .conversation-top-action-label {
@@ -465,24 +537,7 @@
   white-space: nowrap;
   opacity: 1;
   max-width: 180px;
-  transform: translateX(0);
-  transition: opacity 0.18s ease, max-width 0.18s ease, transform 0.18s ease;
-}
-
-.conversation-top-action-btn.is-collapsed {
-  width: 100%;
-  height: 44px;
-  padding-inline: 0;
-}
-
-.conversation-top-action-btn.is-collapsed .conversation-top-action-label {
-  opacity: 0;
-  max-width: 0;
-  transform: translateX(-6px);
-}
-
-.conversation-top-action-btn.is-collapsed .ant-btn-icon + .conversation-top-action-label {
-  margin-inline-start: 0;
+  transform: none;
 }
 
 .conversation-menu {
@@ -491,24 +546,7 @@
   overflow-y: auto;
   border-inline-end: 0 !important;
   background: transparent !important;
-  transition: all 0.2s ease;
-}
-
-.conversation-history-region {
-  flex: 1;
-  min-height: 0;
-  max-height: 100%;
-  opacity: 1;
-  transform: translateY(0);
-  overflow: hidden;
-  transition: opacity 0.28s ease, max-height 0.28s ease, transform 0.28s ease;
-}
-
-.conversation-history-region.is-collapsed {
-  opacity: 0;
-  max-height: 0;
-  transform: translateY(-6px);
-  pointer-events: none;
+  transition: none;
 }
 
 .conversation-menu .ant-menu-item {
@@ -529,17 +567,6 @@
   background: #f6f8fa !important;
 }
 
-.conversation-menu.is-collapsed .ant-menu-item {
-  padding-inline: calc(50% - 8px) !important;
-}
-
-.conversation-menu.is-collapsed .ant-menu-item .ant-menu-item-icon {
-  margin-inline-end: 0;
-  opacity: 0;
-  transform: scale(0.9);
-  transition: opacity 0.24s ease, transform 0.24s ease;
-}
-
 .conversation-menu-item-row {
   display: flex;
   align-items: center;
@@ -551,14 +578,7 @@
   opacity: 1;
   max-width: 100%;
   transform: translateX(0);
-  transition: opacity 0.18s ease, max-width 0.18s ease, transform 0.18s ease;
-}
-
-.conversation-menu.is-collapsed .conversation-menu-item-row {
-  opacity: 0;
-  max-width: 0;
-  transform: translateX(-6px);
-  pointer-events: none;
+  transition: none;
 }
 
 .conversation-menu-item-title {
@@ -597,10 +617,55 @@
   background: rgba(255, 255, 255, 0.6);
 }
 
-.conversation-menu-layout.is-collapsed .conversation-menu-empty {
-  writing-mode: vertical-rl;
-  text-orientation: mixed;
-  letter-spacing: 1px;
+.conversation-menu-layout-collapsed {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  overflow: hidden;
+  width: 100%;
+  min-width: 0;
+}
+
+.conversation-menu-top-collapsed {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.conversation-collapsed-action-btn.ant-btn {
+  width: 100%;
+  height: 56px;
+  line-height: 56px;
+  margin: 0 0 6px;
+  padding: 0 0 0 10px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  border: none !important;
+  box-shadow: none !important;
+  background: transparent !important;
+  color: rgba(0, 0, 0, 0.88);
+  transition: none !important;
+  outline: none !important;
+}
+
+.conversation-collapsed-action-btn.ant-btn:hover {
+  background: #f6f8fa !important;
+  color: rgba(0, 0, 0, 0.88) !important;
+}
+
+.conversation-collapsed-action-btn.ant-btn:focus,
+.conversation-collapsed-action-btn.ant-btn:focus-visible,
+.conversation-collapsed-action-btn.ant-btn:active {
+  background: transparent !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+.conversation-collapsed-action-btn.ant-btn::after,
+.conversation-collapsed-action-btn.ant-btn.ant-wave-target::after {
+  display: none !important;
 }
 
 .message-card {
