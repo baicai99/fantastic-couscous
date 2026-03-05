@@ -13,10 +13,12 @@ function renderComposer(
   onPanelVariablesChange = vi.fn(),
   onSend = vi.fn(),
   isSending = false,
+  draft = '',
+  onDraftChange = vi.fn(),
 ) {
   return render(
     <Composer
-      draft=""
+      draft={draft}
       sendError=""
       showAdvancedVariables
       dynamicPromptEnabled
@@ -30,7 +32,7 @@ function renderComposer(
       isSendBlocked={false}
       panelBatchError=""
       panelMismatchRowIds={[]}
-      onDraftChange={() => {}}
+      onDraftChange={onDraftChange}
       onPanelValueFormatChange={onFormatChange}
       onPanelVariablesChange={onPanelVariablesChange}
       onSend={onSend}
@@ -122,5 +124,71 @@ describe('Composer panel value format', () => {
     fireEvent.keyDown(textarea, { key: 'Enter', code: 'Enter' })
 
     expect(onSend).toHaveBeenCalledTimes(1)
+  })
+
+  it('opens quick picker when typing "/" at line start', () => {
+    renderComposer('json')
+
+    const textarea = screen.getByPlaceholderText('输入模板 prompt，例如：a {{style}} portrait of {{subject}}')
+    fireEvent.change(textarea, { target: { value: '/', selectionStart: 1, selectionEnd: 1 } })
+
+    expect(screen.getByRole('listbox', { name: '快捷功能选择' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '创建图片' })).toBeInTheDocument()
+  })
+
+  it('does not open quick picker when "/" is not at line start', () => {
+    renderComposer('json')
+
+    const textarea = screen.getByPlaceholderText('输入模板 prompt，例如：a {{style}} portrait of {{subject}}')
+    fireEvent.change(textarea, { target: { value: 'abc/', selectionStart: 4, selectionEnd: 4 } })
+
+    expect(screen.queryByRole('listbox', { name: '快捷功能选择' })).not.toBeInTheDocument()
+  })
+
+  it('opens quick picker when typing "、" at line start', () => {
+    renderComposer('json')
+
+    const textarea = screen.getByPlaceholderText('输入模板 prompt，例如：a {{style}} portrait of {{subject}}')
+    fireEvent.change(textarea, { target: { value: '、', selectionStart: 1, selectionEnd: 1 } })
+
+    expect(screen.getByRole('listbox', { name: '快捷功能选择' })).toBeInTheDocument()
+  })
+
+  it('clicking quick picker item renders chip and does not send', () => {
+    const onDraftChange = vi.fn()
+    const onSend = vi.fn()
+    renderComposer('json', vi.fn(), vi.fn(), onSend, false, '', onDraftChange)
+
+    const textarea = screen.getByPlaceholderText('输入模板 prompt，例如：a {{style}} portrait of {{subject}}')
+    fireEvent.change(textarea, { target: { value: '/', selectionStart: 1, selectionEnd: 1 } })
+    fireEvent.click(screen.getByRole('button', { name: '创建图片' }))
+
+    expect(screen.getByText('创建图片')).toBeInTheDocument()
+    expect(onDraftChange).toHaveBeenLastCalledWith('')
+    expect(onSend).not.toHaveBeenCalled()
+    expect(screen.queryByRole('listbox', { name: '快捷功能选择' })).not.toBeInTheDocument()
+  })
+
+  it('shows remove icon on hover and allows deleting selected chip', () => {
+    renderComposer('json')
+
+    const textarea = screen.getByPlaceholderText('输入模板 prompt，例如：a {{style}} portrait of {{subject}}')
+    fireEvent.change(textarea, { target: { value: '/', selectionStart: 1, selectionEnd: 1 } })
+    fireEvent.click(screen.getByRole('button', { name: '创建图片' }))
+
+    const removeButton = screen.getByRole('button', { name: '移除 创建图片' })
+    fireEvent.click(removeButton)
+
+    expect(screen.queryByText('创建图片')).not.toBeInTheDocument()
+  })
+
+  it('closes quick picker with Escape', () => {
+    renderComposer('json')
+
+    const textarea = screen.getByPlaceholderText('输入模板 prompt，例如：a {{style}} portrait of {{subject}}')
+    fireEvent.change(textarea, { target: { value: '/', selectionStart: 1, selectionEnd: 1 } })
+    fireEvent.keyDown(textarea, { key: 'Escape', code: 'Escape' })
+
+    expect(screen.queryByRole('listbox', { name: '快捷功能选择' })).not.toBeInTheDocument()
   })
 })
