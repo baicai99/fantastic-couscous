@@ -1,5 +1,8 @@
 ﻿# 提示词图像控制台
 
+![项目 Logo](public/logo.webp)
+
+
 一个基于 React + TypeScript + Vite 的图片生成对话应用，支持多渠道接入、A/B 多窗口对比、模板变量、历史会话与图片预览。
 
 ## 主要功能
