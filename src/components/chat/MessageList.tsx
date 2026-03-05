@@ -29,6 +29,7 @@ interface MessageListProps {
   initialMessageLimit?: number
   messagePageSize?: number
   initialImagesPerRun?: number
+  autoScrollTrigger?: number
   onLoadOlderMessages?: () => void
 }
 
@@ -316,6 +317,7 @@ function MessageListComponent(props: MessageListProps) {
     initialMessageLimit = 100,
     messagePageSize = DEFAULT_MESSAGE_PAGE_SIZE,
     initialImagesPerRun = DEFAULT_IMAGES_PER_RUN,
+    autoScrollTrigger,
     onLoadOlderMessages,
   } = props
 
@@ -341,7 +343,7 @@ function MessageListComponent(props: MessageListProps) {
 
   useLayoutEffect(() => {
     bottomRef.current?.scrollIntoView({ block: 'end' })
-  }, [activeConversation?.id, activeConversation?.updatedAt, sideView])
+  }, [autoScrollTrigger])
 
   useEffect(() => {
     const node = viewportRef.current

@@ -45,6 +45,7 @@ export function ConversationWorkspace() {
     runConcurrency,
     historyVisibleLimit,
     historyPageSize,
+    sendScrollTrigger,
     resolvedVariables,
     templatePreview,
     unusedVariableKeys,
@@ -179,6 +180,7 @@ export function ConversationWorkspace() {
                       initialMessageLimit={historyVisibleLimit}
                       messagePageSize={historyPageSize}
                       initialImagesPerRun={6}
+                      autoScrollTrigger={sendScrollTrigger}
                       onLoadOlderMessages={loadOlderMessages}
                     />
                   </Card>
@@ -200,6 +202,7 @@ export function ConversationWorkspace() {
               initialMessageLimit={historyVisibleLimit}
               messagePageSize={historyPageSize}
               initialImagesPerRun={6}
+              autoScrollTrigger={sendScrollTrigger}
               onLoadOlderMessages={loadOlderMessages}
             />
           )}

@@ -75,6 +75,7 @@ export function useConversations() {
   const [replayingRunIds, setReplayingRunIds] = useState<string[]>([])
   const replayingRunIdsRef = useRef<Set<string>>(new Set())
   const [historyVisibleLimit, setHistoryVisibleLimit] = useState(MESSAGE_HISTORY_INITIAL_LIMIT)
+  const [sendScrollTrigger, setSendScrollTrigger] = useState(0)
   const pendingPersistConversationIdsRef = useRef<Set<string>>(new Set())
   const persistTimerRef = useRef<number | null>(null)
 
@@ -692,6 +693,7 @@ export function useConversations() {
     const plan = planned.value
 
     dispatch({ type: 'send/start' })
+    setSendScrollTrigger((prev) => prev + 1)
 
     let targetConversationId: string
 
@@ -1052,6 +1054,7 @@ export function useConversations() {
     runConcurrency: state.runConcurrency,
     historyVisibleLimit,
     historyPageSize: MESSAGE_HISTORY_PAGE_SIZE,
+    sendScrollTrigger,
     resolvedVariables,
     templatePreview,
     unusedVariableKeys,
