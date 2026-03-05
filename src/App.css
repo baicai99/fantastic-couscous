@@ -222,6 +222,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  flex-wrap: wrap;
 }
 
 .run-divider {
@@ -243,6 +244,10 @@
 
 .run-head-actions {
   flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
 .run-head-actions .ant-btn-sm {
@@ -267,6 +272,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
 .run-meta-title-fixed {
@@ -274,6 +280,7 @@
 }
 
 .run-meta-title-prompt {
+  flex: 1 1 240px;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -297,7 +304,12 @@
 .run-grid-item {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
+  position: relative;
+}
+
+.run-image-frame {
+  position: relative;
 }
 
 .image-button {
@@ -313,10 +325,30 @@
   border-color: #91caff;
 }
 
+.run-image-download-btn {
+  position: absolute !important;
+  left: 50%;
+  bottom: 10px;
+  transform: translateX(-50%) translateY(6px);
+  z-index: 3;
+  border-radius: 999px !important;
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.24);
+  opacity: 0;
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+.run-image-frame:hover .run-image-download-btn,
+.run-image-frame:focus-within .run-image-download-btn {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
 .run-image {
   width: 100%;
   height: auto;
   display: block;
+  aspect-ratio: 1 / 1;
+  object-fit: cover;
 }
 
 .run-image-fallback {
@@ -367,6 +399,32 @@
   display: grid;
   place-items: center;
   overflow: hidden;
+}
+
+.run-image-seq-overlay {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 30px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 12px;
+  line-height: 1;
+  pointer-events: none;
+}
+
+@media (max-width: 900px) {
+  .run-head-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
 }
 
 .logo-placeholder-image {

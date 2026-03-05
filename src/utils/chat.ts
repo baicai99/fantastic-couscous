@@ -131,6 +131,7 @@ export function toSettingsSnapshot(settings: SingleSideSettings): RunSettingsSna
     customWidth: settings.customWidth,
     customHeight: settings.customHeight,
     autoSave: settings.autoSave,
+    saveDirectory: settings.saveDirectory,
   }
 }
 

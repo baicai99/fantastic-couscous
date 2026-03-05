@@ -1,5 +1,5 @@
 import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { EditOutlined, ReloadOutlined, RetweetOutlined } from '@ant-design/icons'
+import { DownloadOutlined, EditOutlined, ReloadOutlined, RetweetOutlined } from '@ant-design/icons'
 import { Button, Card, Collapse, Space, Tag, Typography } from 'antd'
 import type { Conversation, FailureCode, ImageItem, Message, Run, Side } from '../../types/chat'
 import { gridColumnCount, sortImagesBySeq } from '../../utils/chat'
@@ -16,6 +16,9 @@ interface MessageListProps {
   onRetryRun: (runId: string) => void
   onEditRunTemplate: (runId: string) => void
   onReplayRun: (runId: string) => void
+  onDownloadAllRun?: (runId: string) => void
+  onDownloadSingleImage?: (runId: string, imageId: string) => void
+  onDownloadBatchRun?: (runId: string) => void
   replayingRunIds?: string[]
   windowSize?: number
   overscan?: number
@@ -93,8 +96,10 @@ function renderRunMetaTitle(input: {
   runNumber: number
   expanded: boolean
   onToggle: (runId: string) => void
+  showBatchDownload: boolean
+  onDownloadBatchRun?: (runId: string) => void
 }) {
-  const { run, runNumber, expanded, onToggle } = input
+  const { run, runNumber, expanded, onToggle, showBatchDownload, onDownloadBatchRun } = input
   const prompt = truncatePrompt(run.finalPrompt)
   const promptText = expanded ? run.finalPrompt : prompt.text
   const canToggle = prompt.truncated
@@ -102,6 +107,23 @@ function renderRunMetaTitle(input: {
   return (
     <div className="run-meta-title">
       <Text strong className="run-meta-title-fixed">{`Run #${runNumber}`}</Text>
+      {showBatchDownload ? (
+        <Button
+          type="link"
+          size="small"
+          className="run-meta-title-toggle"
+          onMouseDown={(event) => {
+            event.preventDefault()
+            event.stopPropagation()
+          }}
+          onClick={(event) => {
+            event.stopPropagation()
+            onDownloadBatchRun?.(run.id)
+          }}
+        >
+          下载这一批次
+        </Button>
+      ) : null}
       <Text className={`run-meta-title-prompt ${expanded ? 'expanded' : ''}`}>
         {`Prompt: ${promptText || '无'}`}
       </Text>
@@ -127,6 +149,7 @@ function renderImages(
   run: Run | undefined,
   linkedRun: Run | undefined,
   onOpenPreview: (run: Run, imageId: string, linkedRun?: Run) => void,
+  onDownloadSingleImage?: (runId: string, imageId: string) => void,
 ) {
   const preferredColumns = run?.settingsSnapshot?.gridColumns
   return (
@@ -136,22 +159,35 @@ function renderImages(
     >
       {rows.map((row) => (
         <div key={`${run?.id ?? 'none'}-${row.seq}`} className="run-grid-item">
+          <div className="run-image-seq-overlay">#{row.seq}</div>
           {row.item?.status === 'pending' ? (
             <div className="run-image-skeleton" />
           ) : row.item?.status === 'failed' ? (
             <div className="run-image-fallback">生成失败</div>
           ) : row.item?.status === 'success' && row.item.fileRef && run ? (
-            <button
-              className="image-button"
-              type="button"
-              onClick={() => onOpenPreview(run, row.item!.id, linkedRun)}
-            >
-              <img className="run-image" src={row.item.fileRef} alt={`image-${row.seq}`} />
-            </button>
+            <div className="run-image-frame">
+              <button
+                className="image-button"
+                type="button"
+                onClick={() => onOpenPreview(run, row.item!.id, linkedRun)}
+              >
+                <img className="run-image" src={row.item.fileRef} alt={`image-${row.seq}`} />
+              </button>
+              <Button
+                size="small"
+                type="primary"
+                className="run-image-download-btn"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  onDownloadSingleImage?.(run.id, row.item!.id)
+                }}
+              >
+                下载这张
+              </Button>
+            </div>
           ) : (
             <div className="run-image-fallback">缺失: {row.missingReason ?? '未返回图片'}</div>
           )}
-          <Text type="secondary">#{row.seq}</Text>
         </div>
       ))}
     </div>
@@ -165,8 +201,11 @@ function renderRunCard(
   linkedRun: Run | undefined,
   onOpenPreview: (run: Run, imageId: string, linkedRun?: Run) => void,
   onRetryRun: (runId: string) => void,
+  onDownloadSingleImage: ((runId: string, imageId: string) => void) | undefined,
   isPromptExpanded: boolean,
   onTogglePrompt: (runId: string) => void,
+  showBatchDownload: boolean,
+  onDownloadBatchRun?: (runId: string) => void,
 ) {
   const failureSummary = getFailureSummary(run)
   const failureDetails = getFailureDetails(run)
@@ -187,6 +226,8 @@ function renderRunCard(
                   runNumber,
                   expanded: isPromptExpanded,
                   onToggle: onTogglePrompt,
+                  showBatchDownload,
+                  onDownloadBatchRun,
                 }),
                 children: (
                   <Space direction="vertical" size={8} className="full-width">
@@ -227,7 +268,7 @@ function renderRunCard(
           ) : null}
         </Space>
       </div>
-      {renderImages(rows, run, linkedRun, onOpenPreview)}
+      {renderImages(rows, run, linkedRun, onOpenPreview, onDownloadSingleImage)}
     </Fragment>
   )
 }
@@ -240,6 +281,9 @@ function MessageListComponent(props: MessageListProps) {
     onRetryRun,
     onEditRunTemplate,
     onReplayRun,
+    onDownloadAllRun,
+    onDownloadSingleImage,
+    onDownloadBatchRun,
     replayingRunIds = [],
     windowSize = 24,
     overscan = 15,
@@ -346,8 +390,18 @@ function MessageListComponent(props: MessageListProps) {
                       }
 
                       const isReplaying = replayingRunIds.includes(run.id)
+                      const hasDownloadableImages = run.images.some((item) => item.status === 'success' && Boolean(item.fileRef))
                       return (
                         <Space size={4} className="run-head-actions">
+                          <Button
+                            size="small"
+                            type="default"
+                            icon={<DownloadOutlined />}
+                            disabled={!hasDownloadableImages}
+                            onClick={() => onDownloadAllRun?.(run.id)}
+                          >
+                            下载全部
+                          </Button>
                           <Button
                             size="small"
                             type="primary"
@@ -377,6 +431,9 @@ function MessageListComponent(props: MessageListProps) {
 
               {message.role === 'assistant' && sideView === 'single'
                 ? getSingleRuns(message).map((run, index) => {
+                    const runs = getSingleRuns(message)
+                    const batchLoopCount = runs.filter((item) => item.batchId === run.batchId && item.side === run.side).length
+                    const isDynamicBatch = Object.keys(run.variablesSnapshot ?? {}).length > 0 && batchLoopCount > 1
                     const rows = sortImagesBySeq(run.images).map((item) => ({ seq: item.seq, item }))
                     return renderRunCard(
                       run,
@@ -385,14 +442,20 @@ function MessageListComponent(props: MessageListProps) {
                       undefined,
                       onOpenPreview,
                       onRetryRun,
+                      onDownloadSingleImage,
                       Boolean(expandedPromptByRunId[run.id]),
                       togglePromptExpanded,
+                      isDynamicBatch,
+                      onDownloadBatchRun,
                     )
                   })
                 : null}
 
               {message.role === 'assistant' && sideView !== 'single'
                 ? getSideRuns(message, sideView).map((run, index) => {
+                    const runs = getSideRuns(message, sideView)
+                    const batchLoopCount = runs.filter((item) => item.batchId === run.batchId && item.side === run.side).length
+                    const isDynamicBatch = Object.keys(run.variablesSnapshot ?? {}).length > 0 && batchLoopCount > 1
                     const rows = sortImagesBySeq(run.images).map((item) => ({ seq: item.seq, item }))
                     return renderRunCard(
                       run,
@@ -401,8 +464,11 @@ function MessageListComponent(props: MessageListProps) {
                       undefined,
                       onOpenPreview,
                       onRetryRun,
+                      onDownloadSingleImage,
                       Boolean(expandedPromptByRunId[run.id]),
                       togglePromptExpanded,
+                      isDynamicBatch,
+                      onDownloadBatchRun,
                     )
                   })
                 : null}

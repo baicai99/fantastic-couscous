@@ -660,6 +660,11 @@ function normalizeSettings(
     settings?.channelId && channels.some((item) => item.id === settings.channelId)
       ? settings.channelId
       : null
+  const saveDirectory =
+    typeof settings?.saveDirectory === 'string' && settings.saveDirectory.trim().length > 0
+      ? settings.saveDirectory.trim()
+      : undefined
+  const autoSaveEnabled = Boolean(settings?.autoSave && saveDirectory)
 
   return {
     resolution: normalizeSizeTier(settings?.resolution),
@@ -669,7 +674,8 @@ function normalizeSettings(
     sizeMode: settings?.sizeMode === 'custom' ? 'custom' : 'preset',
     customWidth: clamp(Math.floor(settings?.customWidth ?? 1024), CUSTOM_SIZE_MIN, CUSTOM_SIZE_MAX),
     customHeight: clamp(Math.floor(settings?.customHeight ?? 1024), CUSTOM_SIZE_MIN, CUSTOM_SIZE_MAX),
-    autoSave: settings?.autoSave ?? true,
+    autoSave: autoSaveEnabled,
+    saveDirectory,
     channelId,
     modelId: model?.id ?? '',
     paramValues: normalizeParamValues(model, settings?.paramValues ?? getDefaultParamValues(model)),
@@ -1007,7 +1013,12 @@ export function buildRetryPlan(input: {
     sizeMode: sourceRun.settingsSnapshot?.sizeMode ?? 'preset',
     customWidth: sourceRun.settingsSnapshot?.customWidth ?? 1024,
     customHeight: sourceRun.settingsSnapshot?.customHeight ?? 1024,
-    autoSave: sourceRun.settingsSnapshot?.autoSave ?? true,
+    autoSave: Boolean(sourceRun.settingsSnapshot?.autoSave && sourceRun.settingsSnapshot?.saveDirectory),
+    saveDirectory:
+      typeof sourceRun.settingsSnapshot?.saveDirectory === 'string' &&
+      sourceRun.settingsSnapshot.saveDirectory.trim().length > 0
+        ? sourceRun.settingsSnapshot.saveDirectory.trim()
+        : undefined,
     channelId: sourceRun.channelId,
     modelId: sourceRun.modelId,
     paramValues: { ...sourceRun.paramsSnapshot },
@@ -1056,7 +1067,12 @@ export function buildReplayPlan(input: {
     sizeMode: sourceRun.settingsSnapshot?.sizeMode ?? 'preset',
     customWidth: sourceRun.settingsSnapshot?.customWidth ?? 1024,
     customHeight: sourceRun.settingsSnapshot?.customHeight ?? 1024,
-    autoSave: sourceRun.settingsSnapshot?.autoSave ?? true,
+    autoSave: Boolean(sourceRun.settingsSnapshot?.autoSave && sourceRun.settingsSnapshot?.saveDirectory),
+    saveDirectory:
+      typeof sourceRun.settingsSnapshot?.saveDirectory === 'string' &&
+      sourceRun.settingsSnapshot.saveDirectory.trim().length > 0
+        ? sourceRun.settingsSnapshot.saveDirectory.trim()
+        : undefined,
     channelId: sourceRun.channelId,
     modelId: sourceRun.modelId,
     paramValues: { ...sourceRun.paramsSnapshot },

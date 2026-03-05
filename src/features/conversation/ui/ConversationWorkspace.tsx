@@ -76,6 +76,9 @@ export function ConversationWorkspace() {
     retryRun,
     editRunTemplate,
     replayRunAsNewMessage,
+    downloadAllRunImages,
+    downloadSingleRunImage,
+    downloadBatchRunImages,
     replayingRunIds,
   } = useConversationController()
 
@@ -159,6 +162,9 @@ export function ConversationWorkspace() {
                       onRetryRun={retryRun}
                       onEditRunTemplate={editRunTemplate}
                       onReplayRun={replayRunAsNewMessage}
+                      onDownloadAllRun={downloadAllRunImages}
+                      onDownloadSingleImage={downloadSingleRunImage}
+                      onDownloadBatchRun={downloadBatchRunImages}
                       replayingRunIds={replayingRunIds}
                     />
                   </Card>
@@ -173,6 +179,9 @@ export function ConversationWorkspace() {
               onRetryRun={retryRun}
               onEditRunTemplate={editRunTemplate}
               onReplayRun={replayRunAsNewMessage}
+              onDownloadAllRun={downloadAllRunImages}
+              onDownloadSingleImage={downloadSingleRunImage}
+              onDownloadBatchRun={downloadBatchRunImages}
               replayingRunIds={replayingRunIds}
             />
           )}

@@ -1,4 +1,5 @@
 import { generateImages } from '../../../services/imageGeneration'
+import { autoSaveImage, isSaveDirectoryReady } from '../../../services/imageSave'
 import type { ApiChannel, Run, SettingPrimitive, Side, SideMode, SingleSideSettings } from '../../../types/chat'
 import { clamp, makeId, toSettingsSnapshot } from '../../../utils/chat'
 import { classifyFailure } from '../domain/conversationDomain'
@@ -21,10 +22,12 @@ export interface CreateRunInput {
 
 export interface RunExecutorDeps {
   generateImagesFn?: typeof generateImages
+  autoSaveImageFn?: typeof autoSaveImage
 }
 
 export function createRunExecutor(deps: RunExecutorDeps = {}) {
   const generateImagesFn = deps.generateImagesFn ?? generateImages
+  const autoSaveImageFn = deps.autoSaveImageFn ?? autoSaveImage
 
   return {
     async createRun(options: CreateRunInput): Promise<Run> {
@@ -80,14 +83,23 @@ export function createRunExecutor(deps: RunExecutorDeps = {}) {
       }
 
       try {
+        const shouldAutoSave = settings.autoSave && isSaveDirectoryReady(settings.saveDirectory)
+        const effectiveParamValues = shouldAutoSave
+          ? {
+              ...paramsSnapshot,
+              responseFormat: 'b64_json' as const,
+            }
+          : paramsSnapshot
+
         const generated = await generateImagesFn({
           channel,
           modelId,
           prompt: finalPrompt,
           imageCount,
-          paramValues: paramsSnapshot,
+          paramValues: effectiveParamValues,
         })
 
+        const runId = makeId()
         const images = Array.from({ length: imageCount }, (_, index) => {
           const seq = index + 1
           const src = generated.images[index]
@@ -110,7 +122,24 @@ export function createRunExecutor(deps: RunExecutorDeps = {}) {
           }
         })
 
-        return { ...baseRun, images }
+        if (shouldAutoSave) {
+          await Promise.all(
+            images.map(async (item) => {
+              if (item.status !== 'success' || !item.fileRef) {
+                return
+              }
+              await autoSaveImageFn({
+                imageSrc: item.fileRef,
+                saveDirectory: settings.saveDirectory,
+                batchId,
+                runId,
+                seq: item.seq,
+              })
+            }),
+          )
+        }
+
+        return { ...baseRun, id: runId, images }
       } catch (error) {
         const message = error instanceof Error ? error.message : '未知错误'
         const code = classifyFailure(message)

@@ -10,6 +10,7 @@ const baseSettings = {
   customWidth: 1024,
   customHeight: 1024,
   autoSave: true,
+  saveDirectory: 'picked:test',
   channelId: null,
   modelId: 'model-a',
   paramValues: {},
@@ -38,7 +39,8 @@ describe('runExecutor', () => {
 
   it('creates successful runs when provider returns images', async () => {
     const mockGenerateImages = vi.fn().mockResolvedValue({ images: ['u1', 'u2'] })
-    const executor = createRunExecutor({ generateImagesFn: mockGenerateImages })
+    const mockAutoSaveImage = vi.fn().mockResolvedValue(true)
+    const executor = createRunExecutor({ generateImagesFn: mockGenerateImages, autoSaveImageFn: mockAutoSaveImage })
     const run = await executor.createRun({
       batchId: 'batch',
       sideMode: 'single',
@@ -54,6 +56,7 @@ describe('runExecutor', () => {
     })
 
     expect(mockGenerateImages).toHaveBeenCalledTimes(1)
+    expect(mockAutoSaveImage).toHaveBeenCalledTimes(0)
     expect(run.images.map((item) => item.status)).toEqual(['success', 'success'])
   })
 })

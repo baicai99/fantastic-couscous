@@ -31,6 +31,7 @@ import type {
 } from '../../types/chat'
 import { fetchChannelModels } from '../../services/channelModels'
 import { getAspectRatioOptions, getComputedPresetResolution, getSizeTierOptions, normalizeSizeTier } from '../../services/imageSizing'
+import { isSaveDirectoryReady, pickSaveDirectory } from '../../services/imageSave'
 import { makeId } from '../../utils/chat'
 
 const { Text } = Typography
@@ -420,6 +421,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
       settings.sizeMode === 'custom'
         ? `${settings.customWidth}x${settings.customHeight}`
         : getComputedPresetResolution(settings.aspectRatio, normalizeSizeTier(settings.resolution)) ?? settings.resolution
+    const hasSelectedDirectory = isSaveDirectoryReady(settings.saveDirectory)
     return (
       <Collapse
         className="full-width"
@@ -456,9 +458,36 @@ export function SettingsPanel(props: SettingsPanelProps) {
                 </Form.Item>
                 <Form.Item label="自动保存到本地" style={{ marginBottom: 0 }}>
                   <Switch
-                    checked={settings.autoSave}
+                    checked={hasSelectedDirectory ? settings.autoSave : false}
+                    disabled={!hasSelectedDirectory}
                     onChange={(checked) => onSettingsChange(side, { autoSave: checked })}
                   />
+                </Form.Item>
+                <Form.Item style={{ marginBottom: 8 }}>
+                  <Text type="secondary">
+                    {hasSelectedDirectory ? '路径已授权，可开启自动保存。' : '请先选择路径并授权后再开启自动保存。'}
+                  </Text>
+                </Form.Item>
+                <Form.Item style={{ marginBottom: 0 }}>
+                  <Button
+                    block
+                    onClick={async () => {
+                      try {
+                        const result = await pickSaveDirectory()
+                        if (!result) {
+                          messageApi.warning('当前环境不支持路径选择，无法开启自动保存')
+                          return
+                        }
+                        onSettingsChange(side, { saveDirectory: result.saveDirectory })
+                        messageApi.success(`路径已选择：${result.directoryName}`)
+                      } catch (error) {
+                        const reason = error instanceof Error ? error.message : '选择目录失败'
+                        messageApi.error(reason)
+                      }
+                    }}
+                  >
+                    选择路径
+                  </Button>
                 </Form.Item>
               </Form>
             ),

@@ -50,6 +50,7 @@ export interface SingleSideSettings {
   customWidth: number
   customHeight: number
   autoSave: boolean
+  saveDirectory?: string
   channelId: string | null
   modelId: string
   paramValues: Record<string, SettingPrimitive>
@@ -64,6 +65,7 @@ export interface RunSettingsSnapshot {
   customWidth: number
   customHeight: number
   autoSave: boolean
+  saveDirectory?: string
 }
 
 export interface ImageItem {

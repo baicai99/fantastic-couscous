@@ -735,6 +735,126 @@ export function useConversations() {
     }
   }
 
+  const inferImageExtension = (src: string): string => {
+    if (src.startsWith('data:image/')) {
+      const match = src.match(/^data:image\/([a-zA-Z0-9+.-]+);/i)
+      const ext = match?.[1]?.toLowerCase() ?? 'png'
+      return ext === 'jpeg' ? 'jpg' : ext
+    }
+
+    try {
+      const parsed = new URL(src)
+      const value = parsed.pathname.toLowerCase()
+      if (value.endsWith('.png')) return 'png'
+      if (value.endsWith('.jpg') || value.endsWith('.jpeg')) return 'jpg'
+      if (value.endsWith('.webp')) return 'webp'
+    } catch {
+      // Ignore URL parsing errors and fallback to png.
+    }
+
+    return 'png'
+  }
+
+  const sanitizeFileName = (value: string) => value.replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
+
+  const triggerDownload = (src: string, filename: string) => {
+    if (typeof document === 'undefined') {
+      return
+    }
+    const link = document.createElement('a')
+    link.href = src
+    link.download = filename
+    link.rel = 'noopener'
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+  }
+
+  const downloadAllRunImages = (runId: string) => {
+    const snapshot = stateRef.current
+    const currentActive = snapshot.activeId ? snapshot.contents[snapshot.activeId] ?? null : null
+    if (!currentActive || typeof document === 'undefined') {
+      return
+    }
+
+    const sourceRun = findRunInConversation(currentActive, runId)
+    if (!sourceRun) {
+      return
+    }
+
+    const successfulImages = sourceRun.images.filter((item) => item.status === 'success' && Boolean(item.fileRef))
+    if (successfulImages.length === 0) {
+      return
+    }
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
+
+    successfulImages.forEach((image) => {
+      const src = image.fileRef as string
+      const ext = inferImageExtension(src)
+      const filename = sanitizeFileName(`${timestamp}_${sourceRun.batchId}_${sourceRun.id}_${image.seq}.${ext}`)
+      triggerDownload(src, filename)
+    })
+  }
+
+  const downloadSingleRunImage = (runId: string, imageId: string) => {
+    const snapshot = stateRef.current
+    const currentActive = snapshot.activeId ? snapshot.contents[snapshot.activeId] ?? null : null
+    if (!currentActive) {
+      return
+    }
+
+    const sourceRun = findRunInConversation(currentActive, runId)
+    if (!sourceRun) {
+      return
+    }
+
+    const target = sourceRun.images.find(
+      (item) => item.id === imageId && item.status === 'success' && Boolean(item.fileRef),
+    )
+    if (!target?.fileRef) {
+      return
+    }
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
+    const ext = inferImageExtension(target.fileRef)
+    const filename = sanitizeFileName(`${timestamp}_${sourceRun.batchId}_${sourceRun.id}_${target.seq}.${ext}`)
+    triggerDownload(target.fileRef, filename)
+  }
+
+  const downloadBatchRunImages = (runId: string) => {
+    const snapshot = stateRef.current
+    const currentActive = snapshot.activeId ? snapshot.contents[snapshot.activeId] ?? null : null
+    if (!currentActive) {
+      return
+    }
+
+    const sourceRun = findRunInConversation(currentActive, runId)
+    if (!sourceRun) {
+      return
+    }
+
+    const allRuns = currentActive.messages.flatMap((message) => message.runs ?? [])
+    const batchRuns = allRuns.filter((item) => item.batchId === sourceRun.batchId && item.side === sourceRun.side)
+    const successImages = batchRuns.flatMap((run) =>
+      run.images
+        .filter((item) => item.status === 'success' && Boolean(item.fileRef))
+        .map((item) => ({ run, image: item })),
+    )
+
+    if (successImages.length === 0) {
+      return
+    }
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
+    successImages.forEach(({ run, image }) => {
+      const src = image.fileRef as string
+      const ext = inferImageExtension(src)
+      const filename = sanitizeFileName(`${timestamp}_${run.batchId}_${run.id}_${image.seq}.${ext}`)
+      triggerDownload(src, filename)
+    })
+  }
+
   return {
     summaries: state.summaries,
     activeConversation,
@@ -780,6 +900,9 @@ export function useConversations() {
     retryRun,
     editRunTemplate,
     replayRunAsNewMessage,
+    downloadAllRunImages,
+    downloadSingleRunImage,
+    downloadBatchRunImages,
     replayingRunIds,
   }
 }

@@ -124,6 +124,64 @@ describe('MessageList', () => {
     expect(screen.getByRole('button', { name: /再来一次/ })).toBeDisabled()
   })
 
+  it('triggers download-all callback', async () => {
+    const user = userEvent.setup()
+    const onDownloadAllRun = vi.fn()
+    const conversation = makeConversation()
+    conversation.messages[0].runs = [
+      {
+        ...conversation.messages[0].runs![0],
+        images: [{ id: 's1', seq: 1, status: 'success', fileRef: 'data:image/png;base64,AA==' }],
+      },
+    ]
+
+    render(
+      <div style={{ height: 600 }}>
+        <MessageList
+          activeConversation={conversation}
+          sideView="single"
+          onOpenPreview={() => {}}
+          onRetryRun={() => {}}
+          onEditRunTemplate={() => {}}
+          onReplayRun={() => {}}
+          onDownloadAllRun={onDownloadAllRun}
+        />
+      </div>,
+    )
+
+    await user.click(screen.getByRole('button', { name: /下载全部/ }))
+    expect(onDownloadAllRun).toHaveBeenCalledWith('r1')
+  })
+
+  it('triggers single-image download callback', async () => {
+    const user = userEvent.setup()
+    const onDownloadSingleImage = vi.fn()
+    const conversation = makeConversation()
+    conversation.messages[0].runs = [
+      {
+        ...conversation.messages[0].runs![0],
+        images: [{ id: 's1', seq: 1, status: 'success', fileRef: 'data:image/png;base64,AA==' }],
+      },
+    ]
+
+    render(
+      <div style={{ height: 600 }}>
+        <MessageList
+          activeConversation={conversation}
+          sideView="single"
+          onOpenPreview={() => {}}
+          onRetryRun={() => {}}
+          onEditRunTemplate={() => {}}
+          onReplayRun={() => {}}
+          onDownloadSingleImage={onDownloadSingleImage}
+        />
+      </div>,
+    )
+
+    await user.click(screen.getByRole('button', { name: /下载这张/ }))
+    expect(onDownloadSingleImage).toHaveBeenCalledWith('r1', 's1')
+  })
+
   it('shows failure reason under summary, not inside image placeholder', () => {
     const { container } = render(
       <div style={{ height: 600 }}>
@@ -203,5 +261,32 @@ describe('MessageList', () => {
     expect(screen.getByText(/Run #2/)).toBeInTheDocument()
     expect(screen.getByText(/Prompt: prompt one/)).toBeInTheDocument()
     expect(screen.getByText(/Prompt: prompt two/)).toBeInTheDocument()
+  })
+
+  it('shows batch-download button for dynamic multi-loop runs', () => {
+    const conversation = makeConversation(['prompt one', 'prompt two'])
+    conversation.messages[0].runs = conversation.messages[0].runs!.map((run) => ({
+      ...run,
+      batchId: 'same-batch',
+      variablesSnapshot: { subject: 'cat' },
+      images: [{ id: `${run.id}-img`, seq: 1, status: 'success' as const, fileRef: 'data:image/png;base64,AA==' }],
+    }))
+
+    render(
+      <div style={{ height: 600 }}>
+        <MessageList
+          activeConversation={conversation}
+          sideView="single"
+          onOpenPreview={() => {}}
+          onRetryRun={() => {}}
+          onEditRunTemplate={() => {}}
+          onReplayRun={() => {}}
+          onDownloadBatchRun={() => {}}
+        />
+      </div>,
+    )
+
+    const buttons = screen.getAllByRole('button', { name: /下载这一批次/ })
+    expect(buttons.length).toBeGreaterThan(0)
   })
 })
