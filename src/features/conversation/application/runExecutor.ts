@@ -18,6 +18,16 @@ export interface CreateRunInput {
   channel: ApiChannel | undefined
   retryOfRunId?: string
   retryAttempt?: number
+  runId?: string
+  createdAt?: string
+  onImageProgress?: (update: {
+    runId: string
+    seq: number
+    status: 'success' | 'failed'
+    fileRef?: string
+    error?: string
+    errorCode?: ReturnType<typeof classifyFailure>
+  }) => void
 }
 
 export interface RunExecutorDeps {
@@ -45,13 +55,16 @@ export function createRunExecutor(deps: RunExecutorDeps = {}) {
         channel,
         retryOfRunId,
         retryAttempt = 0,
+        runId = makeId(),
+        createdAt = new Date().toISOString(),
+        onImageProgress,
       } = options
 
       const imageCount = clamp(Math.floor(settings.imageCount), 1, 8)
       const baseRun = {
-        id: makeId(),
+        id: runId,
         batchId,
-        createdAt: new Date().toISOString(),
+        createdAt,
         sideMode,
         side,
         prompt: finalPrompt,
@@ -97,20 +110,49 @@ export function createRunExecutor(deps: RunExecutorDeps = {}) {
           prompt: finalPrompt,
           imageCount,
           paramValues: effectiveParamValues,
+          onImageCompleted: (item) => {
+            const errorMessage = item.error?.trim() ? item.error : '该序号未返回图片'
+            const imageUpdate =
+              item.src
+                ? {
+                    runId,
+                    seq: item.seq,
+                    status: 'success' as const,
+                    fileRef: item.src,
+                  }
+                : {
+                    runId,
+                    seq: item.seq,
+                    status: 'failed' as const,
+                    error: errorMessage,
+                    errorCode: classifyFailure(errorMessage),
+                  }
+
+            onImageProgress?.(imageUpdate)
+
+            if (shouldAutoSave && item.src) {
+              void autoSaveImageFn({
+                imageSrc: item.src,
+                saveDirectory: settings.saveDirectory,
+                batchId,
+                runId,
+                seq: item.seq,
+              })
+            }
+          },
         })
 
-        const runId = makeId()
         const images = Array.from({ length: imageCount }, (_, index) => {
           const seq = index + 1
-          const src = generated.images[index]
-
-          if (!src) {
+          const item = generated.items.find((entry) => entry.seq === seq)
+          if (!item?.src) {
+            const message = item?.error?.trim() ? item.error : '该序号未返回图片'
             return {
               id: makeId(),
               seq,
               status: 'failed' as const,
-              error: '该序号未返回图片',
-              errorCode: 'unknown' as const,
+              error: message,
+              errorCode: classifyFailure(message),
             }
           }
 
@@ -118,26 +160,9 @@ export function createRunExecutor(deps: RunExecutorDeps = {}) {
             id: makeId(),
             seq,
             status: 'success' as const,
-            fileRef: src,
+            fileRef: item.src,
           }
         })
-
-        if (shouldAutoSave) {
-          await Promise.all(
-            images.map(async (item) => {
-              if (item.status !== 'success' || !item.fileRef) {
-                return
-              }
-              await autoSaveImageFn({
-                imageSrc: item.fileRef,
-                saveDirectory: settings.saveDirectory,
-                batchId,
-                runId,
-                seq: item.seq,
-              })
-            }),
-          )
-        }
 
         return { ...baseRun, id: runId, images }
       } catch (error) {

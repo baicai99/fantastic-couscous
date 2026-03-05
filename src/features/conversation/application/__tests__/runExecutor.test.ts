@@ -38,7 +38,12 @@ describe('runExecutor', () => {
   })
 
   it('creates successful runs when provider returns images', async () => {
-    const mockGenerateImages = vi.fn().mockResolvedValue({ images: ['u1', 'u2'] })
+    const mockGenerateImages = vi.fn().mockResolvedValue({
+      items: [
+        { seq: 1, src: 'u1' },
+        { seq: 2, src: 'u2' },
+      ],
+    })
     const mockAutoSaveImage = vi.fn().mockResolvedValue(true)
     const executor = createRunExecutor({ generateImagesFn: mockGenerateImages, autoSaveImageFn: mockAutoSaveImage })
     const run = await executor.createRun({
@@ -58,5 +63,39 @@ describe('runExecutor', () => {
     expect(mockGenerateImages).toHaveBeenCalledTimes(1)
     expect(mockAutoSaveImage).toHaveBeenCalledTimes(0)
     expect(run.images.map((item) => item.status)).toEqual(['success', 'success'])
+  })
+
+  it('publishes per-image progress while preserving partial failures', async () => {
+    const mockGenerateImages = vi.fn().mockImplementation(async (input: {
+      onImageCompleted?: (item: { seq: number; src?: string; error?: string }) => void
+    }) => {
+      input.onImageCompleted?.({ seq: 1, src: 'u1' })
+      input.onImageCompleted?.({ seq: 2, error: 'boom' })
+      return {
+        items: [
+          { seq: 1, src: 'u1' },
+          { seq: 2, error: 'boom' },
+        ],
+      }
+    })
+    const onImageProgress = vi.fn()
+    const executor = createRunExecutor({ generateImagesFn: mockGenerateImages })
+    const run = await executor.createRun({
+      batchId: 'batch',
+      sideMode: 'single',
+      side: 'single',
+      settings: { ...baseSettings, channelId: 'ch' },
+      templatePrompt: 'x',
+      finalPrompt: 'x',
+      variablesSnapshot: {},
+      modelId: 'model-a',
+      modelName: 'Model A',
+      paramsSnapshot: {},
+      channel: { id: 'ch', name: 'n', baseUrl: 'https://example.com', apiKey: 'key' },
+      onImageProgress,
+    })
+
+    expect(onImageProgress).toHaveBeenCalledTimes(2)
+    expect(run.images.map((item) => item.status)).toEqual(['success', 'failed'])
   })
 })

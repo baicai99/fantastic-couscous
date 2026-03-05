@@ -33,9 +33,26 @@ function makePlan(id: string) {
 
 describe('conversationOrchestrator', () => {
   it('maps completed runs back to pending ids', async () => {
-    const createRun = vi.fn()
-      .mockResolvedValueOnce({ id: 'r-a', createdAt: 't', batchId: 'b', sideMode: 'single', side: 'single', prompt: 'p', imageCount: 1, channelId: null, channelName: null, modelId: 'm', modelName: 'm', templatePrompt: 't', finalPrompt: 'f', variablesSnapshot: {}, paramsSnapshot: {}, settingsSnapshot: { resolution: '1K', aspectRatio: '1:1', imageCount: 1, gridColumns: 1, sizeMode: 'preset', customWidth: 1024, customHeight: 1024, autoSave: true }, retryAttempt: 0, images: [] })
-      .mockResolvedValueOnce({ id: 'r-b', createdAt: 't', batchId: 'b', sideMode: 'single', side: 'single', prompt: 'p', imageCount: 1, channelId: null, channelName: null, modelId: 'm', modelName: 'm', templatePrompt: 't', finalPrompt: 'f', variablesSnapshot: {}, paramsSnapshot: {}, settingsSnapshot: { resolution: '1K', aspectRatio: '1:1', imageCount: 1, gridColumns: 1, sizeMode: 'preset', customWidth: 1024, customHeight: 1024, autoSave: true }, retryAttempt: 0, images: [] })
+    const createRun = vi.fn().mockImplementation(async (input: { runId: string; createdAt: string }) => ({
+      id: input.runId,
+      createdAt: input.createdAt,
+      batchId: 'b',
+      sideMode: 'single' as const,
+      side: 'single',
+      prompt: 'p',
+      imageCount: 1,
+      channelId: null,
+      channelName: null,
+      modelId: 'm',
+      modelName: 'm',
+      templatePrompt: 't',
+      finalPrompt: 'f',
+      variablesSnapshot: {},
+      paramsSnapshot: {},
+      settingsSnapshot: { resolution: '1K', aspectRatio: '1:1', imageCount: 1, gridColumns: 1, sizeMode: 'preset', customWidth: 1024, customHeight: 1024, autoSave: true },
+      retryAttempt: 0,
+      images: [],
+    }))
 
     const orchestrator = createConversationOrchestrator({ createRun })
 

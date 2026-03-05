@@ -427,6 +427,91 @@ export function useConversations() {
     persistConversation(updatedConversation)
   }
 
+  const updateRunImageInConversation = (
+    conversationId: string,
+    input: {
+      runId: string
+      seq: number
+      status: 'success' | 'failed'
+      fileRef?: string
+      error?: string
+      errorCode?: Run['images'][number]['errorCode']
+    },
+  ) => {
+    const snapshot = stateRef.current
+    const currentConversation = snapshot.contents[conversationId]
+    if (!currentConversation) {
+      return
+    }
+
+    let changed = false
+    const nextMessages = currentConversation.messages.map((message) => {
+      if (!Array.isArray(message.runs) || message.runs.length === 0) {
+        return message
+      }
+
+      let messageChanged = false
+      const nextRuns = message.runs.map((run) => {
+        if (run.id !== input.runId) {
+          return run
+        }
+
+        let runChanged = false
+        const nextImages = run.images.map((item) => {
+          if (item.seq !== input.seq) {
+            return item
+          }
+
+          const nextItem = {
+            ...item,
+            status: input.status,
+            fileRef: input.fileRef,
+            error: input.error,
+            errorCode: input.errorCode,
+          }
+          if (
+            nextItem.status === item.status &&
+            nextItem.fileRef === item.fileRef &&
+            nextItem.error === item.error &&
+            nextItem.errorCode === item.errorCode
+          ) {
+            return item
+          }
+          runChanged = true
+          changed = true
+          return nextItem
+        })
+
+        if (!runChanged) {
+          return run
+        }
+        messageChanged = true
+        return {
+          ...run,
+          images: nextImages,
+        }
+      })
+
+      if (!messageChanged) {
+        return message
+      }
+      return {
+        ...message,
+        runs: nextRuns,
+      }
+    })
+
+    if (!changed) {
+      return
+    }
+
+    persistConversation({
+      ...currentConversation,
+      updatedAt: new Date().toISOString(),
+      messages: nextMessages,
+    })
+  }
+
   const findRunInConversation = (conversation: Conversation, runId: string): Run | null => {
     for (const message of conversation.messages) {
       const target = (message.runs ?? []).find((item) => item.id === runId)
@@ -567,6 +652,11 @@ export function useConversations() {
           pendingCreatedAt: runPlan.pendingRun.createdAt,
         })),
         snapshot.runConcurrency,
+        {
+          onRunImageProgress: (progress) => {
+            updateRunImageInConversation(targetConversationId, progress)
+          },
+        },
       )
 
       const map = new Map(completedRuns.map((run) => [run.id, run]))

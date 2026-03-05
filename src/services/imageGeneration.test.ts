@@ -79,24 +79,24 @@ describe('imageGeneration request body', () => {
     })
     vi.stubGlobal('fetch', fetchMock)
 
-    await expect(
-      generateImages({
-        channel: {
-          id: 'ch',
-          name: 'c',
-          baseUrl: 'https://api.example.com/v1',
-          apiKey: 'k',
-        },
-        modelId: 'gemini-3-pro-image-preview',
-        prompt: 'x',
-        imageCount: 1,
-        paramValues: {
-          size: '1K',
-          aspectRatio: '1:1',
-          responseFormat: 'url',
-        },
-      }),
-    ).rejects.toThrow('当前模型不支持 1K 尺寸，请切换别的尺寸重新尝试。')
+    const result = await generateImages({
+      channel: {
+        id: 'ch',
+        name: 'c',
+        baseUrl: 'https://api.example.com/v1',
+        apiKey: 'k',
+      },
+      modelId: 'gemini-3-pro-image-preview',
+      prompt: 'x',
+      imageCount: 1,
+      paramValues: {
+        size: '1K',
+        aspectRatio: '1:1',
+        responseFormat: 'url',
+      },
+    })
+
+    expect(result.items[0]?.error).toBe('当前模型不支持 1K 尺寸，请切换别的尺寸重新尝试。')
   })
 
   it('returns readable message when upstream rejects sensitive output with HTTP 451', async () => {
@@ -108,23 +108,23 @@ describe('imageGeneration request body', () => {
     })
     vi.stubGlobal('fetch', fetchMock)
 
-    await expect(
-      generateImages({
-        channel: {
-          id: 'ch',
-          name: 'c',
-          baseUrl: 'https://api.example.com/v1',
-          apiKey: 'k',
-        },
-        modelId: 'gemini-3-pro-image-preview',
-        prompt: 'x',
-        imageCount: 1,
-        paramValues: {
-          size: '1K',
-          aspectRatio: '1:1',
-          responseFormat: 'url',
-        },
-      }),
-    ).rejects.toThrow('提示词有敏感内容，被拒绝了。')
+    const result = await generateImages({
+      channel: {
+        id: 'ch',
+        name: 'c',
+        baseUrl: 'https://api.example.com/v1',
+        apiKey: 'k',
+      },
+      modelId: 'gemini-3-pro-image-preview',
+      prompt: 'x',
+      imageCount: 1,
+      paramValues: {
+        size: '1K',
+        aspectRatio: '1:1',
+        responseFormat: 'url',
+      },
+    })
+
+    expect(result.items[0]?.error).toBe('提示词有敏感内容，被拒绝了。')
   })
 })

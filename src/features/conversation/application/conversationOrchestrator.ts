@@ -1,4 +1,4 @@
-import type { Conversation, ModelCatalog, Run, SettingPrimitive } from '../../../types/chat'
+import type { Conversation, FailureCode, ModelCatalog, Run, SettingPrimitive } from '../../../types/chat'
 import type { CreateRunInput } from './runExecutor'
 import { buildReplayPlan, buildRetryPlan, planRunBatch } from '../domain/conversationDomain'
 import type { ConversationState } from '../state/conversationState'
@@ -6,6 +6,15 @@ import { Semaphore } from './utils/semaphore'
 
 export interface ConversationOrchestratorDeps {
   createRun: (input: CreateRunInput) => Promise<Run>
+}
+
+export interface RunImageProgress {
+  runId: string
+  seq: number
+  status: 'success' | 'failed'
+  fileRef?: string
+  error?: string
+  errorCode?: FailureCode
 }
 
 export function createConversationOrchestrator(deps: ConversationOrchestratorDeps) {
@@ -43,11 +52,15 @@ export function createConversationOrchestrator(deps: ConversationOrchestratorDep
       channel: CreateRunInput['channel']
       pendingRunId: string
       pendingCreatedAt: string
-    }>, concurrency = runPlans.length): Promise<Run[]> {
+    }>,
+    concurrency = runPlans.length,
+    hooks?: {
+      onRunImageProgress?: (progress: RunImageProgress) => void
+    }): Promise<Run[]> {
       const semaphore = new Semaphore(Math.max(1, Math.floor(concurrency)))
       const completedRuns = await Promise.all(
         runPlans.map(async (plan) => {
-          const result = await semaphore.use(() =>
+          return semaphore.use(() =>
             deps.createRun({
               batchId: plan.batchId,
               sideMode: plan.sideMode,
@@ -60,14 +73,13 @@ export function createConversationOrchestrator(deps: ConversationOrchestratorDep
               modelName: plan.modelName,
               paramsSnapshot: plan.paramsSnapshot,
               channel: plan.channel,
+              runId: plan.pendingRunId,
+              createdAt: plan.pendingCreatedAt,
+              onImageProgress: (progress) => {
+                hooks?.onRunImageProgress?.(progress)
+              },
             }),
           )
-
-          return {
-            ...result,
-            id: plan.pendingRunId,
-            createdAt: plan.pendingCreatedAt,
-          }
         }),
       )
 

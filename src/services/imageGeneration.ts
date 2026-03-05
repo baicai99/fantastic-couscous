@@ -7,10 +7,17 @@ interface GenerateImagesInput {
   prompt: string
   imageCount: number
   paramValues: Record<string, SettingPrimitive>
+  onImageCompleted?: (item: GeneratedImageItem) => void
 }
 
 interface GenerateImagesResult {
-  images: string[]
+  items: GeneratedImageItem[]
+}
+
+export interface GeneratedImageItem {
+  seq: number
+  src?: string
+  error?: string
 }
 
 interface RawImageItem {
@@ -183,7 +190,7 @@ function isSensitiveContentError(status: number, detail: string): boolean {
 }
 
 export async function generateImages(input: GenerateImagesInput): Promise<GenerateImagesResult> {
-  const { channel, modelId, prompt, imageCount, paramValues } = input
+  const { channel, modelId, prompt, imageCount, paramValues, onImageCompleted } = input
   const modelCandidates = getModelCandidates(modelId)
   const primaryUrl = buildGenerationUrl(channel.baseUrl)
   const fallbackUrl = primaryUrl.includes('/images/generations')
@@ -244,12 +251,16 @@ export async function generateImages(input: GenerateImagesInput): Promise<Genera
     return msg.includes('not supported model for image generation') || msg.includes('convert_request_failed')
   }
 
-  const requests = Array.from({ length: imageCount }, async () => {
+  const requests = Array.from({ length: imageCount }, (_, index) => (async (): Promise<GeneratedImageItem> => {
+    const seq = index + 1
     let lastError: unknown = null
 
     for (const candidate of modelCandidates) {
       try {
-        return await doRequest(primaryUrl, candidate)
+        const src = await doRequest(primaryUrl, candidate)
+        const successItem: GeneratedImageItem = { seq, src }
+        onImageCompleted?.(successItem)
+        return successItem
       } catch (error) {
         lastError = error
         const message = error instanceof Error ? error.message : ''
@@ -258,24 +269,40 @@ export async function generateImages(input: GenerateImagesInput): Promise<Genera
 
         if (shouldTryPathFallback && fallbackUrl) {
           try {
-            return await doRequest(fallbackUrl, candidate)
+            const src = await doRequest(fallbackUrl, candidate)
+            const successItem: GeneratedImageItem = { seq, src }
+            onImageCompleted?.(successItem)
+            return successItem
           } catch (fallbackError) {
             lastError = fallbackError
           }
         }
 
         if (!isUnsupportedModelError(lastError)) {
-          throw lastError
+          const failedMessage = lastError instanceof Error ? lastError.message : 'Image generation failed.'
+          const failedItem: GeneratedImageItem = { seq, error: failedMessage }
+          onImageCompleted?.(failedItem)
+          return failedItem
         }
       }
     }
 
     if (isUnsupportedModelError(lastError)) {
-      throw new Error(buildUnsupportedModelMessage(channel.baseUrl, modelId, modelCandidates, lastError))
+      const failedItem: GeneratedImageItem = {
+        seq,
+        error: buildUnsupportedModelMessage(channel.baseUrl, modelId, modelCandidates, lastError),
+      }
+      onImageCompleted?.(failedItem)
+      return failedItem
     }
 
-    throw lastError instanceof Error ? lastError : new Error('Image generation failed.')
-  })
+    const failedItem: GeneratedImageItem = {
+      seq,
+      error: lastError instanceof Error ? lastError.message : 'Image generation failed.',
+    }
+    onImageCompleted?.(failedItem)
+    return failedItem
+  })())
 
-  return { images: await Promise.all(requests) }
+  return { items: await Promise.all(requests) }
 }
