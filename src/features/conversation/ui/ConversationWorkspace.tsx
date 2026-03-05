@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import type { CSSProperties } from 'react'
 import { HistoryOutlined, SettingOutlined } from '@ant-design/icons'
 import { Button, Card, Col, Layout, Row, Space, Tag, Typography } from 'antd'
 import { Composer } from '../../../components/chat/Composer'
@@ -30,6 +31,8 @@ export function ConversationWorkspace() {
       // Ignore storage errors in restricted environments.
     }
   }, [isRightPanelCollapsed])
+  const composerLayerRef = useRef<HTMLDivElement | null>(null)
+  const [composerInset, setComposerInset] = useState(170)
 
   const {
     summaries,
@@ -115,6 +118,41 @@ export function ConversationWorkspace() {
   const modelNameById = useMemo(() => {
     return new Map(modelCatalog.models.map((model) => [model.id, model.name]))
   }, [modelCatalog.models])
+  const chatStageStyle = useMemo(
+    () =>
+      ({
+        '--chat-composer-safe-area': `${composerInset}px`,
+      }) as CSSProperties,
+    [composerInset],
+  )
+
+  useEffect(() => {
+    const node = composerLayerRef.current
+    if (!node) {
+      return undefined
+    }
+
+    const updateInset = () => {
+      setComposerInset(Math.ceil(node.getBoundingClientRect().height) + 24)
+    }
+
+    updateInset()
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', updateInset)
+      return () => window.removeEventListener('resize', updateInset)
+    }
+
+    const observer = new ResizeObserver(() => {
+      updateInset()
+    })
+    observer.observe(node)
+    window.addEventListener('resize', updateInset)
+
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('resize', updateInset)
+    }
+  }, [])
 
   return (
     <Layout className="app-shell">
@@ -156,78 +194,82 @@ export function ConversationWorkspace() {
           </div>
         </Header>
 
-        <Content className={`chat-body ${activeSideMode === 'multi' ? 'chat-body-multi' : ''}`}>
-          {activeSideMode === 'multi' ? (
-            <Row gutter={[12, 12]} wrap={false} className="ab-windows-row">
-              {activeSides.map((sideId, index) => (
-                <Col key={sideId} flex={`0 0 ${100 / activeSideCount}%`} className="ab-window-col">
-                  <Card
-                    title={modelNameById.get(activeSettingsBySide[sideId]?.modelId) ?? `Window ${index + 1}`}
-                    size="small"
-                    className="ab-window-card"
-                  >
-                    <MessageList
-                      activeConversation={activeConversation}
-                      sideView={sideId}
-                      onOpenPreview={openPreview}
-                      onUseUserPrompt={setDraft}
-                      onRetryRun={retryRun}
-                      onReplayRun={replayRunAsNewMessage}
-                      onDownloadAllRun={downloadAllRunImages}
-                      onDownloadSingleImage={downloadSingleRunImage}
-                      onDownloadBatchRun={downloadBatchRunImages}
-                      replayingRunIds={replayingRunIds}
-                      initialMessageLimit={historyVisibleLimit}
-                      messagePageSize={historyPageSize}
-                      initialImagesPerRun={6}
-                      autoScrollTrigger={sendScrollTrigger}
-                      onLoadOlderMessages={loadOlderMessages}
-                    />
-                  </Card>
-                </Col>
-              ))}
-            </Row>
-          ) : (
-            <MessageList
-              activeConversation={activeConversation}
-              sideView="single"
-              onOpenPreview={openPreview}
-              onUseUserPrompt={setDraft}
-              onRetryRun={retryRun}
-              onReplayRun={replayRunAsNewMessage}
-              onDownloadAllRun={downloadAllRunImages}
-              onDownloadSingleImage={downloadSingleRunImage}
-              onDownloadBatchRun={downloadBatchRunImages}
-              replayingRunIds={replayingRunIds}
-              initialMessageLimit={historyVisibleLimit}
-              messagePageSize={historyPageSize}
-              initialImagesPerRun={6}
-              autoScrollTrigger={sendScrollTrigger}
-              onLoadOlderMessages={loadOlderMessages}
-            />
-          )}
-        </Content>
+        <div className="chat-stage" style={chatStageStyle}>
+          <Content className={`chat-body ${activeSideMode === 'multi' ? 'chat-body-multi' : ''}`}>
+            {activeSideMode === 'multi' ? (
+              <Row gutter={[12, 12]} wrap={false} className="ab-windows-row">
+                {activeSides.map((sideId, index) => (
+                  <Col key={sideId} flex={`0 0 ${100 / activeSideCount}%`} className="ab-window-col">
+                    <Card
+                      title={modelNameById.get(activeSettingsBySide[sideId]?.modelId) ?? `Window ${index + 1}`}
+                      size="small"
+                      className="ab-window-card"
+                    >
+                      <MessageList
+                        activeConversation={activeConversation}
+                        sideView={sideId}
+                        onOpenPreview={openPreview}
+                        onUseUserPrompt={setDraft}
+                        onRetryRun={retryRun}
+                        onReplayRun={replayRunAsNewMessage}
+                        onDownloadAllRun={downloadAllRunImages}
+                        onDownloadSingleImage={downloadSingleRunImage}
+                        onDownloadBatchRun={downloadBatchRunImages}
+                        replayingRunIds={replayingRunIds}
+                        initialMessageLimit={historyVisibleLimit}
+                        messagePageSize={historyPageSize}
+                        initialImagesPerRun={6}
+                        autoScrollTrigger={sendScrollTrigger}
+                        onLoadOlderMessages={loadOlderMessages}
+                      />
+                    </Card>
+                  </Col>
+                ))}
+              </Row>
+            ) : (
+              <MessageList
+                activeConversation={activeConversation}
+                sideView="single"
+                onOpenPreview={openPreview}
+                onUseUserPrompt={setDraft}
+                onRetryRun={retryRun}
+                onReplayRun={replayRunAsNewMessage}
+                onDownloadAllRun={downloadAllRunImages}
+                onDownloadSingleImage={downloadSingleRunImage}
+                onDownloadBatchRun={downloadBatchRunImages}
+                replayingRunIds={replayingRunIds}
+                initialMessageLimit={historyVisibleLimit}
+                messagePageSize={historyPageSize}
+                initialImagesPerRun={6}
+                autoScrollTrigger={sendScrollTrigger}
+                onLoadOlderMessages={loadOlderMessages}
+              />
+            )}
+          </Content>
 
-        <Composer
-          draft={draft}
-          sendError={sendError}
-          isSending={isSending}
-          isSendBlocked={isSendBlocked}
-          panelBatchError={panelBatchError}
-          panelMismatchRowIds={panelMismatchRowIds}
-          showAdvancedVariables={showAdvancedVariables}
-          dynamicPromptEnabled={dynamicPromptEnabled}
-          panelValueFormat={panelValueFormat}
-          panelVariables={panelVariables}
-          resolvedVariables={resolvedVariables}
-          finalPromptPreview={templatePreview.ok ? templatePreview.finalPrompt : ''}
-          missingKeys={templatePreview.missingKeys}
-          unusedVariableKeys={unusedVariableKeys}
-          onDraftChange={setDraft}
-          onPanelValueFormatChange={setPanelValueFormat}
-          onPanelVariablesChange={setPanelVariables}
-          onSend={sendDraft}
-        />
+          <div ref={composerLayerRef} className="chat-composer-layer">
+            <Composer
+              draft={draft}
+              sendError={sendError}
+              isSending={isSending}
+              isSendBlocked={isSendBlocked}
+              panelBatchError={panelBatchError}
+              panelMismatchRowIds={panelMismatchRowIds}
+              showAdvancedVariables={showAdvancedVariables}
+              dynamicPromptEnabled={dynamicPromptEnabled}
+              panelValueFormat={panelValueFormat}
+              panelVariables={panelVariables}
+              resolvedVariables={resolvedVariables}
+              finalPromptPreview={templatePreview.ok ? templatePreview.finalPrompt : ''}
+              missingKeys={templatePreview.missingKeys}
+              unusedVariableKeys={unusedVariableKeys}
+              onDraftChange={setDraft}
+              onPanelValueFormatChange={setPanelValueFormat}
+              onPanelVariablesChange={setPanelVariables}
+              onSend={sendDraft}
+            />
+          </div>
+        </div>
       </Layout>
 
       {!isRightPanelCollapsed ? (
@@ -284,7 +326,6 @@ export function ConversationWorkspace() {
     </Layout>
   )
 }
-
 
 
 

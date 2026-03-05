@@ -1,6 +1,7 @@
 .app-shell {
   height: 100vh;
   background: #f5f7fa;
+  overflow: hidden;
 }
 
 .panel {
@@ -14,9 +15,10 @@
 }
 
 .panel-scroll {
-  height: 100vh;
+  height: 100%;
   overflow-y: auto;
   padding: 16px;
+  box-sizing: border-box;
 }
 
 .settings-panel-header {
@@ -39,6 +41,8 @@
   display: flex;
   flex-direction: column;
   min-width: 420px;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .chat-header {
@@ -79,68 +83,177 @@
 
 .chat-body {
   flex: 1;
-  overflow-y: auto;
-  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 0;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .chat-body.chat-body-multi {
   overflow: hidden;
 }
 
+.chat-stage {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.chat-composer-layer {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 18px;
+  width: min(920px, calc(100% - 32px));
+  z-index: 16;
+  pointer-events: none;
+}
+
 .chat-input {
-  padding: 16px;
-  border-top: 1px solid #f0f0f0;
-  background: #f5f7fa;
+  pointer-events: auto;
 }
 
 .composer-card {
-  border-radius: 12px;
-  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.06);
+  border-radius: 36px;
+  border: 1px solid #d9d9d9;
+  box-shadow: 0 8px 30px rgba(15, 23, 42, 0.1);
+  background: rgba(255, 255, 255, 0.98);
+  backdrop-filter: blur(8px);
 }
 
 .composer-card .ant-card-body {
-  padding: 12px;
+  padding: 10px 12px;
 }
 
 .composer-main-row {
   display: flex;
-  align-items: flex-end;
-  gap: 10px;
+  align-items: center;
+  gap: 12px;
 }
 
 .composer-textarea .ant-input {
-  border-radius: 10px;
+  border-radius: 24px;
+  border: none;
+  box-shadow: none;
+  outline: none;
+  resize: none;
+  padding: 10px 14px;
+  background: transparent;
+}
+
+.composer-textarea.ant-input-textarea-affix-wrapper,
+.composer-textarea.ant-input-textarea-show-count,
+.composer-textarea.ant-input-outlined,
+.composer-textarea .ant-input-outlined {
+  border: none !important;
+  box-shadow: none !important;
+  outline: none !important;
+  background: transparent;
+}
+
+.composer-textarea.ant-input-textarea-affix-wrapper:hover,
+.composer-textarea.ant-input-textarea-show-count:hover,
+.composer-textarea.ant-input-outlined:hover,
+.composer-textarea .ant-input-outlined:hover,
+.composer-textarea.ant-input-textarea-affix-wrapper:focus,
+.composer-textarea.ant-input-textarea-show-count:focus,
+.composer-textarea.ant-input-outlined:focus,
+.composer-textarea .ant-input-outlined:focus,
+.composer-textarea.ant-input-textarea-affix-wrapper:focus-within,
+.composer-textarea.ant-input-textarea-show-count:focus-within,
+.composer-textarea.ant-input-outlined:focus-within,
+.composer-textarea .ant-input-outlined:focus-within {
+  border: none !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+.composer-textarea.ant-input-textarea-show-count::after {
+  margin-inline-end: 8px;
 }
 
 .composer-action-col {
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
+  flex-direction: row;
+  align-items: center;
   gap: 8px;
-  min-width: 180px;
-}
-
-.composer-enter-hint {
-  font-size: 12px;
+  flex-shrink: 0;
 }
 
 .composer-send-btn {
-  min-width: 110px;
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  padding: 0;
 }
 
-.composer-advanced-card {
+.composer-advanced-btn {
+  height: 44px;
+  border-radius: 22px;
+  padding-inline: 14px;
+}
+
+.composer-send-error {
+  margin-top: 8px;
   border-radius: 10px;
 }
 
+.message-list-viewport {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding-bottom: calc(var(--chat-composer-safe-area, 170px) + 12px);
+  scroll-padding-bottom: calc(var(--chat-composer-safe-area, 170px) + 12px);
+}
+
+.message-list-content {
+  padding: 16px;
+}
+
 @media (max-width: 920px) {
+  .chat-composer-layer {
+    width: calc(100% - 20px);
+    bottom: 10px;
+  }
+
+  .composer-card {
+    border-radius: 26px;
+  }
+
   .composer-main-row {
-    flex-direction: column;
-    align-items: stretch;
+    align-items: flex-end;
   }
 
   .composer-action-col {
     min-width: 0;
-    align-items: flex-start;
+    flex-direction: column;
+    align-items: stretch;
+    width: 96px;
+  }
+
+  .composer-advanced-btn {
+    width: 100%;
+  }
+
+  .composer-send-btn {
+    width: 44px;
+    min-width: 44px;
+    align-self: flex-end;
+  }
+
+  .message-list-viewport {
+    padding-bottom: calc(var(--chat-composer-safe-area, 200px) + env(safe-area-inset-bottom));
+    scroll-padding-bottom: calc(var(--chat-composer-safe-area, 200px) + env(safe-area-inset-bottom));
+  }
+
+  .message-list-content {
+    padding: 12px;
   }
 }
 

@@ -1,6 +1,6 @@
-﻿import { useState } from 'react'
-import { SendOutlined } from '@ant-design/icons'
-import { Alert, Button, Card, Input, Modal, Segmented, Select, Space, Table, Tabs, Typography } from 'antd'
+import { useEffect, useState } from 'react'
+import { SendOutlined, SettingOutlined } from '@ant-design/icons'
+import { Alert, Button, Card, Drawer, Input, Modal, Segmented, Select, Space, Table, Tabs, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import {
   buildSyncPreview,
@@ -60,6 +60,13 @@ function ensureEditableRows(rows: PanelVariableRow[]): PanelVariableRow[] {
   return rows.length > 0 ? rows : [{ id: makeId(), key: '', valuesText: '', selectedValue: '' }]
 }
 
+function detectIsNarrowLayout() {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+    return false
+  }
+  return window.matchMedia('(max-width: 920px)').matches
+}
+
 export function Composer(props: ComposerProps) {
   const {
     draft,
@@ -89,6 +96,34 @@ export function Composer(props: ComposerProps) {
   const [bulkExportFormat, setBulkExportFormat] = useState<BulkDetectedFormat>('json')
   const [syncPreview, setSyncPreview] = useState<SyncPreviewState | null>(null)
   const [syncError, setSyncError] = useState('')
+  const [isAdvancedPanelOpen, setIsAdvancedPanelOpen] = useState(false)
+  const [useSheet, setUseSheet] = useState(detectIsNarrowLayout)
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+      return undefined
+    }
+
+    const media = window.matchMedia('(max-width: 920px)')
+    const onChange = (event: MediaQueryListEvent) => {
+      setUseSheet(event.matches)
+    }
+
+    setUseSheet(media.matches)
+    if (typeof media.addEventListener === 'function') {
+      media.addEventListener('change', onChange)
+      return () => media.removeEventListener('change', onChange)
+    }
+
+    media.addListener(onChange)
+    return () => media.removeListener(onChange)
+  }, [])
+
+  useEffect(() => {
+    if (!showAdvancedVariables) {
+      setIsAdvancedPanelOpen(false)
+    }
+  }, [showAdvancedVariables])
 
   const mismatchSet = new Set(panelMismatchRowIds)
   const draftPlaceholder = dynamicPromptEnabled
@@ -207,11 +242,7 @@ export function Composer(props: ComposerProps) {
           placeholder="如 hair"
           status={mismatchSet.has(row.id) ? 'error' : undefined}
           onChange={(event) => {
-            onPanelVariablesChange(
-              panelVariables.map((item) =>
-                item.id === row.id ? { ...item, key: event.target.value } : item,
-              ),
-            )
+            onPanelVariablesChange(panelVariables.map((item) => (item.id === row.id ? { ...item, key: event.target.value } : item)))
           }}
         />
       ),
@@ -227,9 +258,7 @@ export function Composer(props: ComposerProps) {
           autoSize={{ minRows: 1, maxRows: 4 }}
           onChange={(event) => {
             onPanelVariablesChange(
-              panelVariables.map((item) =>
-                item.id === row.id ? { ...item, valuesText: event.target.value } : item,
-              ),
+              panelVariables.map((item) => (item.id === row.id ? { ...item, valuesText: event.target.value } : item)),
             )
           }}
         />
@@ -253,144 +282,162 @@ export function Composer(props: ComposerProps) {
     },
   ]
 
+  const advancedPanelContent = (
+    <Space direction="vertical" className="full-width" size={10}>
+      <Tabs
+        activeKey={advancedTab}
+        onChange={(key) => setAdvancedTab(key as AdvancedTabKey)}
+        items={[
+          {
+            key: 'table',
+            label: '表格编辑',
+            children: (
+              <Space direction="vertical" className="full-width" size={8}>
+                <Space direction="vertical" className="full-width" size={6}>
+                  <Text type="secondary">值输入格式</Text>
+                  <Segmented<PanelValueFormat>
+                    options={panelValueFormatOptions}
+                    value={panelValueFormat}
+                    onChange={onPanelValueFormatChange}
+                  />
+                  <Text type="secondary">{valueHintByFormat[panelValueFormat]}</Text>
+                </Space>
+
+                <Space wrap>
+                  <Button
+                    size="small"
+                    onClick={() =>
+                      onPanelVariablesChange([...panelVariables, { id: makeId(), key: '', valuesText: '', selectedValue: '' }])
+                    }
+                  >
+                    新增变量定义
+                  </Button>
+                  <Select<BulkDetectedFormat>
+                    size="small"
+                    value={bulkExportFormat}
+                    options={[
+                      { label: 'JSON', value: 'json' },
+                      { label: 'YAML', value: 'yaml' },
+                      { label: 'CSV', value: 'csv' },
+                      { label: '逐行', value: 'line' },
+                    ]}
+                    onChange={setBulkExportFormat}
+                    style={{ width: 120 }}
+                  />
+                  <Button size="small" onClick={openPreviewTableToBulk}>
+                    预览生成到批量文本
+                  </Button>
+                </Space>
+
+                <Table<PanelVariableRow>
+                  size="small"
+                  rowKey="id"
+                  columns={panelColumns}
+                  dataSource={panelVariables}
+                  pagination={false}
+                />
+              </Space>
+            ),
+          },
+          {
+            key: 'bulk',
+            label: '批量导入',
+            children: (
+              <Space direction="vertical" className="full-width" size={8}>
+                <Text type="secondary">粘贴 JSON/YAML/CSV/逐行文本，自动识别类型。逐行格式示例：key: v1 | v2 | v3</Text>
+                <Input.TextArea
+                  value={bulkText}
+                  autoSize={{ minRows: 12, maxRows: 20 }}
+                  placeholder={'{"hair":["long hair","short hair"]}'}
+                  onChange={(event) => updateBulkFromText(event.target.value)}
+                />
+                <Space>
+                  <Text type="secondary">识别类型：{bulkDetectedFormat || '-'}</Text>
+                  <Text type="secondary">变量数：{bulkDraftRows.length}</Text>
+                </Space>
+                <Button size="small" onClick={openPreviewBulkToTable}>
+                  预览同步到表格
+                </Button>
+                {bulkParseError ? <Alert type="error" message={bulkParseError} /> : null}
+              </Space>
+            ),
+          },
+        ]}
+      />
+
+      {syncError ? <Alert type="error" message={syncError} /> : null}
+      {panelBatchError ? <Alert type="error" message={panelBatchError} /> : null}
+
+      <Text type="secondary">当前变量：{renderResolvedVars(resolvedVariables)}</Text>
+      <Text type="secondary">最终 prompt：{finalPromptPreview || '-'}</Text>
+      {missingKeys.length > 0 ? <Alert type="warning" message={`缺少变量: ${missingKeys.join(', ')}`} /> : null}
+      {unusedVariableKeys.length > 0 ? <Alert type="info" message={`多余变量(未使用): ${unusedVariableKeys.join(', ')}`} /> : null}
+    </Space>
+  )
+
   return (
     <div className="chat-input">
-      <Card bordered={false} className="composer-card">
-        <Space direction="vertical" className="full-width" size={12}>
-          <div className="composer-main-row">
-            <Input.TextArea
-              value={draft}
-              onChange={(event) => onDraftChange(event.target.value)}
-              placeholder={draftPlaceholder}
-              autoSize={{ minRows: 2, maxRows: 6 }}
-              className="composer-textarea"
-              onPressEnter={(event) => {
-                if (!event.shiftKey && !isSendBlocked) {
-                  event.preventDefault()
-                  onSend()
-                }
-              }}
-            />
-            <div className="composer-action-col">
-              <Text type="secondary" className="composer-enter-hint">
-                Enter 发送 / Shift+Enter 换行
-              </Text>
+      <Card variant="borderless" className="composer-card">
+        <div className="composer-main-row">
+          <Input.TextArea
+            value={draft}
+            onChange={(event) => onDraftChange(event.target.value)}
+            placeholder={draftPlaceholder}
+            autoSize={{ minRows: 1, maxRows: 6 }}
+            className="composer-textarea"
+            onPressEnter={(event) => {
+              if (!event.shiftKey && !isSendBlocked) {
+                event.preventDefault()
+                onSend()
+              }
+            }}
+          />
+          <div className="composer-action-col">
+            {showAdvancedVariables ? (
               <Button
-                type="primary"
-                icon={<SendOutlined />}
-                onClick={onSend}
-                disabled={isSendBlocked}
-                className="composer-send-btn"
+                type="default"
+                icon={<SettingOutlined />}
+                onClick={() => setIsAdvancedPanelOpen(true)}
+                className="composer-advanced-btn"
               >
-                发送
+                高级变量
               </Button>
-            </div>
+            ) : null}
+            <Button
+              type="primary"
+              icon={<SendOutlined />}
+              onClick={onSend}
+              disabled={isSendBlocked}
+              className="composer-send-btn"
+              aria-label="发送"
+            >
+            </Button>
           </div>
-
-          {showAdvancedVariables ? (
-            <Card size="small" className="composer-advanced-card" title="高级变量">
-              <Space direction="vertical" className="full-width" size={10}>
-                <Tabs
-                  activeKey={advancedTab}
-                  onChange={(key) => setAdvancedTab(key as AdvancedTabKey)}
-                  items={[
-                    {
-                      key: 'table',
-                      label: '表格编辑',
-                      children: (
-                        <Space direction="vertical" className="full-width" size={8}>
-                          <Space direction="vertical" className="full-width" size={6}>
-                            <Text type="secondary">值输入格式</Text>
-                            <Segmented<PanelValueFormat>
-                              options={panelValueFormatOptions}
-                              value={panelValueFormat}
-                              onChange={onPanelValueFormatChange}
-                            />
-                            <Text type="secondary">{valueHintByFormat[panelValueFormat]}</Text>
-                          </Space>
-
-                          <Space wrap>
-                            <Button
-                              size="small"
-                              onClick={() =>
-                                onPanelVariablesChange([
-                                  ...panelVariables,
-                                  { id: makeId(), key: '', valuesText: '', selectedValue: '' },
-                                ])
-                              }
-                            >
-                              新增变量定义
-                            </Button>
-                            <Select<BulkDetectedFormat>
-                              size="small"
-                              value={bulkExportFormat}
-                              options={[
-                                { label: 'JSON', value: 'json' },
-                                { label: 'YAML', value: 'yaml' },
-                                { label: 'CSV', value: 'csv' },
-                                { label: '逐行', value: 'line' },
-                              ]}
-                              onChange={setBulkExportFormat}
-                              style={{ width: 120 }}
-                            />
-                            <Button size="small" onClick={openPreviewTableToBulk}>
-                              预览生成到批量文本
-                            </Button>
-                          </Space>
-
-                          <Table<PanelVariableRow>
-                            size="small"
-                            rowKey="id"
-                            columns={panelColumns}
-                            dataSource={panelVariables}
-                            pagination={false}
-                          />
-                        </Space>
-                      ),
-                    },
-                    {
-                      key: 'bulk',
-                      label: '批量导入',
-                      children: (
-                        <Space direction="vertical" className="full-width" size={8}>
-                          <Text type="secondary">
-                            粘贴 JSON/YAML/CSV/逐行文本，自动识别类型。逐行格式示例：key: v1 | v2 | v3
-                          </Text>
-                          <Input.TextArea
-                            value={bulkText}
-                            autoSize={{ minRows: 12, maxRows: 20 }}
-                            placeholder={'{"hair":["long hair","short hair"]}'}
-                            onChange={(event) => updateBulkFromText(event.target.value)}
-                          />
-                          <Space>
-                            <Text type="secondary">识别类型：{bulkDetectedFormat || '-'}</Text>
-                            <Text type="secondary">变量数：{bulkDraftRows.length}</Text>
-                          </Space>
-                          <Button size="small" onClick={openPreviewBulkToTable}>
-                            预览同步到表格
-                          </Button>
-                          {bulkParseError ? <Alert type="error" message={bulkParseError} /> : null}
-                        </Space>
-                      ),
-                    },
-                  ]}
-                />
-
-                {syncError ? <Alert type="error" message={syncError} /> : null}
-                {panelBatchError ? <Alert type="error" message={panelBatchError} /> : null}
-
-                <Text type="secondary">当前变量：{renderResolvedVars(resolvedVariables)}</Text>
-                <Text type="secondary">最终 prompt：{finalPromptPreview || '-'}</Text>
-                {missingKeys.length > 0 ? <Alert type="warning" message={`缺少变量: ${missingKeys.join(', ')}`} /> : null}
-                {unusedVariableKeys.length > 0 ? (
-                  <Alert type="info" message={`多余变量(未使用): ${unusedVariableKeys.join(', ')}`} />
-                ) : null}
-              </Space>
-            </Card>
-          ) : null}
-          {sendError ? <Alert type="error" message={sendError} /> : null}
-        </Space>
+        </div>
       </Card>
+
+      {sendError ? <Alert type="error" message={sendError} className="composer-send-error" /> : null}
+
+      <Modal
+        title="高级变量"
+        open={isAdvancedPanelOpen && !useSheet}
+        onCancel={() => setIsAdvancedPanelOpen(false)}
+        footer={null}
+        width={920}
+        destroyOnHidden
+      >
+        {advancedPanelContent}
+      </Modal>
+
+      <Drawer
+        title="高级变量"
+        placement="bottom"
+        open={isAdvancedPanelOpen && useSheet}
+        onClose={() => setIsAdvancedPanelOpen(false)}
+        size="large"
+      >
+        {advancedPanelContent}
+      </Drawer>
 
       <Modal
         title={syncPreview?.title}

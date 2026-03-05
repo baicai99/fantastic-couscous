@@ -452,8 +452,8 @@ function MessageListComponent(props: MessageListProps) {
   }
 
   return (
-    <div ref={viewportRef} className="full-width" style={{ height: '100%', overflowY: 'auto' }}>
-      <Space direction="vertical" size={12} className="full-width">
+    <div ref={viewportRef} className="full-width message-list-viewport">
+      <Space direction="vertical" size={12} className="full-width message-list-content">
         {hasOlderMessages ? (
           <div className="message-history-more">
             <Button size="small" onClick={handleLoadOlderMessages}>

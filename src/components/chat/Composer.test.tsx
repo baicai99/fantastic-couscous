@@ -38,10 +38,16 @@ function renderComposer(
   )
 }
 
+function openAdvancedPanel() {
+  fireEvent.click(screen.getByRole('button', { name: /高级变量/ }))
+}
+
 describe('Composer panel value format', () => {
-  it('shows JSON mode hint and placeholder by default', () => {
+  it('does not render advanced panel inline and opens modal on demand', () => {
     renderComposer('json')
 
+    expect(screen.queryByText('JSON 数组：每项必须是字符串。')).not.toBeInTheDocument()
+    openAdvancedPanel()
     expect(screen.getByText('JSON 数组：每项必须是字符串。')).toBeInTheDocument()
     expect(screen.getByPlaceholderText('["long hair, wavy", "short hair", "black hair"]')).toBeInTheDocument()
   })
@@ -50,6 +56,7 @@ describe('Composer panel value format', () => {
     const onChange = vi.fn()
     renderComposer('json', onChange)
 
+    openAdvancedPanel()
     fireEvent.click(screen.getByText('YAML'))
     expect(onChange).toHaveBeenCalledWith('yaml')
   })
@@ -57,6 +64,7 @@ describe('Composer panel value format', () => {
   it('shows bulk import tab and detects format after paste', () => {
     renderComposer('json')
 
+    openAdvancedPanel()
     fireEvent.click(screen.getByRole('tab', { name: '批量导入' }))
     const textarea = screen.getByPlaceholderText('{"hair":["long hair","short hair"]}')
     fireEvent.change(textarea, { target: { value: '{"hair":["long hair","short hair"]}' } })
@@ -68,6 +76,7 @@ describe('Composer panel value format', () => {
   it('opens sync preview modal from bulk tab', () => {
     renderComposer('json')
 
+    openAdvancedPanel()
     fireEvent.click(screen.getByRole('tab', { name: '批量导入' }))
     const textarea = screen.getByPlaceholderText('{"hair":["long hair","short hair"]}')
     fireEvent.change(textarea, { target: { value: '{"hair":["long hair","short hair"]}' } })
@@ -80,6 +89,7 @@ describe('Composer panel value format', () => {
     const onPanelVariablesChange = vi.fn()
     renderComposer('json', vi.fn(), onPanelVariablesChange)
 
+    openAdvancedPanel()
     fireEvent.click(screen.getByRole('tab', { name: '批量导入' }))
     const textarea = screen.getByPlaceholderText('{"hair":["long hair","short hair"]}')
     fireEvent.change(textarea, { target: { value: '{"style":["a, b, c"]}' } })
