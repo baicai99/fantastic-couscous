@@ -1,4 +1,4 @@
-﻿import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { HistoryOutlined, SettingOutlined } from '@ant-design/icons'
 import { Button, Card, Col, Layout, Row, Space, Tag, Typography } from 'antd'
 import { Composer } from '../../../components/chat/Composer'
@@ -74,7 +74,6 @@ export function ConversationWorkspace() {
     panelBatchError,
     panelMismatchRowIds,
     retryRun,
-    editRunTemplate,
     replayRunAsNewMessage,
     downloadAllRunImages,
     downloadSingleRunImage,
@@ -108,6 +107,10 @@ export function ConversationWorkspace() {
     toggleFitMode,
     setIsDragging,
   } = useImagePreview()
+
+  const modelNameById = useMemo(() => {
+    return new Map(modelCatalog.models.map((model) => [model.id, model.name]))
+  }, [modelCatalog.models])
 
   return (
     <Layout className="app-shell">
@@ -154,13 +157,17 @@ export function ConversationWorkspace() {
             <Row gutter={[12, 12]} wrap={false} className="ab-windows-row">
               {activeSides.map((sideId, index) => (
                 <Col key={sideId} flex={`0 0 ${100 / activeSideCount}%`} className="ab-window-col">
-                  <Card title={`Window ${index + 1}`} size="small" className="ab-window-card">
+                  <Card
+                    title={modelNameById.get(activeSettingsBySide[sideId]?.modelId) ?? `Window ${index + 1}`}
+                    size="small"
+                    className="ab-window-card"
+                  >
                     <MessageList
                       activeConversation={activeConversation}
                       sideView={sideId}
                       onOpenPreview={openPreview}
+                      onUseUserPrompt={setDraft}
                       onRetryRun={retryRun}
-                      onEditRunTemplate={editRunTemplate}
                       onReplayRun={replayRunAsNewMessage}
                       onDownloadAllRun={downloadAllRunImages}
                       onDownloadSingleImage={downloadSingleRunImage}
@@ -176,8 +183,8 @@ export function ConversationWorkspace() {
               activeConversation={activeConversation}
               sideView="single"
               onOpenPreview={openPreview}
+              onUseUserPrompt={setDraft}
               onRetryRun={retryRun}
-              onEditRunTemplate={editRunTemplate}
               onReplayRun={replayRunAsNewMessage}
               onDownloadAllRun={downloadAllRunImages}
               onDownloadSingleImage={downloadSingleRunImage}

@@ -1,5 +1,5 @@
 import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { DownloadOutlined, EditOutlined, ReloadOutlined, RetweetOutlined } from '@ant-design/icons'
+import { DownloadOutlined, ReloadOutlined, RetweetOutlined } from '@ant-design/icons'
 import { Button, Card, Collapse, Space, Tag, Typography } from 'antd'
 import type { Conversation, FailureCode, ImageItem, Message, Run, Side } from '../../types/chat'
 import { gridColumnCount, sortImagesBySeq } from '../../utils/chat'
@@ -13,8 +13,8 @@ interface MessageListProps {
   activeConversation: Conversation | null
   sideView: Side
   onOpenPreview: (run: Run, imageId: string, linkedRun?: Run) => void
+  onUseUserPrompt?: (prompt: string) => void
   onRetryRun: (runId: string) => void
-  onEditRunTemplate: (runId: string) => void
   onReplayRun: (runId: string) => void
   onDownloadAllRun?: (runId: string) => void
   onDownloadSingleImage?: (runId: string, imageId: string) => void
@@ -83,12 +83,9 @@ function getFailureDetails(run: Run): string[] {
   return Array.from(new Set(details))
 }
 
-function truncatePrompt(prompt: string, maxChars = PROMPT_SUMMARY_MAX_CHARS): { text: string; truncated: boolean } {
+function shouldShowPromptToggle(prompt: string, maxChars = PROMPT_SUMMARY_MAX_CHARS): boolean {
   const value = prompt.trim()
-  if (value.length <= maxChars) {
-    return { text: value, truncated: false }
-  }
-  return { text: `${value.slice(0, maxChars)}...`, truncated: true }
+  return value.length > maxChars
 }
 
 function renderRunMetaTitle(input: {
@@ -100,9 +97,8 @@ function renderRunMetaTitle(input: {
   onDownloadBatchRun?: (runId: string) => void
 }) {
   const { run, runNumber, expanded, onToggle, showBatchDownload, onDownloadBatchRun } = input
-  const prompt = truncatePrompt(run.finalPrompt)
-  const promptText = expanded ? run.finalPrompt : prompt.text
-  const canToggle = prompt.truncated
+  const canToggle = shouldShowPromptToggle(run.finalPrompt)
+  const promptText = run.finalPrompt.trim()
 
   return (
     <div className="run-meta-title">
@@ -278,8 +274,8 @@ function MessageListComponent(props: MessageListProps) {
     activeConversation,
     sideView,
     onOpenPreview,
+    onUseUserPrompt,
     onRetryRun,
-    onEditRunTemplate,
     onReplayRun,
     onDownloadAllRun,
     onDownloadSingleImage,
@@ -412,18 +408,23 @@ function MessageListComponent(props: MessageListProps) {
                           >
                             再来一次
                           </Button>
-                          <Button
-                            size="small"
-                            type="default"
-                            icon={<EditOutlined />}
-                            className="run-edit-top-btn"
-                            onClick={() => onEditRunTemplate(run.id)}
-                          >
-                            编辑
-                          </Button>
                         </Space>
                       )
                     })()
+                  : message.role === 'user'
+                    ? (
+                      <Space size={4} className="message-head-actions">
+                        <Button
+                          size="small"
+                          type="default"
+                          className="message-use-prompt-btn"
+                          onClick={() => onUseUserPrompt?.(message.content)}
+                          disabled={!message.content.trim()}
+                        >
+                          发送到输入框
+                        </Button>
+                      </Space>
+                    )
                   : null}
               </div>
 

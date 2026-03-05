@@ -240,6 +240,7 @@
   border-radius: 8px;
   padding: 8px 10px;
   background: #fafafa;
+  min-width: 0;
 }
 
 .run-head-actions {
@@ -248,6 +249,39 @@
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
+}
+
+.message-head-actions {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.message-use-prompt-btn.ant-btn-sm {
+  height: 34px;
+  padding-inline: 14px;
+  border-radius: 6px;
+  font-weight: 500;
+  border-color: #b7d6ff;
+  background: #f7fbff;
+  color: #0958d9;
+  display: inline-flex;
+  align-items: center;
+}
+
+.message-use-prompt-btn.ant-btn-sm:hover,
+.message-use-prompt-btn.ant-btn-sm:focus {
+  border-color: #69b1ff !important;
+  background: #e6f4ff !important;
+  color: #0958d9 !important;
+}
+
+.message-use-prompt-btn.ant-btn-sm:disabled {
+  border-color: #d9d9d9;
+  background: #fafafa;
+  color: #bfbfbf;
 }
 
 .run-head-actions .ant-btn-sm {
@@ -264,6 +298,7 @@
 
 .run-meta-collapse > .ant-collapse-item > .ant-collapse-header {
   padding: 0 !important;
+  min-width: 0;
 }
 
 .run-meta-title {
@@ -272,7 +307,8 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  overflow: hidden;
 }
 
 .run-meta-title-fixed {
@@ -280,8 +316,10 @@
 }
 
 .run-meta-title-prompt {
+  display: block;
   flex: 1 1 240px;
   min-width: 0;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -299,6 +337,11 @@
 
 .run-meta-collapse .ant-collapse-content > .ant-collapse-content-box {
   padding: 8px 0 0 !important;
+}
+
+.run-meta-collapse .ant-collapse-header-text {
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .run-grid-item {
@@ -649,4 +692,5 @@
 .ab-window-card .ant-card-body {
   height: calc(100% - 40px);
   overflow-y: auto;
+  overflow-x: hidden;
 }

@@ -11,6 +11,8 @@ function renderComposer(
   format: PanelValueFormat,
   onFormatChange = vi.fn(),
   onPanelVariablesChange = vi.fn(),
+  onSend = vi.fn(),
+  isSending = false,
 ) {
   return render(
     <Composer
@@ -24,14 +26,14 @@ function renderComposer(
       finalPromptPreview=""
       missingKeys={[]}
       unusedVariableKeys={[]}
-      isSending={false}
+      isSending={isSending}
       isSendBlocked={false}
       panelBatchError=""
       panelMismatchRowIds={[]}
       onDraftChange={() => {}}
       onPanelValueFormatChange={onFormatChange}
       onPanelVariablesChange={onPanelVariablesChange}
-      onSend={() => {}}
+      onSend={onSend}
     />,
   )
 }
@@ -88,5 +90,27 @@ describe('Composer panel value format', () => {
     const lastCall = onPanelVariablesChange.mock.calls.at(-1)?.[0] as PanelVariableRow[]
     expect(lastCall[0].key).toBe('style')
     expect(lastCall[0].valuesText).toBe('["a","b","c"]')
+  })
+
+  it('keeps send button enabled without loading while isSending is true', () => {
+    const onSend = vi.fn()
+    renderComposer('json', vi.fn(), vi.fn(), onSend, true)
+
+    const sendButton = screen.getByRole('button', { name: /发送/ })
+    expect(sendButton).toBeEnabled()
+    expect(sendButton).not.toHaveClass('ant-btn-loading')
+
+    fireEvent.click(sendButton)
+    expect(onSend).toHaveBeenCalledTimes(1)
+  })
+
+  it('allows Enter submit when isSending is true', () => {
+    const onSend = vi.fn()
+    renderComposer('json', vi.fn(), vi.fn(), onSend, true)
+
+    const textarea = screen.getByPlaceholderText('输入模板 prompt，例如：a {{style}} portrait of {{subject}}')
+    fireEvent.keyDown(textarea, { key: 'Enter', code: 'Enter' })
+
+    expect(onSend).toHaveBeenCalledTimes(1)
   })
 })

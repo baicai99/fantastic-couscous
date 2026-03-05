@@ -499,9 +499,6 @@ export function useConversations() {
 
   const sendDraft = async () => {
     const snapshot = stateRef.current
-    if (snapshot.isSending) {
-      return
-    }
 
     const currentActive = snapshot.activeId ? snapshot.contents[snapshot.activeId] ?? null : null
     const activeState = conversationSelectors.selectActiveSettings(snapshot)
@@ -894,7 +891,7 @@ export function useConversations() {
     setSideModelParam,
     setChannels,
     sendDraft,
-    isSendBlocked: isPanelBatchInvalid,
+    isSendBlocked: state.draft.trim().length === 0 || isPanelBatchInvalid,
     panelBatchError: isPanelBatchInvalid ? panelBatchValidation.error : '',
     panelMismatchRowIds: panelBatchValidation.mismatchRowIds,
     retryRun,

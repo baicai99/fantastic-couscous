@@ -77,10 +77,44 @@ function makeConversation(finalPrompts: string[] = ['template cat']): Conversati
   }
 }
 
+function makeUserConversation(content = 'user prompt content'): Conversation {
+  return {
+    id: 'c-user',
+    title: 'User Conversation',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    sideMode: 'single',
+    sideCount: 2,
+    settingsBySide: {
+      single: {
+        resolution: '1K',
+        aspectRatio: '1:1',
+        imageCount: 1,
+        gridColumns: 1,
+        sizeMode: 'preset',
+        customWidth: 1024,
+        customHeight: 1024,
+        autoSave: true,
+        channelId: null,
+        modelId: 'm',
+        paramValues: {},
+      },
+    },
+    messages: [
+      {
+        id: 'm-user-1',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        role: 'user',
+        content,
+        runs: [],
+      },
+    ],
+  }
+}
+
 describe('MessageList', () => {
-  it('triggers edit/replay callbacks for run actions', async () => {
+  it('triggers replay/retry callbacks for run actions', async () => {
     const user = userEvent.setup()
-    const onEditRunTemplate = vi.fn()
     const onReplayRun = vi.fn()
     const onRetryRun = vi.fn()
 
@@ -91,17 +125,14 @@ describe('MessageList', () => {
           sideView="single"
           onOpenPreview={() => {}}
           onRetryRun={onRetryRun}
-          onEditRunTemplate={onEditRunTemplate}
           onReplayRun={onReplayRun}
         />
       </div>,
     )
 
-    await user.click(screen.getByRole('button', { name: /编\s*辑/ }))
     await user.click(screen.getByRole('button', { name: /再来一次/ }))
     await user.click(screen.getByRole('button', { name: /重试失败项/ }))
 
-    expect(onEditRunTemplate).toHaveBeenCalledWith('r1')
     expect(onReplayRun).toHaveBeenCalledWith('r1')
     expect(onRetryRun).toHaveBeenCalledWith('r1')
   })
@@ -114,7 +145,6 @@ describe('MessageList', () => {
           sideView="single"
           onOpenPreview={() => {}}
           onRetryRun={() => {}}
-          onEditRunTemplate={() => {}}
           onReplayRun={() => {}}
           replayingRunIds={['r1']}
         />
@@ -142,7 +172,6 @@ describe('MessageList', () => {
           sideView="single"
           onOpenPreview={() => {}}
           onRetryRun={() => {}}
-          onEditRunTemplate={() => {}}
           onReplayRun={() => {}}
           onDownloadAllRun={onDownloadAllRun}
         />
@@ -171,7 +200,6 @@ describe('MessageList', () => {
           sideView="single"
           onOpenPreview={() => {}}
           onRetryRun={() => {}}
-          onEditRunTemplate={() => {}}
           onReplayRun={() => {}}
           onDownloadSingleImage={onDownloadSingleImage}
         />
@@ -190,7 +218,6 @@ describe('MessageList', () => {
           sideView="single"
           onOpenPreview={() => {}}
           onRetryRun={() => {}}
-          onEditRunTemplate={() => {}}
           onReplayRun={() => {}}
         />
       </div>,
@@ -210,7 +237,6 @@ describe('MessageList', () => {
           sideView="single"
           onOpenPreview={() => {}}
           onRetryRun={() => {}}
-          onEditRunTemplate={() => {}}
           onReplayRun={() => {}}
         />
       </div>,
@@ -231,7 +257,6 @@ describe('MessageList', () => {
           sideView="single"
           onOpenPreview={() => {}}
           onRetryRun={() => {}}
-          onEditRunTemplate={() => {}}
           onReplayRun={() => {}}
         />
       </div>,
@@ -251,7 +276,6 @@ describe('MessageList', () => {
           sideView="single"
           onOpenPreview={() => {}}
           onRetryRun={() => {}}
-          onEditRunTemplate={() => {}}
           onReplayRun={() => {}}
         />
       </div>,
@@ -279,7 +303,6 @@ describe('MessageList', () => {
           sideView="single"
           onOpenPreview={() => {}}
           onRetryRun={() => {}}
-          onEditRunTemplate={() => {}}
           onReplayRun={() => {}}
           onDownloadBatchRun={() => {}}
         />
@@ -288,5 +311,27 @@ describe('MessageList', () => {
 
     const buttons = screen.getAllByRole('button', { name: /下载这一批次/ })
     expect(buttons.length).toBeGreaterThan(0)
+  })
+
+  it('sends user prompt text back via callback', async () => {
+    const user = userEvent.setup()
+    const onUseUserPrompt = vi.fn()
+    const prompt = 'user prompt content'
+
+    render(
+      <div style={{ height: 600 }}>
+        <MessageList
+          activeConversation={makeUserConversation(prompt)}
+          sideView="single"
+          onOpenPreview={() => {}}
+          onUseUserPrompt={onUseUserPrompt}
+          onRetryRun={() => {}}
+          onReplayRun={() => {}}
+        />
+      </div>,
+    )
+
+    await user.click(screen.getByRole('button', { name: /发送到输入框/ }))
+    expect(onUseUserPrompt).toHaveBeenCalledWith(prompt)
   })
 })

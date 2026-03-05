@@ -72,7 +72,6 @@ export function Composer(props: ComposerProps) {
     finalPromptPreview,
     missingKeys,
     unusedVariableKeys,
-    isSending,
     isSendBlocked,
     panelBatchError,
     panelMismatchRowIds,
@@ -266,7 +265,7 @@ export function Composer(props: ComposerProps) {
               autoSize={{ minRows: 2, maxRows: 6 }}
               className="composer-textarea"
               onPressEnter={(event) => {
-                if (!event.shiftKey && !isSending && !isSendBlocked) {
+                if (!event.shiftKey && !isSendBlocked) {
                   event.preventDefault()
                   onSend()
                 }
@@ -280,8 +279,7 @@ export function Composer(props: ComposerProps) {
                 type="primary"
                 icon={<SendOutlined />}
                 onClick={onSend}
-                loading={isSending}
-                disabled={isSending || isSendBlocked}
+                disabled={isSendBlocked}
                 className="composer-send-btn"
               >
                 发送
