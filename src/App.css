@@ -19,6 +19,18 @@
   padding: 16px;
 }
 
+.settings-panel-header {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
+
+.settings-github-btn {
+  font-size: 24px;
+  width: 40px;
+  height: 40px;
+}
+
 .panel-title {
   margin: 0 !important;
 }
@@ -362,6 +374,25 @@
   padding-top: 10px;
 }
 
+.preview-modal .ant-modal {
+  max-width: calc(100vw - 24px);
+  margin: 12px auto;
+  padding-bottom: 0;
+}
+
+.preview-modal .ant-modal-content {
+  max-height: calc(100dvh - 24px);
+  display: flex;
+  flex-direction: column;
+}
+
+.preview-modal .ant-modal-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 .preview-stage {
   height: 62vh;
   border: 1px solid #f0f0f0;
@@ -384,13 +415,29 @@
   cursor: grabbing;
 }
 
-.preview-image {
+.preview-image-wrap {
   width: 100%;
   height: 100%;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+
+.preview-image {
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 100%;
+  display: block;
   object-fit: contain;
   transform-origin: center center;
   transition: transform 0.08s linear;
   will-change: transform;
+}
+
+.preview-image.preview-image-single {
+  max-width: none;
+  max-height: none;
 }
 
 .preview-stage.is-dragging .preview-image {
@@ -479,13 +526,47 @@
 
 @media (max-width: 960px) {
   .preview-footer {
-    grid-template-columns: 1fr;
+    grid-template-columns: 1fr auto;
+    grid-template-areas:
+      'status status'
+      'nav actions';
     gap: 10px;
+  }
+
+  .preview-footer-status {
+    grid-area: status;
+  }
+
+  .preview-footer-nav {
+    grid-area: nav;
+  }
+
+  .preview-footer-actions {
+    grid-area: actions;
+    justify-content: flex-end;
+  }
+
+  .preview-stage {
+    height: 52vh;
+  }
+}
+
+@media (max-width: 640px) {
+  .preview-footer {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      'status'
+      'nav'
+      'actions';
   }
 
   .preview-footer-nav,
   .preview-footer-actions {
     justify-content: flex-start;
+  }
+
+  .preview-stage {
+    height: 46vh;
   }
 }
 .ab-windows-row {

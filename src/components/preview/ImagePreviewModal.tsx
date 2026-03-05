@@ -1,8 +1,9 @@
 import { Button, Modal, Popover, Typography } from 'antd'
-import { useCallback, useEffect, useMemo, useRef } from 'react'
-import type { MutableRefObject, WheelEvent as ReactWheelEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { CSSProperties, MutableRefObject, WheelEvent as ReactWheelEvent } from 'react'
 import type {
   DragOrigin,
+  PreviewInteractionMode,
   PreviewPair,
   PreviewPoint,
   PreviewSize,
@@ -18,7 +19,7 @@ const SHORTCUT_HINT = (
     <div><code>Home/End</code> 首张/末张</div>
     <div><code>+/-</code> 缩放，<code>0</code> 重置</div>
     <div><code>F/空格</code> 适配切换</div>
-    <div><code>Ctrl/Meta + 滚轮</code> 缩放</div>
+    <div><code>Alt + 滚轮</code> 缩放</div>
     <div>放大后可滚轮平移、左键拖拽平移、双击切换</div>
   </div>
 )
@@ -36,6 +37,7 @@ interface ImagePreviewModalProps {
   previewHint: string
   currentPreviewImage: PreviewImage | undefined
   currentPreviewPair: PreviewPair | undefined
+  interactionMode: PreviewInteractionMode
   zoom: number
   offset: { x: number; y: number }
   isDragging: boolean
@@ -57,6 +59,9 @@ function renderSingleImage(
   zoom: number,
   offset: { x: number; y: number },
   emptyText: string,
+  imageClassName?: string,
+  imageStyle?: CSSProperties,
+  onLoad?: () => void,
 ) {
   if (!src) {
     return <Text type="secondary">{emptyText}</Text>
@@ -64,11 +69,15 @@ function renderSingleImage(
 
   return (
     <img
-      className="preview-image"
+      className={imageClassName ?? 'preview-image'}
       src={src}
       alt={`preview-${seq ?? '-'}`}
       draggable={false}
-      style={{ transform: `translate(${offset.x}px, ${offset.y}px) scale(${zoom})` }}
+      onLoad={onLoad}
+      style={{
+        ...imageStyle,
+        transform: `translate(${offset.x}px, ${offset.y}px) scale(${zoom})`,
+      }}
     />
   )
 }
@@ -88,6 +97,18 @@ function getAnchorInViewport(rect: DOMRect, clientX: number, clientY: number): P
   }
 }
 
+function isFitToggleHotkey(event: { key: string; code?: string }) {
+  if (event.key === ' ') {
+    return true
+  }
+
+  if (event.code === 'KeyF') {
+    return true
+  }
+
+  return event.key.toLowerCase() === 'f'
+}
+
 export function ImagePreviewModal(props: ImagePreviewModalProps) {
   const {
     isPreviewOpen,
@@ -102,6 +123,7 @@ export function ImagePreviewModal(props: ImagePreviewModalProps) {
     previewHint,
     currentPreviewImage,
     currentPreviewPair,
+    interactionMode,
     zoom,
     offset,
     isDragging,
@@ -115,6 +137,11 @@ export function ImagePreviewModal(props: ImagePreviewModalProps) {
   } = props
 
   const stageRef = useRef<HTMLDivElement | null>(null)
+  const [singleFitScale, setSingleFitScale] = useState(1)
+  const [singleNaturalSize, setSingleNaturalSize] = useState<PreviewSize>({
+    width: 0,
+    height: 0,
+  })
   const previewIdentity = useMemo(() => {
     if (previewMode === 'ab') {
       return `${currentPreviewPair?.seq ?? '-'}:${currentPreviewPair?.left?.id ?? '-'}:${currentPreviewPair?.right?.id ?? '-'}`
@@ -124,10 +151,54 @@ export function ImagePreviewModal(props: ImagePreviewModalProps) {
 
   const previewLength = previewMode === 'ab' ? previewPairs.length : previewImages.length
   const hintParts = useMemo(() => previewHint.split('|').map((item) => item.trim()).filter(Boolean), [previewHint])
+  const singleImageStyle = useMemo<CSSProperties | undefined>(() => {
+    if (previewMode !== 'single' || singleNaturalSize.width <= 0 || singleNaturalSize.height <= 0) {
+      return undefined
+    }
+
+    return {
+      width: `${singleNaturalSize.width * singleFitScale}px`,
+      height: `${singleNaturalSize.height * singleFitScale}px`,
+    }
+  }, [previewMode, singleFitScale, singleNaturalSize.height, singleNaturalSize.width])
 
   const focusStage = useCallback(() => {
     stageRef.current?.focus({ preventScroll: true })
   }, [])
+
+  const recalcSingleFitScale = useCallback(() => {
+    if (previewMode !== 'single') {
+      return
+    }
+
+    const stageEl = stageRef.current
+    if (!stageEl) {
+      return
+    }
+
+    const wrapEl = stageEl.querySelector<HTMLElement>('.preview-image-wrap')
+    const imageEl = stageEl.querySelector<HTMLImageElement>('.preview-image')
+    if (!wrapEl || !imageEl || imageEl.naturalWidth <= 0 || imageEl.naturalHeight <= 0) {
+      return
+    }
+
+    const viewportRect = wrapEl.getBoundingClientRect()
+    if (viewportRect.width <= 0 || viewportRect.height <= 0) {
+      return
+    }
+
+    setSingleNaturalSize({
+      width: imageEl.naturalWidth,
+      height: imageEl.naturalHeight,
+    })
+
+    const fitScale = Math.min(viewportRect.width / imageEl.naturalWidth, viewportRect.height / imageEl.naturalHeight)
+    if (!Number.isFinite(fitScale) || fitScale <= 0) {
+      return
+    }
+
+    setSingleFitScale((prev) => (Math.abs(prev - fitScale) < 0.001 ? prev : fitScale))
+  }, [previewMode])
 
   const getViewportAndContentSize = useCallback((): { viewport: PreviewSize; content: PreviewSize } | null => {
     const stageEl = stageRef.current
@@ -135,8 +206,9 @@ export function ImagePreviewModal(props: ImagePreviewModalProps) {
       return null
     }
 
+    const singleWrapEl = stageEl.querySelector<HTMLElement>('.preview-image-wrap')
     const paneEl = stageEl.querySelector<HTMLElement>('.preview-ab-image-wrap')
-    const viewportEl = paneEl ?? stageEl
+    const viewportEl = paneEl ?? singleWrapEl ?? stageEl
     const viewportRect = viewportEl.getBoundingClientRect()
 
     const imageEl = stageEl.querySelector<HTMLImageElement>('.preview-image')
@@ -250,7 +322,7 @@ export function ImagePreviewModal(props: ImagePreviewModalProps) {
         return
       }
 
-      if (event.key === ' ' || event.key.toLowerCase() === 'f') {
+      if (isFitToggleHotkey(event)) {
         event.preventDefault()
         const size = getViewportAndContentSize()
         if (!size) {
@@ -292,12 +364,51 @@ export function ImagePreviewModal(props: ImagePreviewModalProps) {
   }, [focusStage, isPreviewOpen])
 
   useEffect(() => {
+    if (!isPreviewOpen || previewMode !== 'single') {
+      return
+    }
+
+    const stageEl = stageRef.current
+    const wrapEl = stageEl?.querySelector<HTMLElement>('.preview-image-wrap')
+    if (!wrapEl) {
+      return
+    }
+
+    const observer = new ResizeObserver(() => {
+      if (interactionMode === 'fit') {
+        recalcSingleFitScale()
+      }
+    })
+
+    observer.observe(wrapEl)
+    return () => {
+      observer.disconnect()
+    }
+  }, [interactionMode, isPreviewOpen, previewMode, recalcSingleFitScale])
+
+  useEffect(() => {
     if (!isPreviewOpen) {
       return
     }
     // Ensure each newly opened/switched image starts in true fit mode.
     resetTransform()
   }, [isPreviewOpen, previewIdentity, resetTransform])
+
+  useEffect(() => {
+    if (!isPreviewOpen || previewMode !== 'single') {
+      return
+    }
+    setSingleFitScale(1)
+    setSingleNaturalSize({ width: 0, height: 0 })
+  }, [isPreviewOpen, previewIdentity, previewMode])
+
+  useEffect(() => {
+    if (!isPreviewOpen || previewMode !== 'single' || interactionMode !== 'fit') {
+      return
+    }
+
+    recalcSingleFitScale()
+  }, [interactionMode, isPreviewOpen, previewIdentity, previewMode, recalcSingleFitScale])
 
   useEffect(() => {
     if (!isPreviewOpen || zoom <= 1 || isDragging) {
@@ -340,7 +451,7 @@ export function ImagePreviewModal(props: ImagePreviewModalProps) {
           </div>
         </div>
       }
-      width={previewMode === 'ab' ? 1200 : 900}
+      width={previewMode === 'ab' ? 'min(1200px, calc(100vw - 24px))' : 'min(900px, calc(100vw - 24px))'}
       centered
       destroyOnHidden
       keyboard={false}
@@ -380,7 +491,11 @@ export function ImagePreviewModal(props: ImagePreviewModalProps) {
             return
           }
 
-          const isZoomIntent = event.ctrlKey || event.metaKey
+          if (event.ctrlKey || event.metaKey) {
+            return
+          }
+
+          const isZoomIntent = event.altKey
           const normalized = normalizeWheelDelta(event)
 
           if (isZoomIntent) {
@@ -481,7 +596,18 @@ export function ImagePreviewModal(props: ImagePreviewModalProps) {
             </div>
           </div>
         ) : (
-          renderSingleImage(currentPreviewImage?.src, currentPreviewImage?.seq, zoom, offset, '无可预览图片')
+          <div className="preview-image-wrap">
+            {renderSingleImage(
+              currentPreviewImage?.src,
+              currentPreviewImage?.seq,
+              zoom,
+              offset,
+              '无可预览图片',
+              singleImageStyle ? 'preview-image preview-image-single' : 'preview-image',
+              singleImageStyle,
+              recalcSingleFitScale,
+            )}
+          </div>
         )}
       </div>
     </Modal>

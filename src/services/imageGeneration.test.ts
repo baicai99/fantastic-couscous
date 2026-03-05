@@ -69,4 +69,62 @@ describe('imageGeneration request body', () => {
     expect(body.size).toBe('640x360')
     expect(body).not.toHaveProperty('aspect_ratio')
   })
+
+  it('returns readable message when upstream rejects selected size with HTTP 451', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 451,
+      text: async () =>
+        '{"error":{"message":"{\\"error\\":{\\"code\\":\\"InvalidParameter\\",\\"message\\":\\"The parameter `size` specified in the request is not valid: image size must be at least 3686400 pixels.\\"}}"}}',
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      generateImages({
+        channel: {
+          id: 'ch',
+          name: 'c',
+          baseUrl: 'https://api.example.com/v1',
+          apiKey: 'k',
+        },
+        modelId: 'gemini-3-pro-image-preview',
+        prompt: 'x',
+        imageCount: 1,
+        paramValues: {
+          size: '1K',
+          aspectRatio: '1:1',
+          responseFormat: 'url',
+        },
+      }),
+    ).rejects.toThrow('当前模型不支持 1K 尺寸，请切换别的尺寸重新尝试。')
+  })
+
+  it('returns readable message when upstream rejects sensitive output with HTTP 451', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 451,
+      text: async () =>
+        '{"error":{"message":"{\\"error\\":{\\"code\\":\\"OutputImageSensitiveContentDetected\\",\\"message\\":\\"The request failed because the output image may contain sensitive information.\\"}}"}}',
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      generateImages({
+        channel: {
+          id: 'ch',
+          name: 'c',
+          baseUrl: 'https://api.example.com/v1',
+          apiKey: 'k',
+        },
+        modelId: 'gemini-3-pro-image-preview',
+        prompt: 'x',
+        imageCount: 1,
+        paramValues: {
+          size: '1K',
+          aspectRatio: '1:1',
+          responseFormat: 'url',
+        },
+      }),
+    ).rejects.toThrow('提示词有敏感内容，被拒绝了。')
+  })
 })

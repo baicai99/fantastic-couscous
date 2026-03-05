@@ -292,8 +292,11 @@ export function useImagePreview() {
     }
 
     const seq = previewMode === 'ab' ? currentPreviewPair?.seq : currentPreviewImage?.seq
-    return `${previewIndex + 1}/${previewLength} | 序号 ${seq ?? '-'} | 缩放 ${Math.round(transform.zoom * 100)}%`
-  }, [currentPreviewImage?.seq, currentPreviewPair?.seq, previewIndex, previewLength, previewMode, transform.zoom])
+    const zoomHint = transform.mode === 'fit'
+      ? '适配'
+      : `缩放 ${Math.round(transform.zoom * 100)}%`
+    return `${previewIndex + 1}/${previewLength} | 序号 ${seq ?? '-'} | ${zoomHint}`
+  }, [currentPreviewImage?.seq, currentPreviewPair?.seq, previewIndex, previewLength, previewMode, transform.mode, transform.zoom])
 
   return {
     isPreviewOpen,

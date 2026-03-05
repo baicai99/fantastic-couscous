@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
-import { ReloadOutlined } from '@ant-design/icons'
+import { GithubOutlined, ReloadOutlined } from '@ant-design/icons'
 import {
   Alert,
   Button,
@@ -17,7 +17,6 @@ import {
   Switch,
   Table,
   Tabs,
-  Tag,
   Typography,
   message,
 } from 'antd'
@@ -693,6 +692,18 @@ export function SettingsPanel(props: SettingsPanelProps) {
   return (
     <div className="panel-scroll">
       {messageContextHolder}
+      <div className="settings-panel-header">
+        <Button
+          className="settings-github-btn"
+          type="text"
+          icon={<GithubOutlined />}
+          href="https://github.com/baicai99"
+          target="_blank"
+          rel="noopener noreferrer"
+          title="Open GitHub"
+          aria-label="Open GitHub"
+        />
+      </div>
       <Collapse
         style={{ marginBottom: 16 }}
         activeKey={topCollapseKeys}

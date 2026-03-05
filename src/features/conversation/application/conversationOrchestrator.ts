@@ -19,6 +19,7 @@ export function createConversationOrchestrator(deps: ConversationOrchestratorDep
       return planRunBatch({
         draft: state.draft,
         panelVariables: state.panelVariables,
+        panelValueFormat: state.panelValueFormat,
         dynamicPromptEnabled: state.dynamicPromptEnabled,
         mode: input.mode,
         sideCount: input.sideCount,

@@ -152,6 +152,36 @@ function buildUnsupportedModelMessage(
   ].join(' ')
 }
 
+function buildUnsupportedSizeMessage(selectedSize: string): string {
+  return `当前模型不支持 ${selectedSize} 尺寸，请切换别的尺寸重新尝试。`
+}
+
+function isUnsupportedSizeError(status: number, detail: string): boolean {
+  if (status !== 451) {
+    return false
+  }
+
+  const normalized = detail.toLowerCase()
+  return (
+    normalized.includes('invalidparameter') &&
+    normalized.includes('size') &&
+    (normalized.includes('image size must be at least') || normalized.includes('`size`'))
+  )
+}
+
+function isSensitiveContentError(status: number, detail: string): boolean {
+  if (status !== 451) {
+    return false
+  }
+
+  const normalized = detail.toLowerCase()
+  return (
+    normalized.includes('outputimagesensitivecontentdetected') ||
+    normalized.includes('sensitive content') ||
+    normalized.includes('sensitiveinformation')
+  )
+}
+
 export async function generateImages(input: GenerateImagesInput): Promise<GenerateImagesResult> {
   const { channel, modelId, prompt, imageCount, paramValues } = input
   const modelCandidates = getModelCandidates(modelId)
@@ -180,6 +210,16 @@ export async function generateImages(input: GenerateImagesInput): Promise<Genera
       } catch {
         detail = ''
       }
+
+      if (isUnsupportedSizeError(response.status, detail)) {
+        const selectedSize = getStringParam(paramValues, 'size', '1024x1024')
+        throw new Error(buildUnsupportedSizeMessage(selectedSize))
+      }
+
+      if (isSensitiveContentError(response.status, detail)) {
+        throw new Error('提示词有敏感内容，被拒绝了。')
+      }
+
       const suffix = detail ? `: ${detail}` : ''
       throw new Error(`HTTP ${response.status}${suffix}`)
     }

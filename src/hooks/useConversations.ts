@@ -17,7 +17,7 @@ import {
   getMultiSideIds,
   normalizeSettingsBySide,
 } from '../features/conversation/domain/conversationDomain'
-import type { PanelVariableRow } from '../features/conversation/domain/types'
+import type { PanelValueFormat, PanelVariableRow } from '../features/conversation/domain/types'
 import { createConversationRepository } from '../features/conversation/infra/conversationRepository'
 import {
   conversationSelectors,
@@ -73,7 +73,10 @@ export function useConversations() {
   const activeConversation = conversationSelectors.selectActiveConversation(state)
   const { activeSideMode, activeSideCount, activeSettingsBySide } = conversationSelectors.selectActiveSettings(state)
   const { resolvedVariables, templatePreview, unusedVariableKeys } = conversationSelectors.selectTemplatePreview(state)
-  const panelBatchValidation = useMemo(() => buildPanelVariableBatches(state.panelVariables).validation, [state.panelVariables])
+  const panelBatchValidation = useMemo(
+    () => buildPanelVariableBatches(state.panelVariables, state.panelValueFormat).validation,
+    [state.panelValueFormat, state.panelVariables],
+  )
   const isPanelBatchInvalid = state.dynamicPromptEnabled && !panelBatchValidation.ok
 
   const activeSides = useMemo(
@@ -109,6 +112,7 @@ export function useConversations() {
     settingsBySide: Record<Side, SingleSideSettings>,
     runConcurrency: number,
     dynamicPromptEnabled: boolean,
+    panelValueFormat: PanelValueFormat,
   ) => {
     repository.saveStagedSettings({
       sideMode: mode,
@@ -116,6 +120,7 @@ export function useConversations() {
       settingsBySide,
       runConcurrency,
       dynamicPromptEnabled,
+      panelValueFormat,
     })
 
     dispatch({
@@ -142,6 +147,7 @@ export function useConversations() {
       normalizedSettings,
       stateRef.current.runConcurrency,
       stateRef.current.dynamicPromptEnabled,
+      stateRef.current.panelValueFormat,
     )
 
     const current = stateRef.current
@@ -170,6 +176,7 @@ export function useConversations() {
       seedSettings,
       stateRef.current.runConcurrency,
       stateRef.current.dynamicPromptEnabled,
+      stateRef.current.panelValueFormat,
     )
 
     setActiveConversation(null)
@@ -289,6 +296,7 @@ export function useConversations() {
       settingsBySide: normalized,
       runConcurrency: stateRef.current.runConcurrency,
       dynamicPromptEnabled: stateRef.current.dynamicPromptEnabled,
+      panelValueFormat: stateRef.current.panelValueFormat,
     })
 
     dispatch({
@@ -325,6 +333,7 @@ export function useConversations() {
       settingsBySide: activeSettingsBySide,
       runConcurrency: next,
       dynamicPromptEnabled: snapshot.dynamicPromptEnabled,
+      panelValueFormat: snapshot.panelValueFormat,
     })
 
     stateRef.current = {
@@ -343,11 +352,31 @@ export function useConversations() {
       settingsBySide: activeSettingsBySide,
       runConcurrency: snapshot.runConcurrency,
       dynamicPromptEnabled: value,
+      panelValueFormat: snapshot.panelValueFormat,
     })
 
     stateRef.current = {
       ...snapshot,
       dynamicPromptEnabled: value,
+    }
+  }
+
+  const setPanelValueFormat = (value: PanelValueFormat) => {
+    actions.setPanelValueFormat(value)
+
+    const snapshot = stateRef.current
+    repository.saveStagedSettings({
+      sideMode: activeSideMode,
+      sideCount: activeSideCount,
+      settingsBySide: activeSettingsBySide,
+      runConcurrency: snapshot.runConcurrency,
+      dynamicPromptEnabled: snapshot.dynamicPromptEnabled,
+      panelValueFormat: value,
+    })
+
+    stateRef.current = {
+      ...snapshot,
+      panelValueFormat: value,
     }
   }
   const replaceRunsInConversation = (conversationId: string, nextRunsById: Map<string, Run>) => {
@@ -406,6 +435,66 @@ export function useConversations() {
       }
     }
     return null
+  }
+
+  const mergeRetryResultIntoRun = (sourceRun: Run, retryRun: Run): Run => {
+    const failedIndexes = sourceRun.images
+      .map((item, index) => ({ item, index }))
+      .filter(({ item }) => item.status === 'failed')
+      .map(({ index }) => index)
+
+    if (failedIndexes.length === 0) {
+      return sourceRun
+    }
+
+    const nextImages = sourceRun.images.map((item) => ({ ...item }))
+    failedIndexes.forEach((targetIndex, retryIndex) => {
+      const retryImage = retryRun.images[retryIndex]
+      if (!retryImage) {
+        return
+      }
+
+      const current = nextImages[targetIndex]
+      nextImages[targetIndex] = {
+        ...current,
+        status: retryImage.status,
+        fileRef: retryImage.fileRef,
+        error: retryImage.error,
+        errorCode: retryImage.errorCode,
+      }
+    })
+
+    return {
+      ...sourceRun,
+      channelId: retryRun.channelId,
+      channelName: retryRun.channelName,
+      modelId: retryRun.modelId,
+      modelName: retryRun.modelName,
+      paramsSnapshot: retryRun.paramsSnapshot,
+      settingsSnapshot: retryRun.settingsSnapshot,
+      retryAttempt: retryRun.retryAttempt,
+      images: nextImages,
+    }
+  }
+
+  const markFailedImagesPending = (run: Run): Run => {
+    const nextImages = run.images.map((item) => {
+      if (item.status !== 'failed') {
+        return item
+      }
+      return {
+        ...item,
+        status: 'pending' as const,
+        fileRef: undefined,
+        error: undefined,
+        errorCode: undefined,
+      }
+    })
+
+    return {
+      ...run,
+      images: nextImages,
+    }
   }
 
   const sendDraft = async () => {
@@ -504,11 +593,29 @@ export function useConversations() {
       return
     }
 
+    const sourceRun = findRunInConversation(currentActive, runId)
+    if (!sourceRun) {
+      return
+    }
+
+    const failedCount = sourceRun.images.filter((item) => item.status === 'failed').length
+    if (failedCount === 0) {
+      return
+    }
+
+    const pendingRun = markFailedImagesPending(sourceRun)
+    replaceRunsInConversation(currentActive.id, new Map([[sourceRun.id, pendingRun]]))
+
+    const retrySettings = {
+      ...plan.settings,
+      imageCount: failedCount,
+    }
+
     const retry = await orchestrator.executeRetry({
       batchId: plan.sourceRun.batchId,
       sideMode: plan.sourceRun.sideMode,
       side: plan.sourceRun.side,
-      settings: plan.settings,
+      settings: retrySettings,
       templatePrompt: plan.sourceRun.templatePrompt,
       finalPrompt: plan.sourceRun.finalPrompt,
       variablesSnapshot: { ...plan.sourceRun.variablesSnapshot },
@@ -520,22 +627,8 @@ export function useConversations() {
       retryAttempt: plan.nextRetryAttempt,
     })
 
-    const nextMessages = currentActive.messages.map((message) => {
-      if (!Array.isArray(message.runs) || !message.runs.some((item) => item.id === runId)) {
-        return message
-      }
-
-      return {
-        ...message,
-        runs: [...(message.runs ?? []), retry],
-      }
-    })
-
-    persistConversation({
-      ...currentActive,
-      updatedAt: new Date().toISOString(),
-      messages: nextMessages,
-    })
+    const mergedRun = mergeRetryResultIntoRun(sourceRun, retry)
+    replaceRunsInConversation(currentActive.id, new Map([[sourceRun.id, mergedRun]]))
   }
 
   const editRunTemplate = (runId: string) => {
@@ -651,6 +744,7 @@ export function useConversations() {
     isSending: state.isSending,
     showAdvancedVariables: state.showAdvancedVariables,
     dynamicPromptEnabled: state.dynamicPromptEnabled,
+    panelValueFormat: state.panelValueFormat,
     panelVariables: state.panelVariables,
     runConcurrency: state.runConcurrency,
     resolvedVariables,
@@ -666,6 +760,7 @@ export function useConversations() {
     setDraft: actions.setDraft,
     setShowAdvancedVariables: actions.setAdvancedVariables,
     setDynamicPromptEnabled,
+    setPanelValueFormat,
     setPanelVariables: actions.setPanelVariables,
     setRunConcurrency,
     createNewConversation,

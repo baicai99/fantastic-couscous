@@ -1,4 +1,5 @@
 import type { ApiChannel, Conversation, ConversationSummary, Message, Side, SideMode, SingleSideSettings } from '../types/chat'
+import type { PanelValueFormat } from '../features/conversation/domain/types'
 
 const STORAGE_INDEX_KEY = 'm1:conversation-index'
 const STORAGE_ACTIVE_KEY = 'm1:active-conversation-id'
@@ -12,6 +13,7 @@ export interface StagedSettingsState {
   settingsBySide?: Partial<Record<Side, SingleSideSettings>>
   runConcurrency?: number
   dynamicPromptEnabled?: boolean
+  panelValueFormat?: PanelValueFormat
 }
 
 function latestUserPrompt(messages: Message[] | undefined): string {
@@ -153,6 +155,7 @@ export function loadStagedSettingsFromStorage(): StagedSettingsState | null {
       settingsBySide?: unknown
       runConcurrency?: unknown
       dynamicPromptEnabled?: unknown
+      panelValueFormat?: unknown
     }
     const sideMode: SideMode = parsed?.sideMode === 'multi' || parsed?.sideMode === 'ab' ? 'multi' : 'single'
     const sideCount = typeof parsed?.sideCount === 'number' ? Math.max(2, Math.floor(parsed.sideCount)) : undefined
@@ -162,8 +165,14 @@ export function loadStagedSettingsFromStorage(): StagedSettingsState | null {
       typeof parsed?.runConcurrency === 'number' ? Math.max(1, Math.floor(parsed.runConcurrency)) : undefined
     const dynamicPromptEnabled =
       typeof parsed?.dynamicPromptEnabled === 'boolean' ? parsed.dynamicPromptEnabled : undefined
+    const panelValueFormatCandidates: PanelValueFormat[] = ['json', 'yaml', 'line', 'csv', 'auto']
+    const panelValueFormat =
+      typeof parsed?.panelValueFormat === 'string' &&
+      panelValueFormatCandidates.includes(parsed.panelValueFormat as PanelValueFormat)
+        ? (parsed.panelValueFormat as PanelValueFormat)
+        : undefined
 
-    return { sideMode, sideCount, settingsBySide, runConcurrency, dynamicPromptEnabled }
+    return { sideMode, sideCount, settingsBySide, runConcurrency, dynamicPromptEnabled, panelValueFormat }
   } catch {
     return null
   }

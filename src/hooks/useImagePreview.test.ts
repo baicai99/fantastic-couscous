@@ -77,4 +77,26 @@ describe('useImagePreview behavior', () => {
     expect(result.current.offset).toEqual({ x: 0, y: 0 })
     expect(result.current.interactionMode).toBe('fit')
   })
+
+  it('uses fit hint by default and zoom hint after zooming', () => {
+    const run = createRun([
+      { id: 'i1', seq: 1, status: 'success', fileRef: '/1.png' },
+    ])
+
+    const { result } = renderHook(() => useImagePreview())
+
+    act(() => {
+      result.current.openPreview(run, 'i1')
+    })
+
+    expect(result.current.interactionMode).toBe('fit')
+    expect(result.current.previewHint).toContain('适配')
+
+    act(() => {
+      result.current.zoomBy(0.5)
+    })
+
+    expect(result.current.interactionMode).toBe('actual')
+    expect(result.current.previewHint).toContain('缩放 150%')
+  })
 })

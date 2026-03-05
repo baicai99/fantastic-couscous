@@ -4,3 +4,5 @@ export interface PanelVariableRow {
   valuesText: string
   selectedValue: string
 }
+
+export type PanelValueFormat = 'json' | 'yaml' | 'line' | 'csv' | 'auto'

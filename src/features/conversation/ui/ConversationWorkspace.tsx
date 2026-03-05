@@ -40,6 +40,7 @@ export function ConversationWorkspace() {
     isSending,
     showAdvancedVariables,
     dynamicPromptEnabled,
+    panelValueFormat,
     panelVariables,
     runConcurrency,
     resolvedVariables,
@@ -55,6 +56,7 @@ export function ConversationWorkspace() {
     setDraft,
     setShowAdvancedVariables,
     setDynamicPromptEnabled,
+    setPanelValueFormat,
     setPanelVariables,
     setRunConcurrency,
     createNewConversation,
@@ -82,6 +84,7 @@ export function ConversationWorkspace() {
     previewMode,
     previewImages,
     previewPairs,
+    interactionMode,
     zoom,
     offset,
     isDragging,
@@ -184,12 +187,14 @@ export function ConversationWorkspace() {
           panelMismatchRowIds={panelMismatchRowIds}
           showAdvancedVariables={showAdvancedVariables}
           dynamicPromptEnabled={dynamicPromptEnabled}
+          panelValueFormat={panelValueFormat}
           panelVariables={panelVariables}
           resolvedVariables={resolvedVariables}
           finalPromptPreview={templatePreview.ok ? templatePreview.finalPrompt : ''}
           missingKeys={templatePreview.missingKeys}
           unusedVariableKeys={unusedVariableKeys}
           onDraftChange={setDraft}
+          onPanelValueFormatChange={setPanelValueFormat}
           onPanelVariablesChange={setPanelVariables}
           onSend={sendDraft}
         />
@@ -232,6 +237,7 @@ export function ConversationWorkspace() {
         previewHint={previewHint}
         currentPreviewImage={currentPreviewImage}
         currentPreviewPair={currentPreviewPair}
+        interactionMode={interactionMode}
         zoom={zoom}
         offset={offset}
         goFirstPreview={goFirstPreview}

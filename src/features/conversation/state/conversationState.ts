@@ -9,7 +9,7 @@ import {
   normalizeSettingsBySide,
   previewTemplate,
 } from '../domain/conversationDomain'
-import type { PanelVariableRow } from '../domain/types'
+import type { PanelValueFormat, PanelVariableRow } from '../domain/types'
 
 export interface ConversationState {
   summaries: ConversationSummary[]
@@ -20,6 +20,7 @@ export interface ConversationState {
   isSending: boolean
   showAdvancedVariables: boolean
   dynamicPromptEnabled: boolean
+  panelValueFormat: PanelValueFormat
   panelVariables: PanelVariableRow[]
   runConcurrency: number
   stagedSideMode: SideMode
@@ -35,6 +36,7 @@ export type ConversationAction =
   | { type: 'send/fail'; payload: string }
   | { type: 'send/clearError' }
   | { type: 'variables/setPanelRows'; payload: PanelVariableRow[] }
+  | { type: 'variables/setPanelValueFormat'; payload: PanelValueFormat }
   | { type: 'settings/setRunConcurrency'; payload: number }
   | { type: 'conversation/sync'; payload: { summaries: ConversationSummary[]; contents: Record<string, Conversation> } }
   | { type: 'conversation/switch'; payload: string | null }
@@ -69,6 +71,7 @@ export function createInitialConversationState(input: {
     settingsBySide?: Partial<Record<Side, SingleSideSettings>>
     runConcurrency?: number
     dynamicPromptEnabled?: boolean
+    panelValueFormat?: PanelValueFormat
   } | null
 }): ConversationState {
   const { channels, modelCatalog, initialLoad, initialStaged } = input
@@ -88,6 +91,7 @@ export function createInitialConversationState(input: {
     isSending: false,
     showAdvancedVariables: false,
     dynamicPromptEnabled: initialStaged?.dynamicPromptEnabled ?? true,
+    panelValueFormat: initialStaged?.panelValueFormat ?? 'json',
     panelVariables: defaultPanelRows(),
     runConcurrency: Math.max(1, Math.floor(initialStaged?.runConcurrency ?? 4)),
     stagedSideMode: initialStaged?.sideMode ?? 'single',
@@ -111,6 +115,8 @@ export function conversationReducer(state: ConversationState, action: Conversati
       return { ...state, sendError: '' }
     case 'variables/setPanelRows':
       return { ...state, panelVariables: action.payload, sendError: '' }
+    case 'variables/setPanelValueFormat':
+      return { ...state, panelValueFormat: action.payload, sendError: '' }
     case 'settings/setRunConcurrency':
       return { ...state, runConcurrency: Math.max(1, Math.floor(action.payload)), sendError: '' }
     case 'conversation/sync':
@@ -188,7 +194,7 @@ export const conversationSelectors: ConversationSelectors = {
       }
     }
 
-    const resolvedVariables = collectVariables(state.panelVariables)
+    const resolvedVariables = collectVariables(state.panelVariables, state.panelValueFormat)
 
     return {
       resolvedVariables,
@@ -206,6 +212,8 @@ export function useConversationState(initial: ConversationState) {
     () => ({
       setDraft: (value: string) => dispatch({ type: 'draft/set', payload: value }),
       setPanelVariables: (value: PanelVariableRow[]) => dispatch({ type: 'variables/setPanelRows', payload: value }),
+      setPanelValueFormat: (value: PanelValueFormat) =>
+        dispatch({ type: 'variables/setPanelValueFormat', payload: value }),
       setAdvancedVariables: (value: boolean) => dispatch({ type: 'ui/setAdvancedVariables', payload: value }),
       setDynamicPromptEnabled: (value: boolean) => dispatch({ type: 'ui/setDynamicPromptEnabled', payload: value }),
     }),

@@ -11,6 +11,7 @@ import {
   saveStagedSettingsToStorage,
 } from '../../../services/conversationStorage'
 import type { ApiChannel, Conversation, ConversationSummary, Side, SideMode, SingleSideSettings } from '../../../types/chat'
+import type { PanelValueFormat } from '../domain/types'
 
 export interface ConversationRepository {
   load: () => {
@@ -25,6 +26,7 @@ export interface ConversationRepository {
     settingsBySide?: Partial<Record<Side, SingleSideSettings>>
     runConcurrency?: number
     dynamicPromptEnabled?: boolean
+    panelValueFormat?: PanelValueFormat
   } | null
   saveIndex: (summaries: ConversationSummary[]) => void
   saveConversation: (conversation: Conversation) => void
@@ -38,6 +40,7 @@ export interface ConversationRepository {
     settingsBySide: Record<Side, SingleSideSettings>
     runConcurrency: number
     dynamicPromptEnabled: boolean
+    panelValueFormat: PanelValueFormat
   }) => void
 }
 
@@ -52,8 +55,15 @@ export function createConversationRepository(): ConversationRepository {
     clearConversations: clearConversationsFromStorage,
     saveActiveId: (conversationId) => saveActiveConversationId(conversationId ?? ''),
     saveChannels: saveChannelsToStorage,
-    saveStagedSettings: ({ sideMode, sideCount, settingsBySide, runConcurrency, dynamicPromptEnabled }) => {
-      saveStagedSettingsToStorage({ sideMode, sideCount, settingsBySide, runConcurrency, dynamicPromptEnabled })
+    saveStagedSettings: ({ sideMode, sideCount, settingsBySide, runConcurrency, dynamicPromptEnabled, panelValueFormat }) => {
+      saveStagedSettingsToStorage({
+        sideMode,
+        sideCount,
+        settingsBySide,
+        runConcurrency,
+        dynamicPromptEnabled,
+        panelValueFormat,
+      })
     },
   }
 }
