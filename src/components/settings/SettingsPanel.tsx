@@ -1,5 +1,6 @@
 ﻿import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
+import { ReloadOutlined } from '@ant-design/icons'
 import {
   Alert,
   Button,
@@ -250,6 +251,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
   })
   const [channelForm] = Form.useForm<ChannelFormValues>()
   const [isSavingChannel, setIsSavingChannel] = useState(false)
+  const [isRefreshingChannels, setIsRefreshingChannels] = useState(false)
   const [messageApi, messageContextHolder] = message.useMessage()
   const [topCollapseKeys, setTopCollapseKeys] = useState<string[]>(() => {
     try {
@@ -330,6 +332,60 @@ export function SettingsPanel(props: SettingsPanelProps) {
     () => getSizeTierOptions().map((value) => ({ label: value.toLowerCase(), value })),
     [],
   )
+  
+  const refreshChannelModels = async () => {
+    if (channels.length === 0) {
+      messageApi.info('No channels to refresh')
+      return
+    }
+
+    setIsRefreshingChannels(true)
+    try {
+      const settled = await Promise.all(
+        channels.map(async (channel) => {
+          try {
+            const modelIds = await fetchChannelModels({ baseUrl: channel.baseUrl, apiKey: channel.apiKey })
+            if (modelIds.length === 0) {
+              throw new Error('Empty model list returned')
+            }
+            return { id: channel.id, name: channel.name, modelIds }
+          } catch (error) {
+            const reason = error instanceof Error ? error.message : 'Unknown error'
+            return { id: channel.id, name: channel.name, modelIds: null, reason }
+          }
+        }),
+      )
+
+      const successItems = settled.filter((item) => Array.isArray(item.modelIds))
+      const failedItems = settled.filter((item) => !Array.isArray(item.modelIds))
+
+      if (successItems.length > 0) {
+        const modelMap = new Map(successItems.map((item) => [item.id, item.modelIds]))
+        onChannelsChange(
+          channels.map((channel) => {
+            const modelIds = modelMap.get(channel.id)
+            return modelIds ? { ...channel, models: modelIds } : channel
+          }),
+        )
+      }
+      if (failedItems.length === 0) {
+        messageApi.success(`Model list refreshed for ${successItems.length} channel(s)`)
+      } else {
+        const failedNames = failedItems
+          .slice(0, 3)
+          .map((item) => item.name)
+          .join(', ')
+        const suffix = failedItems.length > 3 ? '...' : ''
+        if (successItems.length > 0) {
+          messageApi.warning(`Refreshed ${successItems.length} channel(s), ${failedItems.length} failed (${failedNames}${suffix})`)
+        } else {
+          messageApi.error(`Failed to refresh model list (${failedNames}${suffix})`)
+        }
+      }
+    } finally {
+      setIsRefreshingChannels(false)
+    }
+  }
 
   const renderSettingForm = (side: Side) => {
     const settings = settingsBySide[side]
@@ -699,16 +755,26 @@ export function SettingsPanel(props: SettingsPanelProps) {
         onClose={() => setIsDrawerOpen(false)}
         width={560}
         extra={
-          <Button
-            type="primary"
-            onClick={() => {
-              setEditingChannelId(null)
-              channelForm.resetFields()
-              setIsModalOpen(true)
-            }}
-          >
-            新增渠道
-          </Button>
+          <Space>
+            <Button
+              icon={<ReloadOutlined />}
+              loading={isRefreshingChannels}
+              title="Refresh model list"
+              onClick={() => {
+                void refreshChannelModels()
+              }}
+            />
+            <Button
+              type="primary"
+              onClick={() => {
+                setEditingChannelId(null)
+                channelForm.resetFields()
+                setIsModalOpen(true)
+              }}
+            >
+              新增渠道
+            </Button>
+          </Space>
         }
       >
         <Table<ApiChannel>
@@ -783,3 +849,4 @@ export function SettingsPanel(props: SettingsPanelProps) {
     </div>
   )
 }
+
