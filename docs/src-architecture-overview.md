@@ -115,6 +115,7 @@
 - `runtimeMetrics.ts`：DEV 下输出耗时日志。
 - 渐进式图片提交/渲染 + 历史消息分页加载（默认初始 100，增量 50）。
 - Workspace 使用 `ResizeObserver + debounce` 动态计算 header/composer 安全区。
+- Ant Design 升级兼容：`Space` 组件使用 `orientation`，不再使用已废弃的 `direction`，避免控制台 deprecation warning。
 
 ## 9. 给 LLM 的快速理解结论
 

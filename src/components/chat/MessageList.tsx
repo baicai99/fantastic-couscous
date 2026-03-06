@@ -283,7 +283,7 @@ function renderRunCard(
   return (
     <Fragment key={run.id}>
       <div className={`run-record ${compact ? 'run-record-compact' : ''}`}>
-        <Space direction="vertical" size={8} className="full-width">
+        <Space orientation="vertical" size={8} className="full-width">
           {compact ? (
             <div className="run-meta-compact">
               <div className="run-meta-compact-top">
@@ -328,7 +328,7 @@ function renderRunCard(
                     onDownloadBatchRun,
                   }),
                   children: (
-                    <Space direction="vertical" size={8} className="full-width">
+                    <Space orientation="vertical" size={8} className="full-width">
                       <Text type="secondary">side={run.side} | images={run.imageCount} | mode={run.sideMode} | batch={run.batchId}</Text>
                       <Text type="secondary">retry={run.retryAttempt ?? 0}{run.retryOfRunId ? ` | source=${run.retryOfRunId}` : ''}</Text>
                       <Text type="secondary">渠道: {run.channelName ?? '未选择'}</Text>
@@ -345,7 +345,7 @@ function renderRunCard(
           )}
           {failureSummary ? <Text type="warning">失败摘要: {failureSummary}</Text> : null}
           {!compact && failureDetails.length > 0 ? (
-            <Space direction="vertical" size={2} className="full-width">
+            <Space orientation="vertical" size={2} className="full-width">
               {failureDetails.map((detail, index) => (
                 <Text key={`${run.id}-failure-${index}`} type="secondary">
                   {detail}
@@ -597,7 +597,7 @@ function MessageListComponent(props: MessageListProps) {
 
   return (
     <div ref={viewportRef} className="full-width message-list-viewport">
-      <Space direction="vertical" size={12} className="full-width message-list-content">
+      <Space orientation="vertical" size={12} className="full-width message-list-content">
         {hasOlderMessages ? (
           <div className="message-history-more">
             <Button size="small" onClick={handleLoadOlderMessages}>
@@ -630,7 +630,7 @@ function MessageListComponent(props: MessageListProps) {
 
             return (
               <Card key={message.id} size="small" className={`message-card ${message.role}`}>
-                <Space direction="vertical" size={8} className="full-width">
+                <Space orientation="vertical" size={8} className="full-width">
                   <div className="message-head-row">
                     <Space>
                       <Tag color={message.role === 'user' ? 'blue' : 'green'}>{message.role === 'user' ? 'User' : 'Assistant'}</Tag>
