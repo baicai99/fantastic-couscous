@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
 import { Layout } from 'antd'
 import type { PanelMode } from '../../hooks/usePersistentPanelMode'
 
@@ -33,6 +33,10 @@ export function SidebarShell(props: SidebarShellProps) {
     autoModeByBreakpoint = false,
   } = props
 
+  const shellStyle = {
+    '--sidebar-collapsed-width': `${collapsedWidth}px`,
+  } as CSSProperties
+
   return (
     <Sider
       width={expandedWidth}
@@ -48,6 +52,7 @@ export function SidebarShell(props: SidebarShellProps) {
             }
           : undefined
       }
+      style={shellStyle}
       className={`panel panel-${side} sidebar-shell ${className ?? ''} ${mode === 'collapsed' ? 'is-collapsed' : 'is-expanded'}`.trim()}
     >
       <div className="sidebar-shell-inner">

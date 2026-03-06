@@ -57,6 +57,12 @@
   pointer-events: none;
 }
 
+.settings-sider.sidebar-shell.ant-layout-sider .sidebar-shell-layer-collapsed {
+  left: auto;
+  right: 0;
+  width: var(--sidebar-collapsed-width, 56px);
+}
+
 .panel-scroll {
   height: 100%;
   overflow-y: auto;
@@ -67,10 +73,12 @@
 .settings-panel-header {
   flex: 0 0 auto;
   display: flex;
-  justify-content: flex-end;
+  justify-content: center;
   align-items: center;
+  width: var(--sidebar-collapsed-width, 56px);
+  margin-left: auto;
   padding-top: 16px;
-  padding-right: 8px;
+  padding-right: 0;
   margin-right: 0;
   margin-bottom: 0;
 }
