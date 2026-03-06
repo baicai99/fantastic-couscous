@@ -19,6 +19,48 @@ const RIGHT_PANEL_COLLAPSED_STORAGE_KEY = 'm3:right-panel-collapsed'
 const SETTINGS_SIDER_EXPANDED_WIDTH = 320
 const SETTINGS_SIDER_MINI_WIDTH = 56
 
+interface MultiRenderProfile {
+  runInitialLimit: number
+  runPageSize: number
+  imageInitialLimit: number
+  imagePageSize: number
+  messageWindowSize: number
+  messageOverscan: number
+}
+
+function resolveMultiRenderProfile(sideCount: number): MultiRenderProfile {
+  if (sideCount >= 4) {
+    return {
+      runInitialLimit: 8,
+      runPageSize: 8,
+      imageInitialLimit: 12,
+      imagePageSize: 12,
+      messageWindowSize: 16,
+      messageOverscan: 6,
+    }
+  }
+
+  if (sideCount >= 3) {
+    return {
+      runInitialLimit: 10,
+      runPageSize: 10,
+      imageInitialLimit: 14,
+      imagePageSize: 14,
+      messageWindowSize: 18,
+      messageOverscan: 7,
+    }
+  }
+
+  return {
+    runInitialLimit: 12,
+    runPageSize: 12,
+    imageInitialLimit: 16,
+    imagePageSize: 16,
+    messageWindowSize: 20,
+    messageOverscan: 8,
+  }
+}
+
 export function ConversationWorkspace() {
   const { mode: leftPanelMode, setMode: setLeftPanelMode, toggleMode: toggleLeftPanelMode } = usePersistentPanelMode({
     storageKey: LEFT_PANEL_COLLAPSED_STORAGE_KEY,
@@ -118,6 +160,7 @@ export function ConversationWorkspace() {
   const modelNameById = useMemo(() => {
     return new Map(modelCatalog.models.map((model) => [model.id, model.name]))
   }, [modelCatalog.models])
+  const multiRenderProfile = useMemo(() => resolveMultiRenderProfile(activeSideCount), [activeSideCount])
   const chatStageStyle = useMemo(
     () =>
       ({
@@ -228,6 +271,12 @@ export function ConversationWorkspace() {
                         replayingRunIds={replayingRunIds}
                         initialMessageLimit={historyVisibleLimit}
                         messagePageSize={historyPageSize}
+                        windowSize={multiRenderProfile.messageWindowSize}
+                        overscan={multiRenderProfile.messageOverscan}
+                        multiRunInitialLimit={multiRenderProfile.runInitialLimit}
+                        multiRunPageSize={multiRenderProfile.runPageSize}
+                        multiImageInitialLimit={multiRenderProfile.imageInitialLimit}
+                        multiImagePageSize={multiRenderProfile.imagePageSize}
                         autoScrollTrigger={sendScrollTrigger}
                         onLoadOlderMessages={loadOlderMessages}
                       />

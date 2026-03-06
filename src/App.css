@@ -96,6 +96,14 @@
   overflow-y: auto;
   overflow-x: hidden;
   padding: 16px;
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.settings-panel-scroll-region::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
 }
 
 .settings-header-btn {
@@ -215,6 +223,38 @@
   -webkit-line-clamp: unset;
   overflow: visible;
   text-overflow: clip;
+}
+
+.chat-body.chat-body-multi .run-record-compact {
+  padding: 6px 8px;
+}
+
+.chat-body.chat-body-multi .run-meta-compact .run-meta-title-prompt {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.chat-body.chat-body-multi .run-meta-compact .run-meta-title-prompt.expanded {
+  display: block;
+  -webkit-line-clamp: unset;
+  overflow: visible;
+  text-overflow: clip;
+}
+
+.chat-body.chat-body-multi .run-image-download-btn {
+  display: none !important;
+}
+
+.chat-body.chat-body-multi .message-card,
+.chat-body.chat-body-multi .run-grid-item {
+  content-visibility: visible;
+  contain-intrinsic-size: auto;
 }
 
 .chat-stage {
@@ -742,6 +782,8 @@
 
 .message-card {
   width: 100%;
+  content-visibility: auto;
+  contain-intrinsic-size: 520px;
 }
 
 .message-history-more {
@@ -775,12 +817,40 @@
   margin-top: 8px;
 }
 
+.run-grid-compact {
+  gap: 8px;
+  margin-top: 6px;
+}
+
 .run-record {
   border: 1px solid #f0f0f0;
   border-radius: 8px;
   padding: 8px 10px;
   background: #fafafa;
   min-width: 0;
+}
+
+.run-record-compact {
+  background: #fff;
+}
+
+.run-meta-compact {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.run-meta-compact-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.run-meta-compact-toggle {
+  align-self: flex-start;
 }
 
 .run-head-actions {
@@ -891,10 +961,21 @@
   flex-direction: column;
   gap: 4px;
   position: relative;
+  content-visibility: auto;
+  contain-intrinsic-size: 260px;
+}
+
+.run-grid-item-compact {
+  gap: 0;
 }
 
 .run-image-frame {
   position: relative;
+}
+
+.run-image-frame.compact .image-button {
+  border-radius: 6px;
+  width: 100%;
 }
 
 .image-button {
@@ -934,6 +1015,10 @@
   display: block;
   aspect-ratio: 1 / 1;
   object-fit: cover;
+}
+
+.run-image-compact {
+  transform: translateZ(0);
 }
 
 .run-image-fallback {

@@ -190,6 +190,94 @@ function makeMultiConversationWithSideOnlyRun(targetSide: string): Conversation 
   }
 }
 
+function makeMultiConversationWithManyRunsAndImages(input: {
+  targetSide: string
+  runCount: number
+  imageCount: number
+}): Conversation {
+  const { targetSide, runCount, imageCount } = input
+  const runs = Array.from({ length: runCount }, (_, runIndex) => ({
+    id: `r-many-${runIndex + 1}`,
+    batchId: 'b-many',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    sideMode: 'multi' as const,
+    side: targetSide,
+    prompt: `prompt-${runIndex + 1}`,
+    imageCount,
+    channelId: null,
+    channelName: null,
+    modelId: 'm',
+    modelName: 'M',
+    templatePrompt: `template-${runIndex + 1}`,
+    finalPrompt: `final-${runIndex + 1}`,
+    variablesSnapshot: {},
+    paramsSnapshot: {},
+    settingsSnapshot: {
+      resolution: '1K',
+      aspectRatio: '1:1',
+      imageCount,
+      gridColumns: 4,
+      sizeMode: 'preset' as const,
+      customWidth: 1024,
+      customHeight: 1024,
+      autoSave: true,
+    },
+    retryAttempt: 0,
+    images: Array.from({ length: imageCount }, (_, imageIndex) => ({
+      id: `img-${runIndex + 1}-${imageIndex + 1}`,
+      seq: imageIndex + 1,
+      status: 'success' as const,
+      fileRef: 'data:image/png;base64,AA==',
+    })),
+  }))
+
+  return {
+    id: 'c-many',
+    title: 'Many Runs',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    sideMode: 'multi',
+    sideCount: 2,
+    settingsBySide: {
+      side_1: {
+        resolution: '1K',
+        aspectRatio: '1:1',
+        imageCount: 1,
+        gridColumns: 1,
+        sizeMode: 'preset',
+        customWidth: 1024,
+        customHeight: 1024,
+        autoSave: true,
+        channelId: null,
+        modelId: 'm',
+        paramValues: {},
+      },
+      side_2: {
+        resolution: '1K',
+        aspectRatio: '1:1',
+        imageCount: 1,
+        gridColumns: 1,
+        sizeMode: 'preset',
+        customWidth: 1024,
+        customHeight: 1024,
+        autoSave: true,
+        channelId: null,
+        modelId: 'm',
+        paramValues: {},
+      },
+    },
+    messages: [
+      {
+        id: 'm-many',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        role: 'assistant',
+        content: 'Replay request submitted. Click images to preview.',
+        runs,
+      },
+    ],
+  }
+}
+
 describe('MessageList', () => {
   it('triggers replay/retry callbacks for run actions', async () => {
     const user = userEvent.setup()
@@ -441,6 +529,133 @@ describe('MessageList', () => {
     )
 
     expect(screen.getByText('Replay request submitted. Click images to preview.')).toBeInTheDocument()
+  })
+
+  it('does not schedule scroll frame updates when windowing is inactive and bottom callback is absent', () => {
+    const rafSpy = vi.spyOn(window, 'requestAnimationFrame')
+
+    const { container } = render(
+      <div style={{ height: 600 }}>
+        <MessageList
+          activeConversation={makeConversation()}
+          sideView="single"
+          onOpenPreview={() => {}}
+          onRetryRun={() => {}}
+          onReplayRun={() => {}}
+        />
+      </div>,
+    )
+
+    const viewport = container.querySelector('.message-list-viewport') as HTMLDivElement
+    Object.defineProperty(viewport, 'scrollTop', { configurable: true, value: 180, writable: true })
+    viewport.dispatchEvent(new Event('scroll'))
+
+    expect(rafSpy).not.toHaveBeenCalled()
+    rafSpy.mockRestore()
+  })
+
+  it('keeps near-bottom callback behavior after scroll optimization', () => {
+    const onReachBottom = vi.fn()
+    const rafSpy = vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb: FrameRequestCallback) => {
+      cb(0)
+      return 1
+    })
+
+    const { container } = render(
+      <div style={{ height: 600 }}>
+        <MessageList
+          activeConversation={makeConversation()}
+          sideView="single"
+          onOpenPreview={() => {}}
+          onRetryRun={() => {}}
+          onReplayRun={() => {}}
+          onReachBottom={onReachBottom}
+        />
+      </div>,
+    )
+
+    const viewport = container.querySelector('.message-list-viewport') as HTMLDivElement
+    Object.defineProperty(viewport, 'scrollHeight', { configurable: true, value: 800 })
+    Object.defineProperty(viewport, 'clientHeight', { configurable: true, value: 600 })
+    Object.defineProperty(viewport, 'scrollTop', { configurable: true, value: 190, writable: true })
+    viewport.dispatchEvent(new Event('scroll'))
+
+    expect(onReachBottom).toHaveBeenCalledTimes(1)
+    rafSpy.mockRestore()
+  })
+
+  it('paginates images per run in multi view and can load more', async () => {
+    const user = userEvent.setup()
+    const conversation = makeMultiConversationWithManyRunsAndImages({
+      targetSide: 'side_1',
+      runCount: 1,
+      imageCount: 30,
+    })
+    const { container } = render(
+      <div style={{ height: 600 }}>
+        <MessageList
+          activeConversation={conversation}
+          sideView="side_1"
+          onOpenPreview={() => {}}
+          onRetryRun={() => {}}
+          onReplayRun={() => {}}
+          multiImageInitialLimit={12}
+          multiImagePageSize={12}
+        />
+      </div>,
+    )
+
+    expect(container.querySelectorAll('img.run-image')).toHaveLength(12)
+    await user.click(screen.getByRole('button', { name: /加载更多图片/ }))
+    expect(container.querySelectorAll('img.run-image')).toHaveLength(24)
+  })
+
+  it('paginates runs in multi view and can load more', async () => {
+    const user = userEvent.setup()
+    const conversation = makeMultiConversationWithManyRunsAndImages({
+      targetSide: 'side_1',
+      runCount: 18,
+      imageCount: 1,
+    })
+    render(
+      <div style={{ height: 600 }}>
+        <MessageList
+          activeConversation={conversation}
+          sideView="side_1"
+          onOpenPreview={() => {}}
+          onRetryRun={() => {}}
+          onReplayRun={() => {}}
+          multiRunInitialLimit={8}
+          multiRunPageSize={8}
+        />
+      </div>,
+    )
+
+    expect(screen.queryByText(/Run #9/)).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /加载更多 Run/ }))
+    expect(screen.getByText(/Run #9/)).toBeInTheDocument()
+  })
+
+  it('uses compact image actions in multi view to reduce node count', () => {
+    const conversation = makeMultiConversationWithManyRunsAndImages({
+      targetSide: 'side_1',
+      runCount: 1,
+      imageCount: 1,
+    })
+
+    render(
+      <div style={{ height: 600 }}>
+        <MessageList
+          activeConversation={conversation}
+          sideView="side_1"
+          onOpenPreview={() => {}}
+          onRetryRun={() => {}}
+          onReplayRun={() => {}}
+        />
+      </div>,
+    )
+
+    expect(screen.queryByRole('button', { name: /下载这张/ })).not.toBeInTheDocument()
   })
 })
 

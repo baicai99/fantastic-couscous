@@ -11,7 +11,10 @@ const { Paragraph, Text } = Typography
 const DEFAULT_ESTIMATED_MESSAGE_HEIGHT = 220
 const PROMPT_SUMMARY_MAX_CHARS = 100
 const DEFAULT_MESSAGE_PAGE_SIZE = 50
-const PROMPT_TRUNCATION_EPSILON = 1
+const DEFAULT_MULTI_RUN_INITIAL_LIMIT = 24
+const DEFAULT_MULTI_RUN_PAGE_SIZE = 24
+const DEFAULT_MULTI_IMAGE_INITIAL_LIMIT = 24
+const DEFAULT_MULTI_IMAGE_PAGE_SIZE = 24
 
 interface MessageListProps {
   activeConversation: Conversation | null
@@ -31,12 +34,23 @@ interface MessageListProps {
   messagePageSize?: number
   autoScrollTrigger?: number
   onLoadOlderMessages?: () => void
+  multiRunInitialLimit?: number
+  multiRunPageSize?: number
+  multiImageInitialLimit?: number
+  multiImagePageSize?: number
 }
 
 interface DisplayImage {
   seq: number
   item: ImageItem | null
   missingReason?: string
+}
+
+interface PaginationControl {
+  current: number
+  total: number
+  label: string
+  onLoadMore: () => void
 }
 
 const FAILURE_LABEL: Record<FailureCode, string> = {
@@ -104,33 +118,12 @@ function getFailureDetails(run: Run): string[] {
   return Array.from(new Set(details))
 }
 
-function isPromptTextTruncated(node: HTMLElement): boolean {
-  const hasLayoutMetrics =
-    node.clientHeight > 0 ||
-    node.clientWidth > 0 ||
-    node.scrollHeight > 0 ||
-    node.scrollWidth > 0
-
-  // JSDOM has no real layout metrics; keep a deterministic fallback for tests.
-  if (!hasLayoutMetrics) {
-    const promptLength = Number(node.dataset.promptLength ?? 0)
-    const maxChars = Number(node.dataset.promptSummaryMaxChars ?? PROMPT_SUMMARY_MAX_CHARS)
-    return promptLength > maxChars
-  }
-
-  return (
-    node.scrollHeight - node.clientHeight > PROMPT_TRUNCATION_EPSILON ||
-    node.scrollWidth - node.clientWidth > PROMPT_TRUNCATION_EPSILON
-  )
-}
-
 function renderRunMetaTitle(input: {
   run: Run
   runNumber: number
   expanded: boolean
   showPromptToggle: boolean
   onToggle: (runId: string) => void
-  onPromptNodeChange: (runId: string, node: HTMLElement | null) => void
   showBatchDownload: boolean
   onDownloadBatchRun?: (runId: string) => void
 }) {
@@ -140,7 +133,6 @@ function renderRunMetaTitle(input: {
     expanded,
     showPromptToggle,
     onToggle,
-    onPromptNodeChange,
     showBatchDownload,
     onDownloadBatchRun,
   } = input
@@ -168,9 +160,9 @@ function renderRunMetaTitle(input: {
       ) : null}
       <Text
         className={`run-meta-title-prompt ${expanded ? 'expanded' : ''}`}
+        data-run-id={run.id}
         data-prompt-length={promptText.length}
         data-prompt-summary-max-chars={PROMPT_SUMMARY_MAX_CHARS}
-        ref={(node) => onPromptNodeChange(run.id, node as HTMLElement | null)}
       >
         {`Prompt: ${promptText || '无'}`}
       </Text>
@@ -197,13 +189,15 @@ function renderImages(
   linkedRun: Run | undefined,
   onOpenPreview: (run: Run, imageId: string, linkedRun?: Run) => void,
   onDownloadSingleImage?: (runId: string, imageId: string) => void,
+  pagination?: PaginationControl,
+  compact = false,
 ) {
   const preferredColumns = run?.settingsSnapshot?.gridColumns
 
   return (
     <>
       <div
-        className="run-grid"
+        className={`run-grid ${compact ? 'run-grid-compact' : ''}`}
         style={{
           gridTemplateColumns: `repeat(${gridColumnCount(Math.max(rows.length, 1), preferredColumns)}, minmax(0, 1fr))`,
         }}
@@ -211,28 +205,36 @@ function renderImages(
         {rows.map((row) => {
           const src = row.item?.thumbRef ?? row.item?.fileRef ?? row.item?.fullRef
           return (
-            <div key={`${run?.id ?? 'none'}-${row.seq}`} className="run-grid-item">
-              <div className="run-image-seq-overlay">#{row.seq}</div>
+            <div key={`${run?.id ?? 'none'}-${row.seq}`} className={`run-grid-item ${compact ? 'run-grid-item-compact' : ''}`}>
+              {!compact ? <div className="run-image-seq-overlay">#{row.seq}</div> : null}
               {row.item?.status === 'pending' ? (
                 <div className="run-image-skeleton" />
               ) : row.item?.status === 'failed' ? (
                 <div className="run-image-fallback">生成失败</div>
               ) : row.item?.status === 'success' && src && run ? (
-                <div className="run-image-frame">
+                <div className={`run-image-frame ${compact ? 'compact' : ''}`}>
                   <button className="image-button" type="button" onClick={() => onOpenPreview(run, row.item!.id, linkedRun)}>
-                    <img className="run-image" src={src} alt={`image-${row.seq}`} loading="lazy" decoding="async" />
+                    <img
+                      className={`run-image ${compact ? 'run-image-compact' : ''}`}
+                      src={src}
+                      alt={`image-${row.seq}`}
+                      loading="lazy"
+                      decoding="async"
+                    />
                   </button>
-                  <Button
-                    size="small"
-                    type="primary"
-                    className="run-image-download-btn"
-                    onClick={(event) => {
-                      event.stopPropagation()
-                      onDownloadSingleImage?.(run.id, row.item!.id)
-                    }}
-                  >
-                    下载这张
-                  </Button>
+                  {!compact ? (
+                    <Button
+                      size="small"
+                      type="primary"
+                      className="run-image-download-btn"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        onDownloadSingleImage?.(run.id, row.item!.id)
+                      }}
+                    >
+                      下载这张
+                    </Button>
+                  ) : null}
                 </div>
               ) : (
                 <div className="run-image-fallback">缺失: {row.missingReason ?? '未返回图片'}</div>
@@ -241,6 +243,13 @@ function renderImages(
           )
         })}
       </div>
+      {pagination ? (
+        <div className="message-history-more">
+          <Button size="small" onClick={pagination.onLoadMore}>
+            {`${pagination.label} (${pagination.current}/${pagination.total})`}
+          </Button>
+        </div>
+      ) : null}
     </>
   )
 }
@@ -256,51 +265,81 @@ function renderRunCard(
   isPromptExpanded: boolean,
   showPromptToggle: boolean,
   onTogglePrompt: (runId: string) => void,
-  onPromptNodeChange: (runId: string, node: HTMLElement | null) => void,
   showBatchDownload: boolean,
   onDownloadBatchRun?: (runId: string) => void,
+  imagePagination?: PaginationControl,
+  compact = false,
 ) {
   const failureSummary = getFailureSummary(run)
   const failureDetails = getFailureDetails(run)
   const hasFailed = run.images.some((item) => item.status === 'failed')
+  const promptText = run.finalPrompt.trim()
 
   return (
     <Fragment key={run.id}>
-      <div className="run-record">
+      <div className={`run-record ${compact ? 'run-record-compact' : ''}`}>
         <Space direction="vertical" size={8} className="full-width">
-          <Collapse
-            className="run-meta-collapse"
-            ghost
-            items={[
-              {
-                key: 'meta',
-                label: renderRunMetaTitle({
-                  run,
-                  runNumber,
-                  expanded: isPromptExpanded,
-                  showPromptToggle,
-                  onToggle: onTogglePrompt,
-                  onPromptNodeChange,
-                  showBatchDownload,
-                  onDownloadBatchRun,
-                }),
-                children: (
-                  <Space direction="vertical" size={8} className="full-width">
-                    <Text type="secondary">side={run.side} | images={run.imageCount} | mode={run.sideMode} | batch={run.batchId}</Text>
-                    <Text type="secondary">retry={run.retryAttempt ?? 0}{run.retryOfRunId ? ` | source=${run.retryOfRunId}` : ''}</Text>
-                    <Text type="secondary">渠道: {run.channelName ?? '未选择'}</Text>
-                    <Text type="secondary">模型: {run.modelName ?? run.modelId ?? '未记录'}</Text>
-                    <Text type="secondary">参数: {formatParamSnapshot(run.paramsSnapshot)}</Text>
-                    <Text type="secondary">模板: {run.templatePrompt}</Text>
-                    <Text type="secondary">变量: {formatParamSnapshot(run.variablesSnapshot)}</Text>
-                    <Text type="secondary">最终 prompt: {run.finalPrompt}</Text>
-                  </Space>
-                ),
-              },
-            ]}
-          />
+          {compact ? (
+            <div className="run-meta-compact">
+              <div className="run-meta-compact-top">
+                <Text strong className="run-meta-title-fixed">{`Run #${runNumber}`}</Text>
+                {showBatchDownload ? (
+                  <Button
+                    type="link"
+                    size="small"
+                    className="run-meta-title-toggle"
+                    onClick={() => onDownloadBatchRun?.(run.id)}
+                  >
+                    下载这一批次
+                  </Button>
+                ) : null}
+              </div>
+              <Text className={`run-meta-title-prompt ${isPromptExpanded ? 'expanded' : ''}`}>{`Prompt: ${promptText || '无'}`}</Text>
+              {showPromptToggle ? (
+                <Button
+                  type="link"
+                  size="small"
+                  className="run-meta-title-toggle run-meta-compact-toggle"
+                  onClick={() => onTogglePrompt(run.id)}
+                >
+                  {isPromptExpanded ? '收起' : '展开'}
+                </Button>
+              ) : null}
+            </div>
+          ) : (
+            <Collapse
+              className="run-meta-collapse"
+              ghost
+              items={[
+                {
+                  key: 'meta',
+                  label: renderRunMetaTitle({
+                    run,
+                    runNumber,
+                    expanded: isPromptExpanded,
+                    showPromptToggle,
+                    onToggle: onTogglePrompt,
+                    showBatchDownload,
+                    onDownloadBatchRun,
+                  }),
+                  children: (
+                    <Space direction="vertical" size={8} className="full-width">
+                      <Text type="secondary">side={run.side} | images={run.imageCount} | mode={run.sideMode} | batch={run.batchId}</Text>
+                      <Text type="secondary">retry={run.retryAttempt ?? 0}{run.retryOfRunId ? ` | source=${run.retryOfRunId}` : ''}</Text>
+                      <Text type="secondary">渠道: {run.channelName ?? '未选择'}</Text>
+                      <Text type="secondary">模型: {run.modelName ?? run.modelId ?? '未记录'}</Text>
+                      <Text type="secondary">参数: {formatParamSnapshot(run.paramsSnapshot)}</Text>
+                      <Text type="secondary">模板: {run.templatePrompt}</Text>
+                      <Text type="secondary">变量: {formatParamSnapshot(run.variablesSnapshot)}</Text>
+                      <Text type="secondary">最终 prompt: {run.finalPrompt}</Text>
+                    </Space>
+                  ),
+                },
+              ]}
+            />
+          )}
           {failureSummary ? <Text type="warning">失败摘要: {failureSummary}</Text> : null}
-          {failureDetails.length > 0 ? (
+          {!compact && failureDetails.length > 0 ? (
             <Space direction="vertical" size={2} className="full-width">
               {failureDetails.map((detail, index) => (
                 <Text key={`${run.id}-failure-${index}`} type="secondary">
@@ -318,7 +357,7 @@ function renderRunCard(
           ) : null}
         </Space>
       </div>
-      {renderImages(rows, run, linkedRun, onOpenPreview, onDownloadSingleImage)}
+      {renderImages(rows, run, linkedRun, onOpenPreview, onDownloadSingleImage, imagePagination, compact)}
     </Fragment>
   )
 }
@@ -342,31 +381,32 @@ function MessageListComponent(props: MessageListProps) {
     messagePageSize = DEFAULT_MESSAGE_PAGE_SIZE,
     autoScrollTrigger,
     onLoadOlderMessages,
+    multiRunInitialLimit = DEFAULT_MULTI_RUN_INITIAL_LIMIT,
+    multiRunPageSize = DEFAULT_MULTI_RUN_PAGE_SIZE,
+    multiImageInitialLimit = DEFAULT_MULTI_IMAGE_INITIAL_LIMIT,
+    multiImagePageSize = DEFAULT_MULTI_IMAGE_PAGE_SIZE,
   } = props
 
   const viewportRef = useRef<HTMLDivElement | null>(null)
   const bottomRef = useRef<HTMLDivElement | null>(null)
   const scrollRafRef = useRef<number | null>(null)
   const nearBottomNotifiedRef = useRef(false)
-  const [scrollTop, setScrollTop] = useState(0)
+  const [firstVisibleIndex, setFirstVisibleIndex] = useState(0)
   const [viewportHeight, setViewportHeight] = useState(0)
   const [expandedPromptByRunId, setExpandedPromptByRunId] = useState<Record<string, boolean>>({})
-  const [truncatedPromptByRunId, setTruncatedPromptByRunId] = useState<Record<string, boolean>>({})
-  const [messageLimit, setMessageLimit] = useState(initialMessageLimit)
-  const promptNodeByRunIdRef = useRef<Record<string, HTMLElement>>({})
+  const [visibleRunLimitByMessageId, setVisibleRunLimitByMessageId] = useState<Record<string, number>>({})
+  const [visibleImageLimitByRunId, setVisibleImageLimitByRunId] = useState<Record<string, number>>({})
   const debouncedSetViewportHeight = useDebouncedCallback((nextHeight: number) => {
     setViewportHeight((prev) => (prev === nextHeight ? prev : nextHeight))
   }, 80)
 
-  const messages = activeConversation?.messages ?? []
-  const boundedLimit = Math.max(1, messageLimit)
+  const messages = useMemo(() => activeConversation?.messages ?? [], [activeConversation?.messages])
+  const boundedLimit = Math.max(1, initialMessageLimit)
   const historyStartIndex = Math.max(0, messages.length - boundedLimit)
-  const historyMessages = messages.slice(historyStartIndex)
+  const historyMessages = useMemo(() => messages.slice(historyStartIndex), [messages, historyStartIndex])
   const hasOlderMessages = historyStartIndex > 0
-
-  useEffect(() => {
-    setMessageLimit(initialMessageLimit)
-  }, [activeConversation?.id, initialMessageLimit])
+  const isWindowingActive = ENABLE_MESSAGE_WINDOWING && historyMessages.length > windowSize + overscan * 2
+  const isMultiSideView = sideView !== 'single'
 
   useLayoutEffect(() => {
     bottomRef.current?.scrollIntoView({ block: 'end' })
@@ -378,6 +418,28 @@ function MessageListComponent(props: MessageListProps) {
       return undefined
     }
 
+    setViewportHeight((prev) => (prev === node.clientHeight ? prev : node.clientHeight))
+    const resize = () => debouncedSetViewportHeight(node.clientHeight)
+    window.addEventListener('resize', resize)
+
+    return () => {
+      window.removeEventListener('resize', resize)
+      debouncedSetViewportHeight.cancel()
+    }
+  }, [debouncedSetViewportHeight])
+
+  useEffect(() => {
+    const node = viewportRef.current
+    const shouldObserveScroll = isWindowingActive || Boolean(onReachBottom)
+    if (!node || !shouldObserveScroll) {
+      return undefined
+    }
+
+    if (isWindowingActive) {
+      const nextIndex = Math.max(0, Math.floor(node.scrollTop / DEFAULT_ESTIMATED_MESSAGE_HEIGHT))
+      setFirstVisibleIndex((prev) => (prev === nextIndex ? prev : nextIndex))
+    }
+
     const onScroll = () => {
       if (scrollRafRef.current !== null) {
         return
@@ -386,36 +448,36 @@ function MessageListComponent(props: MessageListProps) {
       scrollRafRef.current = window.requestAnimationFrame(() => {
         scrollRafRef.current = null
         const measureStart = startMetric()
-        setScrollTop(node.scrollTop)
-        const nearBottom = node.scrollHeight - node.scrollTop - node.clientHeight < 24
-        if (nearBottom && !nearBottomNotifiedRef.current) {
-          nearBottomNotifiedRef.current = true
-          onReachBottom?.()
-        } else if (!nearBottom) {
-          nearBottomNotifiedRef.current = false
+        if (isWindowingActive) {
+          const nextIndex = Math.max(0, Math.floor(node.scrollTop / DEFAULT_ESTIMATED_MESSAGE_HEIGHT))
+          setFirstVisibleIndex((prev) => (prev === nextIndex ? prev : nextIndex))
+        }
+        if (onReachBottom) {
+          const nearBottom = node.scrollHeight - node.scrollTop - node.clientHeight < 24
+          if (nearBottom && !nearBottomNotifiedRef.current) {
+            nearBottomNotifiedRef.current = true
+            onReachBottom()
+          } else if (!nearBottom) {
+            nearBottomNotifiedRef.current = false
+          }
         }
         trackDuration('messageList.scrollFrame', measureStart)
       })
     }
 
-    setViewportHeight((prev) => (prev === node.clientHeight ? prev : node.clientHeight))
     node.addEventListener('scroll', onScroll, { passive: true })
-    const resize = () => debouncedSetViewportHeight(node.clientHeight)
-    window.addEventListener('resize', resize)
-
     return () => {
       node.removeEventListener('scroll', onScroll)
-      window.removeEventListener('resize', resize)
-      debouncedSetViewportHeight.cancel()
+      nearBottomNotifiedRef.current = false
       if (scrollRafRef.current !== null) {
         window.cancelAnimationFrame(scrollRafRef.current)
         scrollRafRef.current = null
       }
     }
-  }, [debouncedSetViewportHeight, onReachBottom])
+  }, [activeConversation?.id, isWindowingActive, onReachBottom])
 
   const windowed = useMemo(() => {
-    if (!ENABLE_MESSAGE_WINDOWING || historyMessages.length <= windowSize + overscan * 2) {
+    if (!isWindowingActive) {
       return {
         start: 0,
         end: historyMessages.length,
@@ -426,53 +488,60 @@ function MessageListComponent(props: MessageListProps) {
 
     const estimatedHeight = DEFAULT_ESTIMATED_MESSAGE_HEIGHT
     const visibleCount = Math.max(windowSize, Math.ceil((viewportHeight || estimatedHeight * windowSize) / estimatedHeight))
-    const firstVisibleIndex = Math.max(0, Math.floor(scrollTop / estimatedHeight))
     const start = Math.max(0, firstVisibleIndex - overscan)
     const end = Math.min(historyMessages.length, firstVisibleIndex + visibleCount + overscan)
     const topSpacer = start * estimatedHeight
     const bottomSpacer = Math.max(0, (historyMessages.length - end) * estimatedHeight)
 
     return { start, end, topSpacer, bottomSpacer }
-  }, [historyMessages.length, overscan, scrollTop, viewportHeight, windowSize])
+  }, [firstVisibleIndex, historyMessages.length, isWindowingActive, overscan, viewportHeight, windowSize])
 
-  const visibleMessages = historyMessages.slice(windowed.start, windowed.end)
-  const setPromptNode = useCallback((runId: string, node: HTMLElement | null) => {
-    if (node) {
-      promptNodeByRunIdRef.current[runId] = node
-      return
-    }
-    delete promptNodeByRunIdRef.current[runId]
-  }, [])
+  const visibleMessages = useMemo(
+    () => historyMessages.slice(windowed.start, windowed.end),
+    [historyMessages, windowed.end, windowed.start],
+  )
 
-  const recalculatePromptTruncation = useCallback(() => {
-    const next: Record<string, boolean> = {}
-    for (const [runId, node] of Object.entries(promptNodeByRunIdRef.current)) {
-      next[runId] = isPromptTextTruncated(node)
-    }
-
-    setTruncatedPromptByRunId((prev) => {
-      const prevKeys = Object.keys(prev)
-      const nextKeys = Object.keys(next)
-      if (prevKeys.length === nextKeys.length && nextKeys.every((key) => prev[key] === next[key])) {
-        return prev
-      }
-      return next
-    })
-  }, [])
-
-  useLayoutEffect(() => {
-    recalculatePromptTruncation()
-  }, [recalculatePromptTruncation, visibleMessages, sideView, expandedPromptByRunId, viewportHeight])
-
-  const togglePromptExpanded = (runId: string) => {
+  const togglePromptExpanded = useCallback((runId: string) => {
     setExpandedPromptByRunId((prev) => ({
       ...prev,
       [runId]: !prev[runId],
     }))
-  }
+  }, [])
+
+  const normalizedMultiRunInitialLimit = Math.max(1, Math.floor(multiRunInitialLimit))
+  const normalizedMultiRunPageSize = Math.max(1, Math.floor(multiRunPageSize))
+  const normalizedMultiImageInitialLimit = Math.max(1, Math.floor(multiImageInitialLimit))
+  const normalizedMultiImagePageSize = Math.max(1, Math.floor(multiImagePageSize))
+
+  const handleLoadMoreRuns = useCallback((messageId: string) => {
+    setVisibleRunLimitByMessageId((prev) => {
+      const current = prev[messageId] ?? normalizedMultiRunInitialLimit
+      const next = current + normalizedMultiRunPageSize
+      if (next === current) {
+        return prev
+      }
+      return {
+        ...prev,
+        [messageId]: next,
+      }
+    })
+  }, [normalizedMultiRunInitialLimit, normalizedMultiRunPageSize])
+
+  const handleLoadMoreImages = useCallback((runId: string) => {
+    setVisibleImageLimitByRunId((prev) => {
+      const current = prev[runId] ?? normalizedMultiImageInitialLimit
+      const next = current + normalizedMultiImagePageSize
+      if (next === current) {
+        return prev
+      }
+      return {
+        ...prev,
+        [runId]: next,
+      }
+    })
+  }, [normalizedMultiImageInitialLimit, normalizedMultiImagePageSize])
 
   const handleLoadOlderMessages = () => {
-    setMessageLimit((prev) => prev + Math.max(1, messagePageSize))
     onLoadOlderMessages?.()
   }
 
@@ -502,124 +571,134 @@ function MessageListComponent(props: MessageListProps) {
 
         {visibleMessages
           .filter((message) => (message.role === 'assistant' ? shouldRenderAssistantMessage(message, sideView) : true))
-          .map((message) => (
-            <Card key={message.id} size="small" className={`message-card ${message.role}`}>
-              <Space direction="vertical" size={8} className="full-width">
-                <div className="message-head-row">
-                  <Space>
-                    <Tag color={message.role === 'user' ? 'blue' : 'green'}>{message.role === 'user' ? 'User' : 'Assistant'}</Tag>
-                    <Text type="secondary">{message.displayCreatedAt ?? new Date(message.createdAt).toLocaleString()}</Text>
-                  </Space>
-                  {message.role === 'assistant'
-                    ? (() => {
-                        const runs = sideView === 'single' ? getSingleRuns(message) : getSideRuns(message, sideView)
-                        const run = runs[0]
-                        if (!run) {
-                          return null
-                        }
+          .map((message) => {
+            const runsForMessage =
+              message.role === 'assistant'
+                ? (sideView === 'single' ? getSingleRuns(message) : getSideRuns(message, sideView))
+                : []
+            const totalRunCount = runsForMessage.length
+            const visibleRunLimit = isMultiSideView
+              ? (visibleRunLimitByMessageId[message.id] ?? normalizedMultiRunInitialLimit)
+              : totalRunCount
+            const visibleRuns = isMultiSideView ? runsForMessage.slice(0, visibleRunLimit) : runsForMessage
+            const hasMoreRuns = isMultiSideView && totalRunCount > visibleRuns.length
+            const primaryRun = runsForMessage[0]
+            const batchLoopCountByKey = new Map<string, number>()
+            runsForMessage.forEach((run) => {
+              const key = `${run.batchId}::${run.side}`
+              batchLoopCountByKey.set(key, (batchLoopCountByKey.get(key) ?? 0) + 1)
+            })
 
-                        const isReplaying = replayingRunIds.includes(run.id)
-                        const hasDownloadableImages = run.images.some(
-                          (item) => item.status === 'success' && Boolean(item.fullRef ?? item.fileRef ?? item.thumbRef),
-                        )
+            return (
+              <Card key={message.id} size="small" className={`message-card ${message.role}`}>
+                <Space direction="vertical" size={8} className="full-width">
+                  <div className="message-head-row">
+                    <Space>
+                      <Tag color={message.role === 'user' ? 'blue' : 'green'}>{message.role === 'user' ? 'User' : 'Assistant'}</Tag>
+                      <Text type="secondary">{message.displayCreatedAt ?? new Date(message.createdAt).toLocaleString()}</Text>
+                    </Space>
+                    {message.role === 'assistant' && primaryRun
+                      ? (() => {
+                          const isReplaying = replayingRunIds.includes(primaryRun.id)
+                          const hasDownloadableImages = primaryRun.images.some(
+                            (item) => item.status === 'success' && Boolean(item.fullRef ?? item.fileRef ?? item.thumbRef),
+                          )
 
-                        return (
-                          <Space size={4} className="run-head-actions">
+                          return (
+                            <Space size={4} className="run-head-actions">
+                              <Button
+                                size="small"
+                                type="default"
+                                icon={<DownloadOutlined />}
+                                disabled={!hasDownloadableImages}
+                                onClick={() => onDownloadAllRun?.(primaryRun.id)}
+                              >
+                                下载全部
+                              </Button>
+                              <Button
+                                size="small"
+                                type="primary"
+                                icon={<ReloadOutlined />}
+                                onClick={() => onReplayRun(primaryRun.id)}
+                                loading={isReplaying}
+                                disabled={isReplaying}
+                              >
+                                再来一次
+                              </Button>
+                            </Space>
+                          )
+                        })()
+                      : message.role === 'user'
+                        ? (
+                          <Space size={4} className="message-head-actions">
                             <Button
                               size="small"
                               type="default"
-                              icon={<DownloadOutlined />}
-                              disabled={!hasDownloadableImages}
-                              onClick={() => onDownloadAllRun?.(run.id)}
+                              className="message-use-prompt-btn"
+                              onClick={() => onUseUserPrompt?.(message.content)}
+                              disabled={!message.content.trim()}
                             >
-                              下载全部
-                            </Button>
-                            <Button
-                              size="small"
-                              type="primary"
-                              icon={<ReloadOutlined />}
-                              onClick={() => onReplayRun(run.id)}
-                              loading={isReplaying}
-                              disabled={isReplaying}
-                            >
-                              再来一次
+                              发送到输入框
                             </Button>
                           </Space>
                         )
-                      })()
-                    : message.role === 'user'
-                      ? (
-                        <Space size={4} className="message-head-actions">
-                          <Button
-                            size="small"
-                            type="default"
-                            className="message-use-prompt-btn"
-                            onClick={() => onUseUserPrompt?.(message.content)}
-                            disabled={!message.content.trim()}
-                          >
-                            发送到输入框
-                          </Button>
-                        </Space>
-                      )
-                      : null}
-                </div>
+                        : null}
+                  </div>
 
-                <Paragraph style={{ marginBottom: 0 }}>{message.content}</Paragraph>
+                  <Paragraph style={{ marginBottom: 0 }}>{message.content}</Paragraph>
 
-                {message.role === 'assistant' && sideView === 'single'
-                  ? getSingleRuns(message).map((run, index) => {
-                      const runs = getSingleRuns(message)
-                      const batchLoopCount = runs.filter((item) => item.batchId === run.batchId && item.side === run.side).length
-                      const isDynamicBatch = Object.keys(run.variablesSnapshot ?? {}).length > 0 && batchLoopCount > 1
-                      const rows = sortImagesBySeq(run.images).map((item) => ({ seq: item.seq, item }))
-                      const isPromptExpanded = Boolean(expandedPromptByRunId[run.id])
-                      const showPromptToggle = isPromptExpanded || Boolean(truncatedPromptByRunId[run.id])
-                      return renderRunCard(
-                        run,
-                        index + 1,
-                        rows,
-                        undefined,
-                        onOpenPreview,
-                        onRetryRun,
-                        onDownloadSingleImage,
-                        isPromptExpanded,
-                        showPromptToggle,
-                        togglePromptExpanded,
-                        setPromptNode,
-                        isDynamicBatch,
-                        onDownloadBatchRun,
-                      )
-                    })
-                  : null}
+                  {message.role === 'assistant'
+                    ? visibleRuns.map((run, index) => {
+                        const batchKey = `${run.batchId}::${run.side}`
+                        const batchLoopCount = batchLoopCountByKey.get(batchKey) ?? 0
+                        const isDynamicBatch = Object.keys(run.variablesSnapshot ?? {}).length > 0 && batchLoopCount > 1
+                        const orderedImages = run.images.length > 1 ? sortImagesBySeq(run.images) : run.images
+                        const allRows = orderedImages.map((item) => ({ seq: item.seq, item }))
+                        const visibleImageLimit = isMultiSideView
+                          ? (visibleImageLimitByRunId[run.id] ?? normalizedMultiImageInitialLimit)
+                          : allRows.length
+                        const visibleRows = isMultiSideView ? allRows.slice(0, visibleImageLimit) : allRows
+                        const hasMoreImages = isMultiSideView && allRows.length > visibleRows.length
+                        const isPromptExpanded = Boolean(expandedPromptByRunId[run.id])
+                        const showPromptToggle = isPromptExpanded || run.finalPrompt.trim().length > PROMPT_SUMMARY_MAX_CHARS
+                        const imagePagination = hasMoreImages
+                          ? {
+                              label: '加载更多图片',
+                              current: visibleRows.length,
+                              total: allRows.length,
+                              onLoadMore: () => handleLoadMoreImages(run.id),
+                            }
+                          : undefined
+                        return renderRunCard(
+                          run,
+                          index + 1,
+                          visibleRows,
+                          undefined,
+                          onOpenPreview,
+                          onRetryRun,
+                          onDownloadSingleImage,
+                          isPromptExpanded,
+                          showPromptToggle,
+                          togglePromptExpanded,
+                          isDynamicBatch,
+                          onDownloadBatchRun,
+                          imagePagination,
+                          isMultiSideView,
+                        )
+                      })
+                    : null}
 
-                {message.role === 'assistant' && sideView !== 'single'
-                  ? getSideRuns(message, sideView).map((run, index) => {
-                      const runs = getSideRuns(message, sideView)
-                      const batchLoopCount = runs.filter((item) => item.batchId === run.batchId && item.side === run.side).length
-                      const isDynamicBatch = Object.keys(run.variablesSnapshot ?? {}).length > 0 && batchLoopCount > 1
-                      const rows = sortImagesBySeq(run.images).map((item) => ({ seq: item.seq, item }))
-                      const isPromptExpanded = Boolean(expandedPromptByRunId[run.id])
-                      const showPromptToggle = isPromptExpanded || Boolean(truncatedPromptByRunId[run.id])
-                      return renderRunCard(
-                        run,
-                        index + 1,
-                        rows,
-                        undefined,
-                        onOpenPreview,
-                        onRetryRun,
-                        onDownloadSingleImage,
-                        isPromptExpanded,
-                        showPromptToggle,
-                        togglePromptExpanded,
-                        setPromptNode,
-                        isDynamicBatch,
-                        onDownloadBatchRun,
-                      )
-                    })
-                  : null}
-              </Space>
-            </Card>
-          ))}
+                  {message.role === 'assistant' && hasMoreRuns ? (
+                    <div className="message-history-more">
+                      <Button size="small" onClick={() => handleLoadMoreRuns(message.id)}>
+                        {`加载更多 Run (${visibleRuns.length}/${totalRunCount})`}
+                      </Button>
+                    </div>
+                  ) : null}
+                </Space>
+              </Card>
+            )
+          })}
 
         {windowed.bottomSpacer > 0 ? <div style={{ height: `${windowed.bottomSpacer}px` }} /> : null}
         <div ref={bottomRef} />
