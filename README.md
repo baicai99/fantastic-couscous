@@ -83,6 +83,7 @@ npm run test:watch  # 监听模式测试
 - 图像生成回退：`/v1/images/generations` 与 `/v1/image/generations` 互相回退
 - 鉴权：`Authorization: Bearer <API_KEY>`
 - 尺寸参数：统一发送 `size: "宽x高"`（如 `1024x1024`）
+- 渠道提供商：支持 `providerId`（默认 `openai-compatible`，可扩展为 `midjourney-proxy`）
 
 `baseUrl` 支持以下输入形式并会自动归一化：
 

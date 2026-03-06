@@ -1,50 +1,8 @@
 import type { ApiChannel, ModelCatalog, ModelSpec, SettingPrimitive } from '../types/chat'
+import { getProviderAdapterForChannel } from './providers/providerRegistry'
+import { resolveProviderId } from './providers/providerId'
 
 const EMPTY_CATALOG: ModelCatalog = { models: [] }
-const OPENAI_IMAGE_ALLOWLIST = new Set([
-  'gpt-image-1.5',
-  'gpt-image-1',
-  'dall-e-3',
-  'kolors',
-  'sora_image',
-  'sora_image-vip',
-  'gpt-4o-image',
-  'gpt-4o-all',
-  'gpt-4-all',
-])
-
-function shouldDisplayModel(modelId: string): boolean {
-  const value = modelId.toLowerCase()
-
-  if (value.includes('kling')) {
-    return true
-  }
-
-  if (value.includes('mj')) {
-    return true
-  }
-
-  const isOpenAIImageFamily =
-    value.includes('gpt-image') ||
-    value.includes('gpt-4o') ||
-    value.includes('gpt-4-all') ||
-    value.includes('sora_image') ||
-    value.includes('dall-e') ||
-    value.includes('dalle') ||
-    value.includes('openai') ||
-    value.includes('kolors')
-  if (isOpenAIImageFamily) {
-    return OPENAI_IMAGE_ALLOWLIST.has(value)
-  }
-
-  return (
-    value.includes('seeddance') ||
-    value.includes('seedream') ||
-    value.includes('seeddream') ||
-    value.includes('image') ||
-    OPENAI_IMAGE_ALLOWLIST.has(value)
-  )
-}
 
 export function getModelById(catalog: ModelCatalog, modelId: string): ModelSpec | undefined {
   return catalog.models.find((item) => item.id === modelId)
@@ -108,16 +66,39 @@ export function getModelCatalogFromChannels(channels: ApiChannel[]): ModelCatalo
   const merged = new Map<string, ModelSpec>()
 
   for (const channel of channels) {
+    const adapter = getProviderAdapterForChannel(channel)
     const modelIds = Array.isArray(channel.models) ? channel.models : []
+    const providerId = resolveProviderId({
+      providerId: channel.providerId,
+      baseUrl: channel.baseUrl,
+    })
     for (const modelId of modelIds) {
-      if (!modelId || merged.has(modelId) || !shouldDisplayModel(modelId)) {
+      if (!modelId) {
+        continue
+      }
+
+      const existing = merged.get(modelId)
+      if (existing) {
+        const existingTags = new Set(existing.tags ?? [])
+        existingTags.add(providerId)
+        existingTags.add(adapter.capabilities.modelTag)
+        merged.set(modelId, { ...existing, tags: Array.from(existingTags) })
         continue
       }
 
       merged.set(modelId, {
         id: modelId,
         name: modelId,
-        params: [],
+        tags: Array.from(new Set([providerId, adapter.capabilities.modelTag])),
+        params: adapter.capabilities.defaultImageParamSchema.map((param) => ({
+          key: param.key,
+          label: param.label,
+          type: param.type,
+          default: param.default,
+          min: param.min,
+          max: param.max,
+          options: param.options,
+        })),
       })
     }
   }

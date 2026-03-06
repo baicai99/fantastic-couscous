@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
-import { ReloadOutlined, SettingOutlined } from '@ant-design/icons'
+import { GithubOutlined, ReloadOutlined, SettingOutlined } from '@ant-design/icons'
 import {
   Alert,
   Button,
@@ -32,6 +32,7 @@ import type {
   SingleSideSettings,
 } from '../../types/chat'
 import { fetchChannelModels } from '../../services/channelModels'
+import { resolveProviderId } from '../../services/providers/providerId'
 import {
   applyChannelImport,
   buildChannelImportPreview,
@@ -56,6 +57,7 @@ type ChannelFormValues = {
 }
 
 const CHANNEL_IMPORT_DEBOUNCE_MS = 500
+const GITHUB_REPO_URL = 'https://github.com/baicai99/fantastic-couscous'
 
 interface SettingsPanelProps {
   sideMode: SideMode
@@ -384,7 +386,11 @@ export function SettingsPanel(props: SettingsPanelProps) {
       const settled = await Promise.all(
         channels.map(async (channel) => {
           try {
-            const modelIds = await fetchChannelModels({ baseUrl: channel.baseUrl, apiKey: channel.apiKey })
+            const modelIds = await fetchChannelModels({
+              baseUrl: channel.baseUrl,
+              apiKey: channel.apiKey,
+              providerId: channel.providerId,
+            })
             if (modelIds.length === 0) {
               throw new Error('Empty model list returned')
             }
@@ -485,7 +491,11 @@ export function SettingsPanel(props: SettingsPanelProps) {
       const modelFetchResult = await Promise.all(
         selectedItems.map(async (item) => {
           try {
-            const modelIds = await fetchChannelModels({ baseUrl: item.baseUrl, apiKey: item.apiKey })
+            const modelIds = await fetchChannelModels({
+              baseUrl: item.baseUrl,
+              apiKey: item.apiKey,
+              providerId: resolveProviderId({ baseUrl: item.baseUrl }),
+            })
             if (modelIds.length === 0) {
               throw new Error('上游返回空模型列表')
             }
@@ -1034,6 +1044,22 @@ export function SettingsPanel(props: SettingsPanelProps) {
       ) : (
         renderSettingForm('single')
       )}
+
+      <div className="settings-panel-footer">
+        <Text type="secondary" className="settings-panel-version">
+          v{__APP_VERSION__}
+        </Text>
+        <Button
+          type="text"
+          className="settings-panel-github-btn"
+          icon={<GithubOutlined />}
+          href={GITHUB_REPO_URL}
+          target="_blank"
+          rel="noreferrer"
+          title="GitHub"
+          aria-label="GitHub"
+        />
+      </div>
       </div>
 
       <Drawer
@@ -1094,7 +1120,17 @@ export function SettingsPanel(props: SettingsPanelProps) {
             const values = await channelForm.validateFields()
             const nextBaseUrl = values.baseUrl.trim()
             const nextApiKey = values.apiKey.trim()
-            const modelIds = await fetchChannelModels({ baseUrl: nextBaseUrl, apiKey: nextApiKey })
+            const nextProviderId = resolveProviderId({
+              providerId: editingChannelId
+                ? channels.find((item) => item.id === editingChannelId)?.providerId
+                : undefined,
+              baseUrl: nextBaseUrl,
+            })
+            const modelIds = await fetchChannelModels({
+              baseUrl: nextBaseUrl,
+              apiKey: nextApiKey,
+              providerId: nextProviderId,
+            })
 
             if (modelIds.length === 0) {
               throw new Error('上游返回了空模型列表，请检查渠道权限。')
@@ -1105,6 +1141,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
               name: values.name.trim(),
               baseUrl: nextBaseUrl,
               apiKey: nextApiKey,
+              providerId: nextProviderId,
               models: modelIds,
             }
 

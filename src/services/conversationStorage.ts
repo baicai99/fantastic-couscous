@@ -1,6 +1,7 @@
 import type { ApiChannel, Conversation, ConversationSummary, Side, SideMode, SingleSideSettings } from '../types/chat'
 import type { PanelValueFormat, PanelVariableRow } from '../features/conversation/domain/types'
 import { getFirstUserPrompt, summarizePromptAsTitle } from '../utils/chat'
+import { resolveProviderId } from './providers/providerId'
 
 const STORAGE_INDEX_KEY = 'm1:conversation-index'
 const STORAGE_ACTIVE_KEY = 'm1:active-conversation-id'
@@ -349,6 +350,7 @@ export function loadChannelsFromStorage(): ApiChannel[] {
       )
       .map((item) => ({
         ...item,
+        providerId: resolveProviderId({ providerId: item.providerId, baseUrl: item.baseUrl }),
         models: Array.isArray(item.models)
           ? item.models.filter((model): model is string => typeof model === 'string' && Boolean(model.trim()))
           : undefined,
@@ -359,7 +361,15 @@ export function loadChannelsFromStorage(): ApiChannel[] {
 }
 
 export function saveChannelsToStorage(channels: ApiChannel[]): void {
-  localStorage.setItem(STORAGE_CHANNELS_KEY, JSON.stringify(channels))
+  localStorage.setItem(
+    STORAGE_CHANNELS_KEY,
+    JSON.stringify(
+      channels.map((item) => ({
+        ...item,
+        providerId: resolveProviderId({ providerId: item.providerId, baseUrl: item.baseUrl }),
+      })),
+    ),
+  )
 }
 
 export function loadStagedSettingsFromStorage(): StagedSettingsState | null {

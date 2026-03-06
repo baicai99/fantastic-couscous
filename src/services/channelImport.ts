@@ -5,6 +5,7 @@ import type {
   ParsedApiChannelCandidate,
 } from '../types/chat'
 import { makeId } from '../utils/chat'
+import { resolveProviderId } from './providers/providerId'
 
 type ExtractedEvent = {
   type: 'baseUrl' | 'apiKey'
@@ -292,6 +293,10 @@ export function applyChannelImport(
           name: item.name.trim(),
           baseUrl: item.baseUrl.trim(),
           apiKey: item.apiKey.trim(),
+          providerId: resolveProviderId({
+            providerId: next[channelIndex].providerId,
+            baseUrl: item.baseUrl.trim(),
+          }),
           models: modelIds,
         }
         overwritten += 1
@@ -301,6 +306,7 @@ export function applyChannelImport(
           name: item.name.trim(),
           baseUrl: item.baseUrl.trim(),
           apiKey: item.apiKey.trim(),
+          providerId: resolveProviderId({ baseUrl: item.baseUrl.trim() }),
           models: modelIds,
         })
         created += 1
@@ -313,6 +319,7 @@ export function applyChannelImport(
       name: item.name.trim(),
       baseUrl: item.baseUrl.trim(),
       apiKey: item.apiKey.trim(),
+      providerId: resolveProviderId({ baseUrl: item.baseUrl.trim() }),
       models: modelIds,
     })
     created += 1

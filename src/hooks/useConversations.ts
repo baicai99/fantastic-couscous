@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { message, notification } from 'antd'
-import { resumeImageTaskOnce } from '../services/imageGeneration'
+import { resumeImageTaskByProvider } from '../services/providerGateway'
 import { getModelCatalogFromChannels } from '../services/modelCatalog'
 import { getAspectRatioOptions } from '../services/imageSizing'
 import type {
@@ -323,7 +323,7 @@ function parseOneShotSizeCommands(draft: string): OneShotSizeCommandParseResult 
   let hasSize = false
   let parseError = ''
 
-  const stripped = draft.replace(ONE_SHOT_COMMAND_PATTERN, (full, prefix, command, rawValue: string) => {
+  const stripped = draft.replace(ONE_SHOT_COMMAND_PATTERN, (_full, prefix, command, rawValue: string) => {
     const nextPrefix = typeof prefix === 'string' ? prefix : ''
     if (parseError) {
       return nextPrefix
@@ -964,7 +964,6 @@ export function useConversations() {
     )
 
     setActiveConversation(null)
-    actions.setDraft('')
     dispatch({ type: 'send/clearError' })
     dispatch({ type: 'send/succeed' })
   }
@@ -1139,7 +1138,7 @@ export function useConversations() {
     updateConversationState(activeSideMode, activeSideCount, merged)
   }
 
-  const applyModelShortcut = (modelId: string) => {
+  const applyModelShortcut = (modelId: string): Record<Side, SingleSideSettings> => {
     const targetSides = activeSideMode === 'single' ? (['single'] as Side[]) : activeSides
     const nextSettings = { ...activeSettingsBySide }
 
@@ -1157,6 +1156,7 @@ export function useConversations() {
 
     const merged = normalizeSettingsBySide(nextSettings, state.channels, modelCatalog, activeSideCount)
     updateConversationState(activeSideMode, activeSideCount, merged)
+    return merged
   }
 
   const setSideModelParam = (side: Side, paramKey: string, value: string | number | boolean) => {
@@ -1679,7 +1679,7 @@ export function useConversations() {
       })
 
       try {
-        const resumed = await resumeImageTaskOnce({
+        const resumed = await resumeImageTaskByProvider({
           channel,
           taskId: entry.image.serverTaskId,
           taskMeta: entry.image.serverTaskMeta,
@@ -2013,12 +2013,18 @@ export function useConversations() {
     const modelCommand = parseModelCommandDraft(snapshot.draft, modelCatalog.models)
 
     if (modelCommand?.scope === 'permanent') {
-      applyModelShortcut(modelCommand.model.id)
+      const mergedSettingsBySide = applyModelShortcut(modelCommand.model.id)
       const baseConversation =
         currentActive ??
-        createConversation(activeState.activeSettingsBySide, activeState.activeSideMode, activeState.activeSideCount)
+        createConversation(mergedSettingsBySide, activeState.activeSideMode, activeState.activeSideCount)
+      const conversationWithLatestSettings = {
+        ...baseConversation,
+        sideMode: activeState.activeSideMode,
+        sideCount: activeState.activeSideCount,
+        settingsBySide: mergedSettingsBySide,
+      }
       const updatedConversation = appendConversationEntry(
-        baseConversation,
+        conversationWithLatestSettings,
         snapshot.draft,
         `模型已切换为 ${modelCommand.model.name}，后续请求将默认使用该模型。`,
         [],

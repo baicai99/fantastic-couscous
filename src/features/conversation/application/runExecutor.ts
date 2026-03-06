@@ -1,4 +1,4 @@
-﻿import { generateImages } from '../../../services/imageGeneration'
+﻿import { generateImagesByProvider } from '../../../services/providerGateway'
 import { putImageBlob } from '../../../services/imageAssetStore'
 import { autoSaveImage, isSaveDirectoryReady } from '../../../services/imageSave'
 import type { ApiChannel, ImageRefKind, ImageThreadState, Run, SettingPrimitive, Side, SideMode, SingleSideSettings } from '../../../types/chat'
@@ -41,7 +41,7 @@ export interface CreateRunInput {
 }
 
 export interface RunExecutorDeps {
-  generateImagesFn?: typeof generateImages
+  generateImagesFn?: typeof generateImagesByProvider
   autoSaveImageFn?: typeof autoSaveImage
 }
 
@@ -77,7 +77,7 @@ interface ProcessedPendingImage {
 type ProcessedImage = ProcessedSuccessImage | ProcessedFailedImage | ProcessedPendingImage
 
 export function createRunExecutor(deps: RunExecutorDeps = {}) {
-  const generateImagesFn = deps.generateImagesFn ?? generateImages
+  const generateImagesFn = deps.generateImagesFn ?? generateImagesByProvider
   const autoSaveImageFn = deps.autoSaveImageFn ?? autoSaveImage
   const objectUrls = new Set<string>()
 
@@ -302,11 +302,13 @@ export function createRunExecutor(deps: RunExecutorDeps = {}) {
 
         const generated = await generateImagesFn({
           channel,
-          modelId,
-          prompt: finalPrompt,
-          imageCount,
-          paramValues: effectiveParamValues,
-          signal: options.signal,
+          request: {
+            modelId,
+            prompt: finalPrompt,
+            imageCount,
+            paramValues: effectiveParamValues,
+            signal: options.signal,
+          },
           onTaskRegistered: (item) => {
             const pending: ProcessedPendingImage = {
               status: 'pending',

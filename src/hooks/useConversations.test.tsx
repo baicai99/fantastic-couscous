@@ -5,7 +5,7 @@ import { createConversationRepository } from '../features/conversation/infra/con
 import type { Conversation, Run } from '../types/chat'
 
 const mockCreateRun = vi.hoisted(() => vi.fn())
-const mockResumeImageTaskOnce = vi.hoisted(() => vi.fn())
+const mockResumeImageTaskByProvider = vi.hoisted(() => vi.fn())
 
 vi.mock('../features/conversation/application/runExecutor', () => ({
   createRunExecutor: () => ({
@@ -14,11 +14,11 @@ vi.mock('../features/conversation/application/runExecutor', () => ({
   }),
 }))
 
-vi.mock('../services/imageGeneration', async () => {
-  const actual = await vi.importActual<typeof import('../services/imageGeneration')>('../services/imageGeneration')
+vi.mock('../services/providerGateway', async () => {
+  const actual = await vi.importActual<typeof import('../services/providerGateway')>('../services/providerGateway')
   return {
     ...actual,
-    resumeImageTaskOnce: mockResumeImageTaskOnce,
+    resumeImageTaskByProvider: mockResumeImageTaskByProvider,
   }
 })
 
@@ -94,6 +94,42 @@ function seedChannels(input?: {
   })
 }
 
+function createSeedConversation(input: { id: string; title: string; prompt?: string }): Conversation {
+  const now = '2026-03-06T00:00:00.000Z'
+  const prompt = input.prompt ?? `${input.title} prompt`
+  return {
+    id: input.id,
+    title: input.title,
+    createdAt: now,
+    updatedAt: now,
+    sideMode: 'single',
+    sideCount: 2,
+    settingsBySide: {
+      single: {
+        resolution: '1K',
+        aspectRatio: '1:1',
+        imageCount: 1,
+        gridColumns: 1,
+        sizeMode: 'preset',
+        customWidth: 1024,
+        customHeight: 1024,
+        autoSave: false,
+        channelId: 'ch',
+        modelId: 'model-a',
+        paramValues: {},
+      },
+    },
+    messages: [
+      {
+        id: `${input.id}-m1`,
+        createdAt: now,
+        role: 'user',
+        content: prompt,
+      },
+    ],
+  }
+}
+
 function buildSuccessfulRunFromInput(input: {
   runId: string
   batchId?: string
@@ -155,7 +191,7 @@ describe('useConversations', () => {
   beforeEach(async () => {
     await resetStorage()
     mockCreateRun.mockReset()
-    mockResumeImageTaskOnce.mockReset()
+    mockResumeImageTaskByProvider.mockReset()
     vi.restoreAllMocks()
     vi.useRealTimers()
     seedChannels()
@@ -256,6 +292,61 @@ describe('useConversations', () => {
     expect(activeHook.result.current.shouldConfirmCreateConversation).toBe(true)
   })
 
+  it('keeps draft when creating a new conversation', async () => {
+    const { useConversations } = await import('./useConversations')
+    const { result } = renderHook(() => useConversations())
+
+    act(() => {
+      result.current.setDraft('do not clear me')
+    })
+    act(() => {
+      result.current.createNewConversation()
+    })
+
+    expect(result.current.activeId).toBeNull()
+    expect(result.current.draft).toBe('do not clear me')
+  })
+
+  it('keeps draft when switching conversations', async () => {
+    const repo = createConversationRepository()
+    const conversationA = createSeedConversation({ id: 'conv-a', title: 'A' })
+    const conversationB = createSeedConversation({ id: 'conv-b', title: 'B' })
+    await repo.saveConversation(conversationA)
+    await repo.saveConversation(conversationB)
+    repo.saveIndex([
+      {
+        id: conversationA.id,
+        title: conversationA.title,
+        createdAt: conversationA.createdAt,
+        updatedAt: conversationA.updatedAt,
+        lastMessagePreview: conversationA.messages[0]?.content ?? '',
+      },
+      {
+        id: conversationB.id,
+        title: conversationB.title,
+        createdAt: conversationB.createdAt,
+        updatedAt: conversationB.updatedAt,
+        lastMessagePreview: conversationB.messages[0]?.content ?? '',
+      },
+    ])
+    repo.saveActiveId(conversationA.id)
+
+    const { useConversations } = await import('./useConversations')
+    const { result } = renderHook(() => useConversations())
+
+    await waitFor(() => expect(result.current.activeId).toBe(conversationA.id))
+
+    act(() => {
+      result.current.setDraft('persist when switch')
+    })
+    act(() => {
+      result.current.switchConversation(conversationB.id)
+    })
+
+    await waitFor(() => expect(result.current.activeId).toBe(conversationB.id))
+    expect(result.current.draft).toBe('persist when switch')
+  })
+
   it('keeps background generation running after close-and-new and applies late completion to the old conversation', async () => {
     const notificationSuccessSpy = vi.spyOn(notification, 'success').mockImplementation(() => undefined)
     let resolveRun!: (value: Run) => void
@@ -349,7 +440,7 @@ describe('useConversations', () => {
   })
 
   it('keeps detached pending images pending while the remote task is still running', async () => {
-    mockResumeImageTaskOnce.mockResolvedValue({ state: 'pending' })
+    mockResumeImageTaskByProvider.mockResolvedValue({ state: 'pending' })
     const { useConversations } = await import('./useConversations')
     const now = new Date().toISOString()
 
@@ -428,7 +519,7 @@ describe('useConversations', () => {
         threadState: 'active',
       }),
     )
-    expect(mockResumeImageTaskOnce).toHaveBeenCalledTimes(1)
+    expect(mockResumeImageTaskByProvider).toHaveBeenCalledTimes(1)
 
     await act(async () => {
       window.dispatchEvent(new Event('pageshow'))
@@ -523,7 +614,7 @@ describe('useConversations', () => {
         errorCode: 'timeout',
       }),
     )
-    expect(mockResumeImageTaskOnce).not.toHaveBeenCalled()
+    expect(mockResumeImageTaskByProvider).not.toHaveBeenCalled()
   })
 
   it('permanently switches model when sending only @model command and appends assistant confirmation', async () => {

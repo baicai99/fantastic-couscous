@@ -234,6 +234,19 @@ describe('Composer panel value format', () => {
     expect(screen.getByRole('button', { name: '--wh' })).toBeInTheDocument()
   })
 
+  it('opens command picker when typing "--" in the middle of text', () => {
+    const { onSend } = renderControlledComposer()
+    const textarea = screen.getByPlaceholderText('输入模板 prompt，例如：a {{style}} portrait of {{subject}}') as HTMLTextAreaElement
+
+    fireEvent.change(textarea, { target: { value: 'draw a cat --', selectionStart: 13, selectionEnd: 13 } })
+
+    expect(screen.getByRole('listbox', { name: '快捷功能选择' })).toBeInTheDocument()
+    fireEvent.keyDown(textarea, { key: 'Enter', code: 'Enter' })
+
+    expect(onSend).not.toHaveBeenCalled()
+    expect(textarea.value).toBe('draw a cat --ar ')
+  })
+
   it('filters command picker options for "--s"', () => {
     renderComposer('json')
 

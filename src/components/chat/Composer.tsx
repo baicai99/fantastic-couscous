@@ -164,23 +164,31 @@ function normalizeDashCommandQuery(value: string): string {
   return value.trim().toLowerCase()
 }
 
-function findDashCommandAtLineStart(value: string, cursor: number): (QuickPickerRange & { query: string }) | null {
+function findDashCommandNearCursor(value: string, cursor: number): (QuickPickerRange & { query: string }) | null {
   if (cursor <= 0) {
     return null
   }
 
-  const lineStart = value.lastIndexOf('\n', cursor - 1) + 1
-  const lineSlice = value.slice(lineStart, cursor)
-  const match = lineSlice.match(/^(\s*)--([^\s]*)$/)
-  if (!match) {
+  const beforeCursor = value.slice(0, cursor)
+  const commandStart = beforeCursor.lastIndexOf('--')
+  if (commandStart < 0) {
     return null
   }
 
-  const start = lineStart + (match[1]?.length ?? 0)
+  const prevChar = commandStart > 0 ? beforeCursor[commandStart - 1] : ''
+  if (prevChar && !/\s/.test(prevChar)) {
+    return null
+  }
+
+  const token = beforeCursor.slice(commandStart, cursor)
+  if (!/^--[^\s]*$/.test(token)) {
+    return null
+  }
+
   return {
-    start,
+    start: commandStart,
     end: cursor,
-    query: match[2] ?? '',
+    query: token.slice(2),
   }
 }
 
@@ -792,7 +800,7 @@ export function Composer(props: ComposerProps) {
                     return
                   }
 
-                  const dashCommand = findDashCommandAtLineStart(nextText, cursor)
+                  const dashCommand = findDashCommandNearCursor(nextText, cursor)
                   if (dashCommand) {
                     setQuickPickerRange({ start: dashCommand.start, end: dashCommand.end })
                     setQuickPickerActiveIndex(0)

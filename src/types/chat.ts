@@ -1,3 +1,5 @@
+import type { ProviderId } from './provider'
+
 export type SideMode = 'single' | 'multi'
 export type Side = string
 export type ImageStatus = 'pending' | 'success' | 'failed'
@@ -47,6 +49,7 @@ export interface ApiChannel {
   name: string
   baseUrl: string
   apiKey: string
+  providerId?: ProviderId
   models?: string[]
 }
 
