@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
-import { GithubOutlined, ReloadOutlined } from '@ant-design/icons'
+import { ReloadOutlined, SettingOutlined } from '@ant-design/icons'
 import {
   Alert,
   Button,
@@ -67,6 +67,7 @@ interface SettingsPanelProps {
   onShowAdvancedVariablesChange: (enabled: boolean) => void
   onDynamicPromptEnabledChange: (enabled: boolean) => void
   onRunConcurrencyChange: (value: number) => void
+  onTogglePanelMode: () => void
 }
 
 type SettingsPanelCollapseState = {
@@ -248,6 +249,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
     onShowAdvancedVariablesChange,
     onDynamicPromptEnabledChange,
     onRunConcurrencyChange,
+    onTogglePanelMode,
   } = props
 
   const [activeSideTab, setActiveSideTab] = useState<Side>(sideIds[0] ?? 'single')
@@ -739,14 +741,12 @@ export function SettingsPanel(props: SettingsPanelProps) {
       {messageContextHolder}
       <div className="settings-panel-header">
         <Button
-          className="settings-github-btn"
+          className="settings-header-btn"
           type="text"
-          icon={<GithubOutlined />}
-          href="https://github.com/baicai99"
-          target="_blank"
-          rel="noopener noreferrer"
-          title="Open GitHub"
-          aria-label="Open GitHub"
+          icon={<SettingOutlined />}
+          onClick={onTogglePanelMode}
+          title="Settings"
+          aria-label="Settings"
         />
       </div>
       <Collapse

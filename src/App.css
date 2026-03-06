@@ -23,6 +23,54 @@
   border-left: 1px solid #f0f0f0;
 }
 
+.settings-sider.ant-layout-sider {
+  position: relative;
+  overflow: hidden;
+  transition: width 0.18s ease, min-width 0.18s ease, max-width 0.18s ease !important;
+}
+
+.settings-sider.ant-layout-sider .ant-layout-sider-children {
+  overflow: hidden;
+}
+
+.settings-sider-inner {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.settings-expanded-layer,
+.settings-mini-layer {
+  position: absolute;
+  inset: 0;
+  transition: opacity 0.18s ease;
+}
+
+.settings-expanded-layer {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.settings-mini-layer {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  padding-top: 16px;
+  padding-right: 8px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.settings-sider.is-mini .settings-expanded-layer {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.settings-sider.is-mini .settings-mini-layer {
+  opacity: 1;
+  pointer-events: auto;
+}
+
 .panel-scroll {
   height: 100%;
   overflow-y: auto;
@@ -33,13 +81,16 @@
 .settings-panel-header {
   display: flex;
   justify-content: flex-end;
+  align-items: center;
+  margin-right: -8px;
   margin-bottom: 8px;
 }
 
-.settings-github-btn {
+.settings-header-btn {
   font-size: 24px;
   width: 40px;
   height: 40px;
+  border-radius: 10px;
 }
 
 .panel-title {
@@ -93,6 +144,15 @@
   justify-content: space-between;
   gap: 12px;
   flex-wrap: wrap;
+}
+
+.chat-header-settings-btn.ant-btn {
+  font-size: 24px;
+  width: 40px;
+  min-width: 40px;
+  height: 40px;
+  padding: 0;
+  border-radius: 10px;
 }
 
 .chat-body {

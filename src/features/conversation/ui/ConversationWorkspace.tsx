@@ -14,10 +14,12 @@ import { useConversationController } from './useConversationController'
 const { Sider, Content } = Layout
 const { Text, Title } = Typography
 const RIGHT_PANEL_COLLAPSED_STORAGE_KEY = 'm3:right-panel-collapsed'
+const SETTINGS_SIDER_EXPANDED_WIDTH = 320
+const SETTINGS_SIDER_MINI_WIDTH = 56
 
 export function ConversationWorkspace() {
   const [isLeftPanelCollapsed, setIsLeftPanelCollapsed] = useState(false)
-  const [isRightPanelCollapsed, setIsRightPanelCollapsed] = useState<boolean>(() => {
+  const [isMiniMode, setIsMiniMode] = useState<boolean>(() => {
     try {
       return localStorage.getItem(RIGHT_PANEL_COLLAPSED_STORAGE_KEY) === '1'
     } catch {
@@ -27,11 +29,11 @@ export function ConversationWorkspace() {
 
   useEffect(() => {
     try {
-      localStorage.setItem(RIGHT_PANEL_COLLAPSED_STORAGE_KEY, isRightPanelCollapsed ? '1' : '0')
+      localStorage.setItem(RIGHT_PANEL_COLLAPSED_STORAGE_KEY, isMiniMode ? '1' : '0')
     } catch {
       // Ignore storage errors in restricted environments.
     }
-  }, [isRightPanelCollapsed])
+  }, [isMiniMode])
   const composerLayerRef = useRef<HTMLDivElement | null>(null)
   const headerLayerRef = useRef<HTMLDivElement | null>(null)
   const [composerInset, setComposerInset] = useState(170)
@@ -210,6 +212,10 @@ export function ConversationWorkspace() {
     }
   }, [debouncedSetHeaderInset])
 
+  const handleTopSettingsClick = () => {
+    setIsMiniMode((prev) => !prev)
+  }
+
   return (
     <Layout className="app-shell">
       <Sider
@@ -240,11 +246,6 @@ export function ConversationWorkspace() {
             <div className="chat-header-row chat-header-ant">
               <Card size="small" className="chat-header-card" bordered={false}>
                 <div className="chat-header-card-content">
-                  <Space size={8} wrap>
-                    <Button icon={<SettingOutlined />} onClick={() => setIsRightPanelCollapsed((prev) => !prev)}>
-                      {isRightPanelCollapsed ? '展开右侧面板' : '收起右侧面板'}
-                    </Button>
-                  </Space>
                   <Space size={10} wrap>
                     <Text type="secondary">当前会话</Text>
                     <Tag color="blue">{activeConversation ? '已选中' : '未选择'}</Tag>
@@ -338,31 +339,47 @@ export function ConversationWorkspace() {
         </div>
       </Layout>
 
-      {!isRightPanelCollapsed ? (
-        <Sider width={320} className="panel panel-right">
-          <SettingsPanel
-            sideMode={activeSideMode}
-            sideCount={activeSideCount}
-            sideIds={activeSides.filter((side) => side !== 'single')}
-            isSideConfigLocked={isSideConfigLocked}
-            settingsBySide={activeSettingsBySide}
-            models={modelCatalog.models}
-            channels={channels}
-            showAdvancedVariables={showAdvancedVariables}
-            dynamicPromptEnabled={dynamicPromptEnabled}
-            runConcurrency={runConcurrency}
-            onSideModeChange={updateSideMode}
-            onSideCountChange={updateSideCount}
-            onSettingsChange={updateSideSettings}
-            onModelChange={setSideModel}
-            onModelParamChange={setSideModelParam}
-            onChannelsChange={setChannels}
-            onShowAdvancedVariablesChange={setShowAdvancedVariables}
-            onDynamicPromptEnabledChange={setDynamicPromptEnabled}
-            onRunConcurrencyChange={setRunConcurrency}
-          />
-        </Sider>
-      ) : null}
+      <Sider
+        width={isMiniMode ? SETTINGS_SIDER_MINI_WIDTH : SETTINGS_SIDER_EXPANDED_WIDTH}
+        className={`panel panel-right settings-sider ${isMiniMode ? 'is-mini' : 'is-expanded'}`}
+      >
+        <div className="settings-sider-inner">
+          <div className="settings-expanded-layer">
+            <SettingsPanel
+              sideMode={activeSideMode}
+              sideCount={activeSideCount}
+              sideIds={activeSides.filter((side) => side !== 'single')}
+              isSideConfigLocked={isSideConfigLocked}
+              settingsBySide={activeSettingsBySide}
+              models={modelCatalog.models}
+              channels={channels}
+              showAdvancedVariables={showAdvancedVariables}
+              dynamicPromptEnabled={dynamicPromptEnabled}
+              runConcurrency={runConcurrency}
+              onSideModeChange={updateSideMode}
+              onSideCountChange={updateSideCount}
+              onSettingsChange={updateSideSettings}
+              onModelChange={setSideModel}
+              onModelParamChange={setSideModelParam}
+              onChannelsChange={setChannels}
+              onShowAdvancedVariablesChange={setShowAdvancedVariables}
+              onDynamicPromptEnabledChange={setDynamicPromptEnabled}
+              onRunConcurrencyChange={setRunConcurrency}
+              onTogglePanelMode={handleTopSettingsClick}
+            />
+          </div>
+          <div className="settings-mini-layer">
+            <Button
+              className="settings-header-btn"
+              type="text"
+              icon={<SettingOutlined />}
+              onClick={handleTopSettingsClick}
+              title="Settings"
+              aria-label="Settings"
+            />
+          </div>
+        </div>
+      </Sider>
 
       <ImagePreviewModal
         isPreviewOpen={isPreviewOpen}
