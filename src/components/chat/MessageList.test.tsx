@@ -500,6 +500,28 @@ describe('MessageList', () => {
     await user.click(screen.getByRole('button', { name: /发送到输入框/ }))
     expect(onUseUserPrompt).toHaveBeenCalledWith(prompt)
   })
+
+  it('strips trailing run-count suffix when sending prompt back to input', async () => {
+    const user = userEvent.setup()
+    const onUseUserPrompt = vi.fn()
+    const prompt = 'cinematic portrait, soft light (11 runs)'
+
+    render(
+      <div style={{ height: 600 }}>
+        <MessageList
+          activeConversation={makeUserConversation(prompt)}
+          sideView="single"
+          onOpenPreview={() => {}}
+          onUseUserPrompt={onUseUserPrompt}
+          onRetryRun={() => {}}
+          onReplayRun={() => {}}
+        />
+      </div>,
+    )
+
+    await user.click(screen.getByRole('button', { name: /发送到输入框/ }))
+    expect(onUseUserPrompt).toHaveBeenCalledWith('cinematic portrait, soft light')
+  })
   it('hides assistant messages that have no run for current multi side', () => {
     const conversation = makeMultiConversationWithSideOnlyRun('side_2')
     const { rerender } = render(

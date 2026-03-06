@@ -62,6 +62,10 @@ const FAILURE_LABEL: Record<FailureCode, string> = {
   unknown: '未知',
 }
 
+function normalizePromptForReuse(prompt: string): string {
+  return prompt.replace(/\s*\(\d+\s+runs\)\s*$/i, '').trim()
+}
+
 function formatParamSnapshot(params: Run['paramsSnapshot'] | undefined): string {
   const entries = Object.entries(params ?? {})
   if (entries.length === 0) {
@@ -635,7 +639,7 @@ function MessageListComponent(props: MessageListProps) {
                               size="small"
                               type="default"
                               className="message-use-prompt-btn"
-                              onClick={() => onUseUserPrompt?.(message.content)}
+                              onClick={() => onUseUserPrompt?.(normalizePromptForReuse(message.content))}
                               disabled={!message.content.trim()}
                             >
                               发送到输入框
