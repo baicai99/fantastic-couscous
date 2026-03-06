@@ -89,6 +89,7 @@ export function ConversationWorkspace() {
     shouldConfirmCreateConversation,
     activeId,
     draft,
+    draftSourceImages,
     sendError,
     isSending,
     showAdvancedVariables,
@@ -111,6 +112,9 @@ export function ConversationWorkspace() {
     modelCatalog,
     channels,
     setDraft,
+    appendDraftSourceImages,
+    removeDraftSourceImage,
+    clearDraftSourceImages,
     setShowAdvancedVariables,
     setDynamicPromptEnabled,
     setPanelValueFormat,
@@ -358,6 +362,7 @@ export function ConversationWorkspace() {
           <div ref={composerLayerRef} className="chat-composer-layer">
             <Composer
               draft={draft}
+              sourceImages={draftSourceImages}
               sendError={sendError}
               models={modelCatalog.models}
               isSending={isSending}
@@ -375,6 +380,9 @@ export function ConversationWorkspace() {
               missingKeys={templatePreview.missingKeys}
               unusedVariableKeys={unusedVariableKeys}
               onDraftChange={setDraft}
+              onSourceImagesAppend={appendDraftSourceImages}
+              onSourceImageRemove={removeDraftSourceImage}
+              onSourceImagesClear={clearDraftSourceImages}
               onPanelValueFormatChange={setPanelValueFormat}
               onPanelVariablesChange={setPanelVariables}
               onDynamicPromptEnabledChange={setDynamicPromptEnabled}

@@ -3,6 +3,7 @@ import { message, notification } from 'antd'
 import { resumeImageTaskByProvider } from '../services/providerGateway'
 import { getModelCatalogFromChannels } from '../services/modelCatalog'
 import { getAspectRatioOptions } from '../services/imageSizing'
+import { putImageBlob } from '../services/imageAssetStore'
 import type {
   ApiChannel,
   Conversation,
@@ -11,6 +12,7 @@ import type {
   Message,
   ModelSpec,
   Run,
+  RunSourceImageRef,
   Side,
   SideMode,
   SingleSideSettings,
@@ -59,6 +61,14 @@ const ONE_SHOT_CUSTOM_SIZE_MAX = 8192
 const ONE_SHOT_SIZE_TIER_SET = new Set(['0.5K', '1K', '2K', '4K'])
 const ONE_SHOT_ASPECT_RATIO_SET = new Set(getAspectRatioOptions())
 const ONE_SHOT_COMMAND_PATTERN = /(^|[\t \n])(--ar|--size|--wh)\s+([^\t \n]+)/gi
+const MAX_SOURCE_IMAGES = 6
+const ALLOWED_SOURCE_IMAGE_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/jpg', 'image/webp'])
+
+export interface DraftSourceImageItem {
+  id: string
+  file: File
+  previewUrl: string
+}
 
 interface OneShotSizeOverrides {
   mode: 'preset' | 'custom'
@@ -107,6 +117,15 @@ function buildSendBlockedAssistantActions(kind: 'missing-model' | 'missing-api')
   }
 
   return [{ id: makeId(), type: 'add-api', label: '添加 API' }]
+}
+
+function isAllowedSourceImageFile(file: File): boolean {
+  const mimeType = file.type.trim().toLowerCase()
+  if (ALLOWED_SOURCE_IMAGE_MIME_TYPES.has(mimeType)) {
+    return true
+  }
+  const name = file.name.trim().toLowerCase()
+  return name.endsWith('.png') || name.endsWith('.jpg') || name.endsWith('.jpeg') || name.endsWith('.webp')
 }
 
 export function sortConversationSummariesByLastMessageTime(
@@ -533,6 +552,20 @@ export function useConversations() {
   const activeRunControllersRef = useRef<Record<string, Map<string, AbortController>>>({})
   const resumingImageIdsRef = useRef<Set<string>>(new Set())
   const runCompletionSignatureRef = useRef<Map<string, string>>(new Map())
+  const [draftSourceImages, setDraftSourceImages] = useState<DraftSourceImageItem[]>([])
+  const draftSourceImagesRef = useRef<DraftSourceImageItem[]>([])
+
+  useEffect(() => {
+    draftSourceImagesRef.current = draftSourceImages
+  }, [draftSourceImages])
+
+  useEffect(() => {
+    return () => {
+      for (const item of draftSourceImagesRef.current) {
+        URL.revokeObjectURL(item.previewUrl)
+      }
+    }
+  }, [])
 
   const activeConversation = conversationSelectors.selectActiveConversation(state)
   const { activeSideMode, activeSideCount, activeSettingsBySide } = conversationSelectors.selectActiveSettings(state)
@@ -586,8 +619,8 @@ export function useConversations() {
       ? `${conversationTitle}：${summaryParts.join('，') || '结果已更新'}。`
       : `${conversationTitle}：${summaryParts.join('，') || '结果已更新'}。点击跳转查看。`
 
-    notification.success({
-      placement: 'topRight',
+    const notificationConfig = {
+      placement: 'topRight' as const,
       title: resultLabel,
       description,
       duration: isCurrentConversation ? 3 : 5,
@@ -596,7 +629,14 @@ export function useConversations() {
         : () => {
             setActiveConversation(conversationId)
           },
-    })
+    }
+    if (stats.failedCount === 0) {
+      notification.success(notificationConfig)
+    } else if (stats.successCount === 0) {
+      notification.error(notificationConfig)
+    } else {
+      notification.warning(notificationConfig)
+    }
   }
 
   const rebuildRunLocationIndex = (conversation: Conversation) => {
@@ -1439,6 +1479,7 @@ export function useConversations() {
       runId: string
       seq: number
       status?: 'pending' | 'success' | 'failed'
+      requestUrl?: string
       threadState?: Run['images'][number]['threadState']
       fileRef?: string
       thumbRef?: string
@@ -1482,6 +1523,7 @@ export function useConversations() {
     const nextImage = {
       ...targetImage,
       status: nextStatus,
+      requestUrl: 'requestUrl' in input ? input.requestUrl : targetImage.requestUrl,
       threadState: 'threadState' in input ? input.threadState : targetImage.threadState,
       fileRef: 'fileRef' in input ? input.fileRef : targetImage.fileRef,
       thumbRef: 'thumbRef' in input ? input.thumbRef : targetImage.thumbRef,
@@ -1498,6 +1540,7 @@ export function useConversations() {
     }
     if (
       nextImage.status === targetImage.status &&
+      nextImage.requestUrl === targetImage.requestUrl &&
       nextImage.threadState === targetImage.threadState &&
       nextImage.fileRef === targetImage.fileRef &&
       nextImage.thumbRef === targetImage.thumbRef &&
@@ -2005,10 +2048,85 @@ export function useConversations() {
     return null
   }
 
+  const appendDraftSourceImages = (files: File[]) => {
+    if (files.length === 0) {
+      return
+    }
+    const current = draftSourceImagesRef.current
+    const remaining = Math.max(0, MAX_SOURCE_IMAGES - current.length)
+    if (remaining <= 0) {
+      void message.warning(`最多只能上传 ${MAX_SOURCE_IMAGES} 张参考图`)
+      return
+    }
+
+    const accepted: DraftSourceImageItem[] = []
+    const invalidNames: string[] = []
+    for (const file of files) {
+      if (!isAllowedSourceImageFile(file)) {
+        invalidNames.push(file.name || '未命名文件')
+        continue
+      }
+      if (accepted.length >= remaining) {
+        break
+      }
+      accepted.push({
+        id: makeId(),
+        file,
+        previewUrl: URL.createObjectURL(file),
+      })
+    }
+
+    if (invalidNames.length > 0) {
+      void message.warning(`以下文件格式不支持：${invalidNames.join('、')}`)
+    }
+
+    if (accepted.length < files.filter((file) => isAllowedSourceImageFile(file)).length) {
+      void message.info(`超出上限，已仅保留前 ${remaining} 张可用参考图`)
+    }
+
+    if (accepted.length > 0) {
+      setDraftSourceImages((prev) => [...prev, ...accepted])
+    }
+  }
+
+  const removeDraftSourceImage = (id: string) => {
+    setDraftSourceImages((prev) => {
+      const target = prev.find((item) => item.id === id)
+      if (target) {
+        URL.revokeObjectURL(target.previewUrl)
+      }
+      return prev.filter((item) => item.id !== id)
+    })
+  }
+
+  const clearDraftSourceImages = () => {
+    setDraftSourceImages((prev) => {
+      prev.forEach((item) => URL.revokeObjectURL(item.previewUrl))
+      return []
+    })
+  }
+
+  const persistDraftSourceImages = async (items: DraftSourceImageItem[]): Promise<RunSourceImageRef[]> => {
+    const refs: RunSourceImageRef[] = []
+    for (const item of items.slice(0, MAX_SOURCE_IMAGES)) {
+      const assetKey = `source:${Date.now()}:${makeId()}`
+      await putImageBlob(assetKey, item.file)
+      refs.push({
+        id: item.id,
+        assetKey,
+        fileName: item.file.name || 'image.png',
+        mimeType: item.file.type || 'image/png',
+        size: item.file.size,
+      })
+    }
+    return refs
+  }
+
   const sendDraft = async () => {
     const snapshot = stateRef.current
     const currentActive = await getLoadedActiveConversation()
     const activeState = conversationSelectors.selectActiveSettings(snapshot)
+    const draftSourceImageSnapshot = [...draftSourceImagesRef.current]
     const targetSides = activeState.activeSideMode === 'single' ? (['single'] as Side[]) : getMultiSideIds(activeState.activeSideCount)
     const modelCommand = parseModelCommandDraft(snapshot.draft, modelCatalog.models)
 
@@ -2093,6 +2211,17 @@ export function useConversations() {
       return
     }
 
+    let sourceImageRefs: RunSourceImageRef[] = []
+    if (draftSourceImageSnapshot.length > 0) {
+      try {
+        sourceImageRefs = await persistDraftSourceImages(draftSourceImageSnapshot)
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : '参考图写入失败'
+        dispatch({ type: 'send/fail', payload: reason })
+        return
+      }
+    }
+
     const planned = orchestrator.planSendDraft({
       ...snapshot,
       draft: effectiveDraft,
@@ -2101,6 +2230,7 @@ export function useConversations() {
       sideCount: activeState.activeSideCount,
       settingsBySide: effectiveSettingsBySide,
       modelCatalog,
+      sourceImages: sourceImageRefs,
     })
 
     if (!planned.ok) {
@@ -2170,6 +2300,7 @@ export function useConversations() {
           modelId: runPlan.modelId,
           modelName: runPlan.modelName,
           paramsSnapshot: runPlan.paramsSnapshot,
+          sourceImages: runPlan.sourceImages,
           channel: runPlan.channel,
           pendingRunId: runPlan.pendingRun.id,
           pendingCreatedAt: runPlan.pendingRun.createdAt,
@@ -2191,6 +2322,7 @@ export function useConversations() {
       replaceRunsInConversation(targetConversationId, map)
       activeCompletedRuns.forEach((run) => unregisterActiveRun(targetConversationId, run.id))
       dispatch({ type: 'send/succeed' })
+      clearDraftSourceImages()
     } catch (error) {
       plan.runPlans.forEach((runPlan) => unregisterActiveRun(targetConversationId, runPlan.pendingRun.id))
       if (isAbortLikeError(error)) {
@@ -2246,6 +2378,7 @@ export function useConversations() {
         modelId: plan.modelId,
         modelName: plan.modelName,
         paramsSnapshot: { ...plan.paramsSnapshot },
+        sourceImages: plan.sourceImages,
         channel: plan.channel,
         retryOfRunId: plan.rootRunId,
         retryAttempt: plan.nextRetryAttempt,
@@ -2323,6 +2456,7 @@ export function useConversations() {
         finalPrompt: plan.sourceRun.finalPrompt,
         variablesSnapshot: { ...plan.sourceRun.variablesSnapshot },
         paramsSnapshot: { ...plan.paramsSnapshot },
+        sourceImages: plan.sourceImages,
         settingsSnapshot: {
           ...plan.sourceRun.settingsSnapshot,
           imageCount: plan.settings.imageCount,
@@ -2364,6 +2498,7 @@ export function useConversations() {
           modelId: plan.modelId,
           modelName: plan.modelName,
           paramsSnapshot: { ...plan.paramsSnapshot },
+          sourceImages: plan.sourceImages,
           channel: plan.channel,
           signal: controller.signal,
           onImageProgress: (progress) => {
@@ -2712,6 +2847,7 @@ export function useConversations() {
     shouldConfirmCreateConversation: conversationHasActiveImageThreads(activeConversation),
     activeId: state.activeId,
     draft: state.draft,
+    draftSourceImages,
     sendError: state.sendError,
     isSending: state.isSending,
     showAdvancedVariables: state.showAdvancedVariables,
@@ -2734,6 +2870,9 @@ export function useConversations() {
     modelCatalog,
     channels: state.channels,
     setDraft: actions.setDraft,
+    appendDraftSourceImages,
+    removeDraftSourceImage,
+    clearDraftSourceImages,
     setShowAdvancedVariables: actions.setAdvancedVariables,
     setDynamicPromptEnabled,
     setPanelValueFormat,

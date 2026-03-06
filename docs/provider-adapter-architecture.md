@@ -136,3 +136,12 @@
 - 在 Settings 渠道编辑弹窗中增加 `providerId` 显式选择控件（当前以默认推断为主）。
 - 逐步下线 `imageGeneration/channelModels` 过渡封装，统一直接调用 `providerGateway`。
 - 增加 provider 维度的请求成功率/耗时聚合上报（生产环境可接入埋点平台）。
+
+## 9. Nano Banana 图像编辑补充
+
+- OpenAI Compatible Adapter 已支持“自动文生图/图生图分流”：
+  - 无参考图：走 `images/generations`（JSON）。
+  - 有参考图：走 `images/edits`（FormData，支持最多 6 图）。
+- 前端 Composer 已支持参考图上传、删除、清空与发送后策略（成功清空、失败保留）。
+- Run 级别新增参考图引用快照，可直接用于 retry/replay。
+- 详细规则见：`docs/nano-banana-image-edits-adapter.md`

@@ -1,6 +1,6 @@
 ﻿import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
-import { DownloadOutlined, ReloadOutlined, RetweetOutlined, SettingOutlined } from '@ant-design/icons'
-import { Button, Card, Collapse, Dropdown, Modal, Space, Tooltip, Typography } from 'antd'
+import { CopyOutlined, DownloadOutlined, ReloadOutlined, RetweetOutlined, SettingOutlined } from '@ant-design/icons'
+import { Button, Card, Collapse, Dropdown, Modal, Space, Tooltip, Typography, message } from 'antd'
 import type { MenuProps } from 'antd'
 import type { Conversation, FailureCode, ImageItem, Message, MessageAction, Run, Side } from '../../types/chat'
 import { gridColumnCount, sortImagesBySeq } from '../../utils/chat'
@@ -71,6 +71,15 @@ const FAILURE_LABEL: Record<FailureCode, string> = {
   rejected: '拒绝',
   unknown: '未知',
 }
+const SERVICE_BUSY_DETAIL = '当前生成请求较多，服务暂时繁忙。请稍后再试。'
+const SERVICE_BUSY_PATTERNS = [
+  /当前分组上游负载已饱和/i,
+  /上游负载已饱和/i,
+  /服务暂时繁忙/i,
+  /server\s*busy/i,
+  /temporar(?:y|ily)\s+unavailable/i,
+  /overloaded/i,
+]
 
 function normalizePromptForReuse(prompt: string): string {
   return prompt.replace(/\s*\(\d+\s+runs\)\s*$/i, '').trim()
@@ -83,6 +92,26 @@ function formatParamSnapshot(params: Run['paramsSnapshot'] | undefined): string 
   }
 
   return entries.map(([key, value]) => `${key}=${String(value)}`).join(', ')
+}
+
+function getRunRequestAddress(run: Run): string {
+  const values = new Set<string>()
+  for (const image of run.images) {
+    const direct = typeof image.requestUrl === 'string' ? image.requestUrl.trim() : ''
+    if (direct) {
+      values.add(direct)
+    }
+    const metaValue = typeof image.serverTaskMeta?.requestUrl === 'string' ? image.serverTaskMeta.requestUrl.trim() : ''
+    if (metaValue) {
+      values.add(metaValue)
+    }
+  }
+
+  const list = Array.from(values)
+  if (list.length === 0) {
+    return '未记录'
+  }
+  return list.join(' , ')
 }
 
 function getSingleRuns(message: Message): Run[] {
@@ -180,15 +209,27 @@ function getRunProgressSummary(run: Run): string | null {
     return `已完成 ${successCount} 张，${failedCount} 张生成失败`
   }
   if (failedCount > 0) {
-    return `${failedCount} 张生成失败，可重试`
+    return `${failedCount} 张图片生成失败`
   }
   return null
+}
+
+function humanizeFailureDetail(detail: string): string {
+  const normalized = detail.trim()
+  if (!normalized) {
+    return normalized
+  }
+  if (SERVICE_BUSY_PATTERNS.some((pattern) => pattern.test(normalized))) {
+    return SERVICE_BUSY_DETAIL
+  }
+  return normalized
 }
 
 function getFailureDetails(run: Run): string[] {
   const details = run.images
     .filter((item) => item.status === 'failed')
     .map((item) => item.error?.trim())
+    .map((detail) => (detail ? humanizeFailureDetail(detail) : detail))
     .filter((detail): detail is string => Boolean(detail))
 
   return Array.from(new Set(details))
@@ -204,6 +245,88 @@ function getFailureCellLabel(image: ImageItem): string {
     return '生成超时，可重试'
   }
   return '生成失败'
+}
+
+function formatJsonSnapshot(snapshot: Record<string, unknown> | undefined): string {
+  if (!snapshot || Object.keys(snapshot).length === 0) {
+    return '{}'
+  }
+  return JSON.stringify(snapshot, null, 2)
+}
+
+function buildRunFailureCopyText(run: Run, runNumber: number): string {
+  const failedLines = run.images
+    .filter((item) => item.status === 'failed')
+    .sort((left, right) => left.seq - right.seq)
+    .map((item) => {
+      const code = item.errorCode ?? 'unknown'
+      const reason = item.error?.trim() || '未记录'
+      return `#${item.seq} | ${code} | ${reason}`
+    })
+
+  const sections = [
+    '失败 Run 复现信息',
+    `Run #: ${runNumber}`,
+    `Run ID: ${run.id || '未记录'}`,
+    `Batch ID: ${run.batchId || '未记录'}`,
+    `创建时间: ${run.createdAt || '未记录'}`,
+    `模型: ${run.modelName || '未记录'}`,
+    `模型 ID: ${run.modelId || '未记录'}`,
+    `渠道: ${run.channelName ?? run.channelId ?? '未记录'}`,
+    `模板 prompt: ${run.templatePrompt || '未记录'}`,
+    `最终 prompt: ${run.finalPrompt || '未记录'}`,
+    '失败信息:',
+    failedLines.length > 0 ? failedLines.join('\n') : '无失败信息',
+    '生成参数(JSON):',
+    formatJsonSnapshot(run.paramsSnapshot as unknown as Record<string, unknown>),
+    '生成设置(JSON):',
+    formatJsonSnapshot(run.settingsSnapshot as unknown as Record<string, unknown>),
+  ]
+
+  return sections.join('\n')
+}
+
+async function copyTextToClipboard(text: string): Promise<boolean> {
+  try {
+    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text)
+      return true
+    }
+  } catch {}
+
+  if (typeof document === 'undefined') {
+    return false
+  }
+  const textarea = document.createElement('textarea')
+  textarea.value = text
+  textarea.setAttribute('readonly', 'true')
+  textarea.style.position = 'fixed'
+  textarea.style.opacity = '0'
+  textarea.style.pointerEvents = 'none'
+  document.body.appendChild(textarea)
+  textarea.focus()
+  textarea.select()
+
+  try {
+    if (typeof document.execCommand === 'function') {
+      return document.execCommand('copy')
+    }
+    return false
+  } catch {
+    return false
+  } finally {
+    document.body.removeChild(textarea)
+  }
+}
+
+async function copyRunFailureReport(run: Run, runNumber: number): Promise<void> {
+  const text = buildRunFailureCopyText(run, runNumber)
+  const copied = await copyTextToClipboard(text)
+  if (copied) {
+    void message.success('已复制报错与生成参数')
+    return
+  }
+  void message.error('复制失败，请手动复制')
 }
 
 function renderRunMetaTitle(input: {
@@ -483,7 +606,18 @@ function renderRunCard(
                   onAssistantActionTrigger?.(`run-${run.id}-retry-failed`, event, () => onRetryRun(run.id))
                 }}
               >
-                仅重试失败项
+                重试失败项
+              </Button>
+              <Button
+                size="small"
+                type="default"
+                icon={<CopyOutlined />}
+                className="assistant-action-btn"
+                onClick={(event) => {
+                  onAssistantActionTrigger?.(`run-${run.id}-copy-failure-report`, event, () => copyRunFailureReport(run, runNumber))
+                }}
+              >
+                复制报错与参数
               </Button>
             </Space>
           ) : null}
@@ -1038,6 +1172,7 @@ function MessageListComponent(props: MessageListProps) {
                 <Text>模型: {run.modelName ?? run.modelId ?? '未记录'}</Text>
                 <Text>模型 ID: {run.modelId || '未记录'}</Text>
                 <Text>渠道: {run.channelName ?? run.channelId ?? '未记录'}</Text>
+                <Text>请求地址: {getRunRequestAddress(run)}</Text>
                 <Text>模板 prompt: {run.templatePrompt || '无'}</Text>
                 <Text>最终 prompt: {run.finalPrompt || '无'}</Text>
                 <Text>变量: {formatParamSnapshot(run.variablesSnapshot)}</Text>

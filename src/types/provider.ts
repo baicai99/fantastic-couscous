@@ -50,17 +50,26 @@ export interface NormalizedImageRequest {
   prompt: string
   imageCount: number
   paramValues: Record<string, SettingPrimitive>
+  sourceImages?: ProviderSourceImage[]
   signal?: AbortSignal
+}
+
+export interface ProviderSourceImage {
+  blob: Blob
+  fileName: string
+  mimeType: string
 }
 
 export interface NormalizedImageTaskRegistration {
   seq: number
+  requestUrl?: string
   serverTaskId?: string
   serverTaskMeta?: Record<string, string>
 }
 
 export interface NormalizedImageItem {
   seq: number
+  requestUrl?: string
   src?: string
   error?: string
   serverTaskId?: string

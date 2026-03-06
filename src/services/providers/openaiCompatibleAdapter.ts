@@ -100,6 +100,77 @@ function buildGenerationUrl(baseUrl: string): string {
   return `${normalized}/v1/images/generations`
 }
 
+function buildEditUrl(baseUrl: string): string {
+  const normalized = normalizeBaseUrl(baseUrl)
+  const lower = normalized.toLowerCase()
+
+  if (lower.endsWith('/v1/images/edits') || lower.endsWith('/v1/image/edits')) {
+    return normalized
+  }
+
+  if (lower.endsWith('/v1/images') || lower.endsWith('/v1/image')) {
+    return `${normalized}/edits`
+  }
+
+  if (lower.endsWith('/v1')) {
+    return `${normalized}/images/edits`
+  }
+
+  return `${normalized}/v1/images/edits`
+}
+
+function buildGenerationUrlCandidates(baseUrl: string): string[] {
+  const normalized = normalizeBaseUrl(baseUrl)
+  const lower = normalized.toLowerCase()
+  const candidates: string[] = []
+
+  const pushUnique = (value: string) => {
+    if (!candidates.includes(value)) {
+      candidates.push(value)
+    }
+  }
+
+  const primary = buildGenerationUrl(baseUrl)
+  pushUnique(primary)
+
+  if (primary.includes('/images/generations')) {
+    pushUnique(primary.replace('/images/generations', '/image/generations'))
+  } else if (primary.includes('/image/generations')) {
+    pushUnique(primary.replace('/image/generations', '/images/generations'))
+  }
+
+  if (lower.endsWith('/volcv/v1')) {
+    pushUnique(`${normalized}/images/generations`)
+  } else {
+    pushUnique(`${normalized}/volcv/v1/images/generations`)
+  }
+
+  if (lower.endsWith('/kling/v1')) {
+    pushUnique(`${normalized}/images/generations`)
+  } else {
+    pushUnique(`${normalized}/kling/v1/images/generations`)
+  }
+
+  return candidates
+}
+
+function buildEditUrlCandidates(baseUrl: string): string[] {
+  const candidates: string[] = []
+  const pushUnique = (value: string) => {
+    if (!candidates.includes(value)) {
+      candidates.push(value)
+    }
+  }
+  const primary = buildEditUrl(baseUrl)
+  pushUnique(primary)
+  if (primary.includes('/images/edits')) {
+    pushUnique(primary.replace('/images/edits', '/image/edits'))
+  } else if (primary.includes('/image/edits')) {
+    pushUnique(primary.replace('/image/edits', '/images/edits'))
+  }
+  return candidates
+}
+
 function getStringParam(
   paramValues: Record<string, SettingPrimitive>,
   key: string,
@@ -125,6 +196,125 @@ function toPixelSize(rawSize: string, aspectRatio: string): string {
 
   const computedByTier = getComputedPresetResolution(aspectRatio, normalizeSizeTier(rawSize))
   return computedByTier ?? '1024x1024'
+}
+
+function isFluxModel(modelId: string): boolean {
+  const value = modelId.trim().toLowerCase()
+  return value === 'flux' || value.startsWith('flux-') || value.startsWith('flux.')
+}
+
+function isKlingModel(modelId: string): boolean {
+  const value = modelId.trim().toLowerCase()
+  return value.includes('kling')
+}
+
+function isRatioSize(value: string): boolean {
+  return /^\d+:\d+$/.test(value.trim())
+}
+
+function getBooleanParam(
+  paramValues: Record<string, SettingPrimitive>,
+  keys: string[],
+): boolean | undefined {
+  for (const key of keys) {
+    const value = paramValues[key]
+    if (typeof value === 'boolean') {
+      return value
+    }
+    if (typeof value === 'string') {
+      const normalized = value.trim().toLowerCase()
+      if (normalized === 'true') return true
+      if (normalized === 'false') return false
+    }
+  }
+  return undefined
+}
+
+function getNumberParam(
+  paramValues: Record<string, SettingPrimitive>,
+  keys: string[],
+): number | undefined {
+  for (const key of keys) {
+    const value = paramValues[key]
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return value
+    }
+    if (typeof value === 'string' && value.trim()) {
+      const parsed = Number(value)
+      if (Number.isFinite(parsed)) {
+        return parsed
+      }
+    }
+  }
+  return undefined
+}
+
+function getFluxOutputFormat(paramValues: Record<string, SettingPrimitive>): 'jpeg' | 'png' {
+  const raw = getStringParam(paramValues, 'outputFormat', getStringParam(paramValues, 'output_format', 'png'))
+  const normalized = raw.trim().toLowerCase()
+  return normalized === 'jpeg' ? 'jpeg' : 'png'
+}
+
+function normalizeRatioText(input: string): string | null {
+  const matched = input.trim().match(/^(\d+)\s*:\s*(\d+)$/)
+  if (!matched) {
+    return null
+  }
+  const left = Number(matched[1])
+  const right = Number(matched[2])
+  if (!Number.isFinite(left) || !Number.isFinite(right) || left <= 0 || right <= 0) {
+    return null
+  }
+  const gcd = (a: number, b: number): number => {
+    let x = Math.abs(a)
+    let y = Math.abs(b)
+    while (y !== 0) {
+      const temp = y
+      y = x % y
+      x = temp
+    }
+    return x || 1
+  }
+  const divisor = gcd(left, right)
+  return `${Math.floor(left / divisor)}:${Math.floor(right / divisor)}`
+}
+
+function pixelSizeToRatio(input: string): string | null {
+  const matched = input.trim().match(/^(\d+)\s*x\s*(\d+)$/i)
+  if (!matched) {
+    return null
+  }
+  return normalizeRatioText(`${matched[1]}:${matched[2]}`)
+}
+
+function resolveKlingAspectRatio(paramValues: Record<string, SettingPrimitive>): string {
+  const ratioByAspect = normalizeRatioText(getStringParam(paramValues, 'aspectRatio', ''))
+  if (ratioByAspect) {
+    return ratioByAspect
+  }
+
+  const size = getStringParam(paramValues, 'size', '')
+  const ratioBySize = normalizeRatioText(size) ?? pixelSizeToRatio(size)
+  if (ratioBySize) {
+    return ratioBySize
+  }
+  return '1:1'
+}
+
+function resolveFluxSize(paramValues: Record<string, SettingPrimitive>): string {
+  const selectedSize = getStringParam(paramValues, 'size', '')
+  const selectedAspectRatio = getStringParam(paramValues, 'aspectRatio', '1:1')
+
+  if (selectedSize && (isPixelSize(selectedSize) || isRatioSize(selectedSize))) {
+    return selectedSize
+  }
+  if (isRatioSize(selectedAspectRatio)) {
+    return selectedAspectRatio
+  }
+  if (selectedSize) {
+    return toPixelSize(selectedSize, selectedAspectRatio)
+  }
+  return '1:1'
 }
 
 function getModelCandidates(modelId: string): string[] {
@@ -158,6 +348,51 @@ function buildRequestBody(
   prompt: string,
   paramValues: Record<string, SettingPrimitive>,
 ): Record<string, unknown> {
+  if (isKlingModel(requestModelId)) {
+    const negativePrompt = getStringParam(
+      paramValues,
+      'negativePrompt',
+      getStringParam(paramValues, 'negative_prompt', ''),
+    )
+    const referenceImage = getStringParam(paramValues, 'image', getStringParam(paramValues, 'referenceImage', ''))
+    const imageFidelityRaw = getNumberParam(paramValues, ['imageFidelity', 'image_fidelity'])
+    const imageFidelity =
+      typeof imageFidelityRaw === 'number' ? Math.max(0, Math.min(1, imageFidelityRaw)) : undefined
+    const callbackUrl = getStringParam(paramValues, 'callbackUrl', getStringParam(paramValues, 'callback_url', ''))
+    const modelName = getStringParam(paramValues, 'modelName', getStringParam(paramValues, 'model_name', requestModelId))
+
+    return {
+      prompt,
+      model_name: modelName || 'kling-v1',
+      n: 1,
+      aspect_ratio: resolveKlingAspectRatio(paramValues),
+      ...(negativePrompt ? { negative_prompt: negativePrompt } : {}),
+      ...(referenceImage ? { image: referenceImage } : {}),
+      ...(typeof imageFidelity === 'number' ? { image_fidelity: imageFidelity } : {}),
+      ...(callbackUrl ? { callback_url: callbackUrl } : {}),
+    }
+  }
+
+  if (isFluxModel(requestModelId)) {
+    const seed = getNumberParam(paramValues, ['seed'])
+    const promptUpsampling = getBooleanParam(paramValues, ['promptUpsampling', 'prompt_upsampling'])
+    const safetyToleranceRaw = getNumberParam(paramValues, ['safetyTolerance', 'safety_tolerance'])
+    const safetyTolerance =
+      typeof safetyToleranceRaw === 'number'
+        ? Math.max(0, Math.min(6, Math.floor(safetyToleranceRaw)))
+        : undefined
+
+    return {
+      model: requestModelId,
+      prompt,
+      size: resolveFluxSize(paramValues),
+      output_format: getFluxOutputFormat(paramValues),
+      ...(typeof seed === 'number' ? { seed: Math.floor(seed) } : {}),
+      ...(typeof promptUpsampling === 'boolean' ? { prompt_upsampling: promptUpsampling } : {}),
+      ...(typeof safetyTolerance === 'number' ? { safety_tolerance: safetyTolerance } : {}),
+    }
+  }
+
   const responseFormat = getStringParam(paramValues, 'responseFormat', 'url')
   const selectedSize = getStringParam(paramValues, 'size', '1024x1024')
   const selectedAspectRatio = getStringParam(paramValues, 'aspectRatio', '1:1')
@@ -169,6 +404,37 @@ function buildRequestBody(
     response_format: responseFormat,
     size: resolvedSize,
   }
+}
+
+function buildEditsFormData(
+  requestModelId: string,
+  prompt: string,
+  paramValues: Record<string, SettingPrimitive>,
+  sourceImages: NonNullable<NormalizedImageRequest['sourceImages']>,
+): FormData {
+  const responseFormat = getStringParam(paramValues, 'responseFormat', 'url')
+  const selectedSize = getStringParam(paramValues, 'size', '1024x1024')
+  const selectedAspectRatio = getStringParam(paramValues, 'aspectRatio', '1:1')
+  const resolvedSize = toPixelSize(selectedSize, selectedAspectRatio)
+  const formData = new FormData()
+
+  formData.append('model', requestModelId)
+  formData.append('prompt', prompt)
+  formData.append('response_format', responseFormat)
+  formData.append('size', resolvedSize)
+  if (selectedAspectRatio && /^\d+:\d+$/.test(selectedAspectRatio)) {
+    formData.append('aspect_ratio', selectedAspectRatio)
+  }
+
+  for (const sourceImage of sourceImages.slice(0, 6)) {
+    const type = sourceImage.mimeType?.trim() || sourceImage.blob.type || 'application/octet-stream'
+    const normalizedBlob =
+      sourceImage.blob.type === type ? sourceImage.blob : sourceImage.blob.slice(0, sourceImage.blob.size, type)
+    const fileName = sourceImage.fileName?.trim() || 'image.png'
+    formData.append('image', normalizedBlob, fileName)
+  }
+
+  return formData
 }
 
 function toModelId(item: unknown): string | null {
@@ -316,11 +582,15 @@ function pickResumeUrl(source: Record<string, unknown> | null | undefined): stri
 
 function buildTaskMeta(input: {
   baseUrl: string
+  requestUrl?: string
   taskId?: string
   resumeUrl?: string
   location?: string
 }): Record<string, string> | undefined {
   const meta: Record<string, string> = {}
+  if (input.requestUrl) {
+    meta.requestUrl = input.requestUrl
+  }
   if (input.resumeUrl) {
     meta.resumeUrl = input.resumeUrl
   }
@@ -335,6 +605,7 @@ function buildTaskMeta(input: {
 
 function parseTaskRegistration(input: {
   baseUrl: string
+  requestUrl?: string
   payload: unknown
   response: Response
 }): { serverTaskId?: string; serverTaskMeta?: Record<string, string> } {
@@ -347,7 +618,12 @@ function parseTaskRegistration(input: {
   }
   const payloadRecord =
     input.payload && typeof input.payload === 'object' ? (input.payload as Record<string, unknown>) : undefined
-  const payloadData = Array.isArray(payloadRecord?.data) ? (payloadRecord?.data[0] as Record<string, unknown> | undefined) : undefined
+  const payloadData =
+    Array.isArray(payloadRecord?.data)
+      ? (payloadRecord?.data[0] as Record<string, unknown> | undefined)
+      : payloadRecord?.data && typeof payloadRecord.data === 'object'
+        ? (payloadRecord.data as Record<string, unknown>)
+        : undefined
   const taskId =
     pickTaskId(payloadData) ??
     pickTaskId(payloadRecord) ??
@@ -361,6 +637,7 @@ function parseTaskRegistration(input: {
     serverTaskId: taskId,
     serverTaskMeta: buildTaskMeta({
       baseUrl: input.baseUrl,
+      requestUrl: input.requestUrl,
       taskId,
       resumeUrl,
       location: getHeader('location'),
@@ -380,15 +657,30 @@ function isPendingTaskPayload(input: {
   if (input.taskId || input.taskMeta?.resumeUrl) {
     const payloadRecord =
       input.payload && typeof input.payload === 'object' ? (input.payload as Record<string, unknown>) : undefined
+    const payloadData =
+      Array.isArray(payloadRecord?.data)
+        ? (payloadRecord?.data[0] as Record<string, unknown> | undefined)
+        : payloadRecord?.data && typeof payloadRecord.data === 'object'
+          ? (payloadRecord.data as Record<string, unknown>)
+          : undefined
     const status =
       readString(payloadRecord?.status) ??
-      (Array.isArray(payloadRecord?.data) && payloadRecord?.data[0] && typeof payloadRecord.data[0] === 'object'
-        ? readString((payloadRecord.data[0] as Record<string, unknown>).status)
-        : undefined)
+      readString(payloadData?.status) ??
+      readString(payloadData?.task_status)
     if (!status) {
       return true
     }
-    return ['queued', 'pending', 'processing', 'running', 'submitted', 'accepted'].includes(status.toLowerCase())
+    const normalized = status.toLowerCase()
+    return [
+      'queued',
+      'pending',
+      'processing',
+      'running',
+      'submitted',
+      'accepted',
+      'submitted（已提交）',
+      'processing（处理中）',
+    ].includes(normalized)
   }
   return false
 }
@@ -482,6 +774,21 @@ function isAbortError(error: unknown): boolean {
   return 'name' in error && (error as { name?: unknown }).name === 'AbortError'
 }
 
+function isEndpointMismatchError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false
+  }
+  const status =
+    typeof (error as { status?: unknown }).status === 'number'
+      ? ((error as { status?: number }).status as number)
+      : undefined
+  if (status === 404 || status === 405) {
+    return true
+  }
+  const message = error.message.toLowerCase()
+  return message.includes('invalid url (post') || message.includes('invalid url')
+}
+
 const capabilities: ProviderCapabilities = {
   endpointStyle: 'openai-compatible',
   auth: 'bearer',
@@ -567,26 +874,47 @@ export const openAICompatibleAdapter: ProviderAdapter = {
   },
   async generateImages(input) {
     const { channel, request, onTaskRegistered, onImageCompleted } = input
-    const { modelId, prompt, imageCount, paramValues, signal } = request
+    const { modelId, prompt, imageCount, paramValues, sourceImages, signal } = request
+    const normalizedSourceImages = Array.isArray(sourceImages) ? sourceImages : []
+    const hasSourceImages = normalizedSourceImages.length > 0
     const modelCandidates = getModelCandidates(modelId)
-    const primaryUrl = buildGenerationUrl(channel.baseUrl)
-    const fallbackUrl = primaryUrl.includes('/images/generations')
-      ? primaryUrl.replace('/images/generations', '/image/generations')
-      : primaryUrl.includes('/image/generations')
-        ? primaryUrl.replace('/image/generations', '/images/generations')
-        : null
+    const endpointCandidates = (() => {
+      const candidates = hasSourceImages
+        ? buildEditUrlCandidates(channel.baseUrl)
+        : buildGenerationUrlCandidates(channel.baseUrl)
+      if (!isKlingModel(modelId)) {
+        return candidates
+      }
+      const klingFirst = candidates
+        .filter((item) => item.toLowerCase().includes('/kling/'))
+        .concat(candidates.filter((item) => !item.toLowerCase().includes('/kling/')))
+      return Array.from(new Set(klingFirst))
+    })()
 
     async function doRequest(url: string, requestModelId: string, requestSignal?: AbortSignal): Promise<NormalizedImageItem> {
-      const body = buildRequestBody(requestModelId, prompt, paramValues)
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${channel.apiKey}`,
-        },
-        body: JSON.stringify(body),
-        signal: requestSignal,
-      })
+      const response = await (async () => {
+        if (hasSourceImages) {
+          const formData = buildEditsFormData(requestModelId, prompt, paramValues, normalizedSourceImages)
+          return fetch(url, {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${channel.apiKey}`,
+            },
+            body: formData,
+            signal: requestSignal,
+          })
+        }
+        const body = buildRequestBody(requestModelId, prompt, paramValues)
+        return fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${channel.apiKey}`,
+          },
+          body: JSON.stringify(body),
+          signal: requestSignal,
+        })
+      })()
 
       if (!response.ok) {
         let detail = ''
@@ -634,6 +962,7 @@ export const openAICompatibleAdapter: ProviderAdapter = {
       const payload = (await response.json()) as { data?: unknown }
       const taskRegistration = parseTaskRegistration({
         baseUrl: channel.baseUrl,
+        requestUrl: url,
         payload,
         response,
       })
@@ -641,7 +970,7 @@ export const openAICompatibleAdapter: ProviderAdapter = {
       const first = items.map((item) => toImageSrc(item)).find((value): value is string => Boolean(value))
 
       if (first) {
-        return { seq: 0, src: first, ...taskRegistration }
+        return { seq: 0, requestUrl: url, src: first, ...taskRegistration }
       }
       if (isPendingTaskPayload({
         payload,
@@ -649,7 +978,7 @@ export const openAICompatibleAdapter: ProviderAdapter = {
         taskId: taskRegistration.serverTaskId,
         taskMeta: taskRegistration.serverTaskMeta,
       })) {
-        return { seq: 0, ...taskRegistration }
+        return { seq: 0, requestUrl: url, ...taskRegistration }
       }
 
       throw createProviderError({
@@ -661,71 +990,54 @@ export const openAICompatibleAdapter: ProviderAdapter = {
     const requests = Array.from({ length: imageCount }, (_, index) => (async (): Promise<NormalizedImageItem> => {
       const seq = index + 1
       let lastError: unknown = null
+      let lastRequestUrl: string | undefined = undefined
 
       for (const candidate of modelCandidates) {
-        try {
-          const result = await doRequest(primaryUrl, candidate, signal)
-          if (result.serverTaskId || result.serverTaskMeta) {
+        for (const endpointUrl of endpointCandidates) {
+          try {
+            lastRequestUrl = endpointUrl
+            const result = await doRequest(endpointUrl, candidate, signal)
+            if (result.serverTaskId || result.serverTaskMeta) {
             onTaskRegistered?.({
               seq,
+              requestUrl: result.requestUrl,
               serverTaskId: result.serverTaskId,
               serverTaskMeta: result.serverTaskMeta,
             })
-          }
-          if (result.src) {
-            const successItem: NormalizedImageItem = {
-              seq,
-              src: result.src,
-              serverTaskId: result.serverTaskId,
-              serverTaskMeta: result.serverTaskMeta,
             }
-            onImageCompleted?.(successItem)
-            return successItem
-          }
-          return { seq, serverTaskId: result.serverTaskId, serverTaskMeta: result.serverTaskMeta }
-        } catch (error) {
-          lastError = error
-          if (signal?.aborted || isAbortError(error)) {
+            if (result.src) {
+              const successItem: NormalizedImageItem = {
+                seq,
+                requestUrl: result.requestUrl,
+                src: result.src,
+                serverTaskId: result.serverTaskId,
+                serverTaskMeta: result.serverTaskMeta,
+              }
+              onImageCompleted?.(successItem)
+              return successItem
+            }
+            return { seq, requestUrl: result.requestUrl, serverTaskId: result.serverTaskId, serverTaskMeta: result.serverTaskMeta }
+          } catch (error) {
+            lastError = error
+            if (signal?.aborted || isAbortError(error)) {
+              break
+            }
+            if (isEndpointMismatchError(error)) {
+              continue
+            }
             break
           }
-          const message = error instanceof Error ? error.message : ''
-          const shouldTryPathFallback =
-            Boolean(fallbackUrl) && (message.includes('HTTP 404') || message.includes('HTTP 405'))
-          if (shouldTryPathFallback && fallbackUrl) {
-            try {
-              const result = await doRequest(fallbackUrl, candidate, signal)
-              if (result.serverTaskId || result.serverTaskMeta) {
-                onTaskRegistered?.({
-                  seq,
-                  serverTaskId: result.serverTaskId,
-                  serverTaskMeta: result.serverTaskMeta,
-                })
-              }
-              if (result.src) {
-                const successItem: NormalizedImageItem = {
-                  seq,
-                  src: result.src,
-                  serverTaskId: result.serverTaskId,
-                  serverTaskMeta: result.serverTaskMeta,
-                }
-                onImageCompleted?.(successItem)
-                return successItem
-              }
-              return { seq, serverTaskId: result.serverTaskId, serverTaskMeta: result.serverTaskMeta }
-            } catch (fallbackError) {
-              lastError = fallbackError
-              if (signal?.aborted || isAbortError(fallbackError)) {
-                break
-              }
-            }
-          }
+        }
 
-          if (!isUnsupportedModelError(lastError)) {
-            const failedMessage = lastError instanceof Error ? lastError.message : 'Image generation failed.'
-            const failedItem: NormalizedImageItem = { seq, error: failedMessage }
-            onImageCompleted?.(failedItem)
-            return failedItem
-          }
+        if (signal?.aborted || isAbortError(lastError)) {
+          break
+        }
+
+        if (!isUnsupportedModelError(lastError)) {
+          const failedMessage = lastError instanceof Error ? lastError.message : 'Image generation failed.'
+          const failedItem: NormalizedImageItem = { seq, requestUrl: lastRequestUrl, error: failedMessage }
+          onImageCompleted?.(failedItem)
+          return failedItem
         }
       }
 
@@ -736,6 +1048,7 @@ export const openAICompatibleAdapter: ProviderAdapter = {
       if (isUnsupportedModelError(lastError)) {
         const failedItem: NormalizedImageItem = {
           seq,
+          requestUrl: lastRequestUrl,
           error: buildUnsupportedModelMessage(channel.baseUrl, modelId, modelCandidates, lastError),
         }
         onImageCompleted?.(failedItem)
@@ -744,6 +1057,7 @@ export const openAICompatibleAdapter: ProviderAdapter = {
 
       const failedItem: NormalizedImageItem = {
         seq,
+        requestUrl: lastRequestUrl,
         error: lastError instanceof Error ? lastError.message : 'Image generation failed.',
       }
       onImageCompleted?.(failedItem)

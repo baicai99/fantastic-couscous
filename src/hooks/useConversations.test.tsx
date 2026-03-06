@@ -439,6 +439,58 @@ describe('useConversations', () => {
     )
   })
 
+  it('uses error notification when all images fail', async () => {
+    const notificationSuccessSpy = vi.spyOn(notification, 'success').mockImplementation(() => undefined)
+    const notificationErrorSpy = vi.spyOn(notification, 'error').mockImplementation(() => undefined)
+    const notificationWarningSpy = vi.spyOn(notification, 'warning').mockImplementation(() => undefined)
+    const { useConversations } = await import('./useConversations')
+
+    mockCreateRun.mockImplementation(async (input: { runId: string; createdAt: string }) => ({
+      ...buildSuccessfulRunFromInput({
+        runId: input.runId,
+        createdAt: input.createdAt,
+        modelId: 'model-a',
+        templatePrompt: 'draw a failed cat',
+        finalPrompt: 'draw a failed cat',
+        settings: {
+          resolution: '1K',
+          aspectRatio: '1:1',
+          imageCount: 1,
+          gridColumns: 1,
+          sizeMode: 'preset',
+          customWidth: 1024,
+          customHeight: 1024,
+          autoSave: false,
+        },
+      }),
+      images: [{ id: 'failed-image', seq: 1, status: 'failed', threadState: 'settled', error: 'boom' }],
+    }))
+
+    const { result } = renderHook(() => useConversations())
+    act(() => {
+      result.current.setDraft('draw a failed cat')
+    })
+
+    await act(async () => {
+      await result.current.sendDraft()
+    })
+
+    await waitFor(() =>
+      expect(
+        notificationSuccessSpy.mock.calls.length +
+        notificationErrorSpy.mock.calls.length +
+        notificationWarningSpy.mock.calls.length,
+      ).toBeGreaterThan(0),
+    )
+    expect(notificationWarningSpy).not.toHaveBeenCalled()
+    expect(notificationSuccessSpy).not.toHaveBeenCalled()
+    expect(notificationErrorSpy).toHaveBeenCalledTimes(1)
+    expect(notificationErrorSpy.mock.calls[0]?.[0]).toMatchObject({
+      placement: 'topRight',
+      title: '任务执行失败',
+    })
+  })
+
   it('keeps detached pending images pending while the remote task is still running', async () => {
     mockResumeImageTaskByProvider.mockResolvedValue({ state: 'pending' })
     const { useConversations } = await import('./useConversations')

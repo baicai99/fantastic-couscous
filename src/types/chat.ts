@@ -96,10 +96,19 @@ export interface RunSettingsSnapshot {
   saveDirectory?: string
 }
 
+export interface RunSourceImageRef {
+  id: string
+  assetKey: string
+  fileName: string
+  mimeType: string
+  size: number
+}
+
 export interface ImageItem {
   id: string
   seq: number
   status: ImageStatus
+  requestUrl?: string
   threadState?: ImageThreadState
   fileRef?: string
   thumbRef?: string
@@ -134,6 +143,7 @@ export interface Run {
   variablesSnapshot: Record<string, string>
   paramsSnapshot: Record<string, SettingPrimitive>
   settingsSnapshot: RunSettingsSnapshot
+  sourceImages?: RunSourceImageRef[]
   retryOfRunId?: string
   retryAttempt: number
   images: ImageItem[]

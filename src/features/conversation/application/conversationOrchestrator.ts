@@ -1,4 +1,13 @@
-import type { Conversation, FailureCode, ImageRefKind, ImageThreadState, ModelCatalog, Run, SettingPrimitive } from '../../../types/chat'
+import type {
+  Conversation,
+  FailureCode,
+  ImageRefKind,
+  ImageThreadState,
+  ModelCatalog,
+  Run,
+  RunSourceImageRef,
+  SettingPrimitive,
+} from '../../../types/chat'
 import type { CreateRunInput } from './runExecutor'
 import { buildReplayPlan, buildRetryPlan, planRunBatch } from '../domain/conversationDomain'
 import type { ConversationState } from '../state/conversationState'
@@ -12,6 +21,7 @@ export interface RunImageProgress {
   runId: string
   seq: number
   status: 'pending' | 'success' | 'failed'
+  requestUrl?: string
   threadState?: ImageThreadState
   fileRef?: string
   thumbRef?: string
@@ -31,6 +41,7 @@ export function createConversationOrchestrator(deps: ConversationOrchestratorDep
       sideCount: number
       settingsBySide: Conversation['settingsBySide']
       modelCatalog: ModelCatalog
+      sourceImages?: RunSourceImageRef[]
     }) {
       return planRunBatch({
         draft: state.draft,
@@ -42,6 +53,7 @@ export function createConversationOrchestrator(deps: ConversationOrchestratorDep
         settingsBySide: input.settingsBySide,
         channels: state.channels,
         modelCatalog: input.modelCatalog,
+        sourceImages: input.sourceImages,
       })
     },
 
@@ -56,6 +68,7 @@ export function createConversationOrchestrator(deps: ConversationOrchestratorDep
       modelId: string
       modelName: string
       paramsSnapshot: Record<string, SettingPrimitive>
+      sourceImages?: RunSourceImageRef[]
       channel: CreateRunInput['channel']
       pendingRunId: string
       pendingCreatedAt: string
@@ -80,6 +93,7 @@ export function createConversationOrchestrator(deps: ConversationOrchestratorDep
               modelId: plan.modelId,
               modelName: plan.modelName,
               paramsSnapshot: plan.paramsSnapshot,
+              sourceImages: plan.sourceImages ?? [],
               channel: plan.channel,
               runId: plan.pendingRunId,
               createdAt: plan.pendingCreatedAt,
@@ -130,6 +144,7 @@ export function createConversationOrchestrator(deps: ConversationOrchestratorDep
       modelId: string
       modelName: string
       paramsSnapshot: Record<string, SettingPrimitive>
+      sourceImages?: RunSourceImageRef[]
       channel: CreateRunInput['channel']
       retryOfRunId: string
       retryAttempt: number
@@ -147,6 +162,7 @@ export function createConversationOrchestrator(deps: ConversationOrchestratorDep
         modelId: options.modelId,
         modelName: options.modelName,
         paramsSnapshot: options.paramsSnapshot,
+        sourceImages: options.sourceImages ?? [],
         channel: options.channel,
         retryOfRunId: options.retryOfRunId,
         retryAttempt: options.retryAttempt,
@@ -166,6 +182,7 @@ export function createConversationOrchestrator(deps: ConversationOrchestratorDep
       modelId: string
       modelName: string
       paramsSnapshot: Record<string, SettingPrimitive>
+      sourceImages?: RunSourceImageRef[]
       channel: CreateRunInput['channel']
       signal?: AbortSignal
       onImageProgress?: (progress: RunImageProgress) => void
@@ -181,6 +198,7 @@ export function createConversationOrchestrator(deps: ConversationOrchestratorDep
         modelId: options.modelId,
         modelName: options.modelName,
         paramsSnapshot: options.paramsSnapshot,
+        sourceImages: options.sourceImages ?? [],
         channel: options.channel,
         signal: options.signal,
         onImageProgress: options.onImageProgress,

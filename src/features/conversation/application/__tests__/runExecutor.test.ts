@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createRunExecutor } from '../runExecutor'
+import * as imageAssetStore from '../../../../services/imageAssetStore'
 
 const baseSettings = {
   resolution: '1K',
@@ -15,6 +16,10 @@ const baseSettings = {
   modelId: 'model-a',
   paramValues: {},
 }
+
+afterEach(() => {
+  vi.restoreAllMocks()
+})
 
 describe('runExecutor', () => {
   it('returns auth failures when channel is missing', async () => {
@@ -163,5 +168,77 @@ describe('runExecutor', () => {
       serverTaskId: 'task-1',
       serverTaskMeta: { resumeUrl: 'https://example.com/tasks/task-1' },
     })
+  })
+
+  it('passes persisted source images to provider request', async () => {
+    const sourceBlob = new Blob(['image'], { type: 'image/png' })
+    vi.spyOn(imageAssetStore, 'getImageBlob').mockResolvedValue(sourceBlob)
+    const mockGenerateImages = vi.fn().mockResolvedValue({
+      items: [{ seq: 1, src: 'u1' }],
+    })
+    const executor = createRunExecutor({ generateImagesFn: mockGenerateImages })
+
+    await executor.createRun({
+      batchId: 'batch',
+      sideMode: 'single',
+      side: 'single',
+      settings: { ...baseSettings, imageCount: 1, channelId: 'ch' },
+      templatePrompt: 'x',
+      finalPrompt: 'x',
+      variablesSnapshot: {},
+      modelId: 'model-a',
+      modelName: 'Model A',
+      paramsSnapshot: {},
+      sourceImages: [{
+        id: 'img-1',
+        assetKey: 'asset:key:1',
+        fileName: 'ref.png',
+        mimeType: 'image/png',
+        size: 5,
+      }],
+      channel: { id: 'ch', name: 'n', baseUrl: 'https://example.com', apiKey: 'key' },
+    })
+
+    expect(mockGenerateImages).toHaveBeenCalledWith(expect.objectContaining({
+      request: expect.objectContaining({
+        sourceImages: [
+          expect.objectContaining({
+            fileName: 'ref.png',
+            mimeType: 'image/png',
+          }),
+        ],
+      }),
+    }))
+  })
+
+  it('returns readable failures when all source image blobs are missing', async () => {
+    vi.spyOn(imageAssetStore, 'getImageBlob').mockResolvedValue(null)
+    const mockGenerateImages = vi.fn()
+    const executor = createRunExecutor({ generateImagesFn: mockGenerateImages })
+
+    const run = await executor.createRun({
+      batchId: 'batch',
+      sideMode: 'single',
+      side: 'single',
+      settings: { ...baseSettings, imageCount: 1, channelId: 'ch' },
+      templatePrompt: 'x',
+      finalPrompt: 'x',
+      variablesSnapshot: {},
+      modelId: 'model-a',
+      modelName: 'Model A',
+      paramsSnapshot: {},
+      sourceImages: [{
+        id: 'img-1',
+        assetKey: 'asset:key:1',
+        fileName: 'ref.png',
+        mimeType: 'image/png',
+        size: 5,
+      }],
+      channel: { id: 'ch', name: 'n', baseUrl: 'https://example.com', apiKey: 'key' },
+    })
+
+    expect(mockGenerateImages).not.toHaveBeenCalled()
+    expect(run.images[0]?.status).toBe('failed')
+    expect(run.images[0]?.error).toContain('参考图已失效')
   })
 })

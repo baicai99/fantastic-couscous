@@ -1,5 +1,6 @@
 ﻿import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { message } from 'antd'
 import { afterEach, vi } from 'vitest'
 import { MessageList } from './MessageList'
 import type { Conversation } from '../../types/chat'
@@ -291,6 +292,7 @@ function makeMultiConversationWithManyRunsAndImages(input: {
 describe('MessageList', () => {
   afterEach(() => {
     vi.useRealTimers()
+    vi.restoreAllMocks()
   })
 
   it('renders pending image hints for server generation and resume states', () => {
@@ -347,6 +349,61 @@ describe('MessageList', () => {
     )
 
     expect(screen.getByText('生成超时，可重试')).toBeInTheDocument()
+  })
+
+  it('uses human-friendly copy for upstream overload failures', () => {
+    const conversation = makeConversation()
+    conversation.messages[0].runs = [
+      {
+        ...conversation.messages[0].runs![0],
+        images: [
+          {
+            id: 'f-overload-1',
+            seq: 1,
+            status: 'failed',
+            errorCode: 'unknown',
+            error: 'HTTP 500: {"message":"当前分组上游负载已饱和，请稍后再试"}',
+          },
+          {
+            id: 'f-overload-2',
+            seq: 2,
+            status: 'failed',
+            errorCode: 'unknown',
+            error: 'HTTP 500: {"message":"当前分组上游负载已饱和，请稍后再试"}',
+          },
+          {
+            id: 'f-overload-3',
+            seq: 3,
+            status: 'failed',
+            errorCode: 'unknown',
+            error: 'HTTP 500: {"message":"当前分组上游负载已饱和，请稍后再试"}',
+          },
+          {
+            id: 'f-overload-4',
+            seq: 4,
+            status: 'failed',
+            errorCode: 'unknown',
+            error: 'HTTP 500: {"message":"当前分组上游负载已饱和，请稍后再试"}',
+          },
+        ],
+      },
+    ]
+
+    render(
+      <div style={{ height: 600 }}>
+        <MessageList
+          activeConversation={conversation}
+          sideView="single"
+          onOpenPreview={() => {}}
+          onRetryRun={() => {}}
+          onReplayRun={() => {}}
+        />
+      </div>,
+    )
+
+    expect(screen.getByText('4 张图片生成失败')).toBeInTheDocument()
+    expect(screen.getByText('当前生成请求较多，服务暂时繁忙。请稍后再试。')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /重试失败项/ })).toBeInTheDocument()
   })
 
   it('shows product-style partial completion summary', () => {
@@ -431,6 +488,183 @@ describe('MessageList', () => {
       expect(onReplayRun).toHaveBeenCalledWith('r1')
       expect(onRetryRun).toHaveBeenCalledWith('r1')
     })
+  })
+
+  it('shows copy failure button beside retry button for failed run', () => {
+    render(
+      <div style={{ height: 600 }}>
+        <MessageList
+          activeConversation={makeConversation()}
+          sideView="single"
+          onOpenPreview={() => {}}
+          onRetryRun={() => {}}
+          onReplayRun={() => {}}
+        />
+      </div>,
+    )
+
+    expect(screen.getByRole('button', { name: /重试失败项/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /复制报错与参数/ })).toBeInTheDocument()
+  })
+
+  it('copies structured failure and params text via navigator clipboard', async () => {
+    const user = userEvent.setup()
+    const successSpy = vi.spyOn(message, 'success').mockImplementation(() => {
+      return {} as never
+    })
+    const clipboardWrite = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(global.navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: clipboardWrite },
+    })
+    const conversation = makeConversation()
+    conversation.messages[0].runs = [
+      {
+        ...conversation.messages[0].runs![0],
+        paramsSnapshot: { seed: 42, quality: 'high' },
+        settingsSnapshot: {
+          ...conversation.messages[0].runs![0].settingsSnapshot,
+          gridColumns: 2,
+        },
+        images: [{ id: 'failed-1', seq: 1, status: 'failed', errorCode: 'timeout', error: '请求超时' }],
+      },
+    ]
+
+    render(
+      <div style={{ height: 600 }}>
+        <MessageList
+          activeConversation={conversation}
+          sideView="single"
+          onOpenPreview={() => {}}
+          onRetryRun={() => {}}
+          onReplayRun={() => {}}
+        />
+      </div>,
+    )
+
+    await user.click(screen.getByRole('button', { name: /复制报错与参数/ }))
+
+    await waitFor(() => {
+      expect(clipboardWrite).toHaveBeenCalledTimes(1)
+    })
+
+    const copiedText = clipboardWrite.mock.calls[0]?.[0] as string
+    expect(copiedText).toContain('失败 Run 复现信息')
+    expect(copiedText).toContain('失败信息:')
+    expect(copiedText).toContain('#1 | timeout | 请求超时')
+    expect(copiedText).toContain('生成参数(JSON):')
+    expect(copiedText).toContain('"seed": 42')
+    expect(copiedText).toContain('生成设置(JSON):')
+    expect(copiedText).toContain('"gridColumns": 2')
+    expect(successSpy).toHaveBeenCalledWith('已复制报错与生成参数')
+  })
+
+  it('falls back to execCommand copy when navigator clipboard is unavailable', async () => {
+    const user = userEvent.setup()
+    const successSpy = vi.spyOn(message, 'success').mockImplementation(() => {
+      return {} as never
+    })
+    Object.defineProperty(global.navigator, 'clipboard', {
+      configurable: true,
+      value: undefined,
+    })
+    const originalExecCommand = document.execCommand
+    const execCommandMock = vi.fn().mockReturnValue(true)
+    Object.defineProperty(document, 'execCommand', {
+      configurable: true,
+      value: execCommandMock,
+    })
+
+    render(
+      <div style={{ height: 600 }}>
+        <MessageList
+          activeConversation={makeConversation()}
+          sideView="single"
+          onOpenPreview={() => {}}
+          onRetryRun={() => {}}
+          onReplayRun={() => {}}
+        />
+      </div>,
+    )
+
+    await user.click(screen.getByRole('button', { name: /复制报错与参数/ }))
+
+    await waitFor(() => {
+      expect(execCommandMock).toHaveBeenCalledWith('copy')
+      expect(successSpy).toHaveBeenCalledWith('已复制报错与生成参数')
+    })
+
+    Object.defineProperty(document, 'execCommand', {
+      configurable: true,
+      value: originalExecCommand,
+    })
+  })
+
+  it('shows copy failure toast when clipboard and fallback both fail', async () => {
+    const user = userEvent.setup()
+    const errorSpy = vi.spyOn(message, 'error').mockImplementation(() => {
+      return {} as never
+    })
+    Object.defineProperty(global.navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: vi.fn().mockRejectedValue(new Error('write denied')),
+      },
+    })
+    const originalExecCommand = document.execCommand
+    const execCommandMock = vi.fn().mockReturnValue(false)
+    Object.defineProperty(document, 'execCommand', {
+      configurable: true,
+      value: execCommandMock,
+    })
+
+    render(
+      <div style={{ height: 600 }}>
+        <MessageList
+          activeConversation={makeConversation()}
+          sideView="single"
+          onOpenPreview={() => {}}
+          onRetryRun={() => {}}
+          onReplayRun={() => {}}
+        />
+      </div>,
+    )
+
+    await user.click(screen.getByRole('button', { name: /复制报错与参数/ }))
+
+    await waitFor(() => {
+      expect(execCommandMock).toHaveBeenCalledWith('copy')
+      expect(errorSpy).toHaveBeenCalledWith('复制失败，请手动复制')
+    })
+
+    Object.defineProperty(document, 'execCommand', {
+      configurable: true,
+      value: originalExecCommand,
+    })
+  })
+
+  it('does not show copy button when run has no failed images', () => {
+    const conversation = makeConversation()
+    conversation.messages[0].runs = [
+      {
+        ...conversation.messages[0].runs![0],
+        images: [{ id: 's1', seq: 1, status: 'success', fileRef: 'data:image/png;base64,AA==' }],
+      },
+    ]
+
+    render(
+      <div style={{ height: 600 }}>
+        <MessageList
+          activeConversation={conversation}
+          sideView="single"
+          onOpenPreview={() => {}}
+          onRetryRun={() => {}}
+          onReplayRun={() => {}}
+        />
+      </div>,
+    )
+
+    expect(screen.queryByRole('button', { name: /复制报错与参数/ })).not.toBeInTheDocument()
   })
 
   it('retries all failed runs without waiting previous run to finish', async () => {
@@ -866,6 +1100,7 @@ describe('MessageList', () => {
 
     expect(await screen.findByText('生成参数')).toBeInTheDocument()
     expect(await screen.findByText(/模型 ID: m/)).toBeInTheDocument()
+    expect(screen.getByText(/请求地址: 未记录/)).toBeInTheDocument()
     expect(screen.getByText(/最终 prompt: portrait of a girl/)).toBeInTheDocument()
     expect(screen.getByText(/Batch ID: b1/)).toBeInTheDocument()
   })

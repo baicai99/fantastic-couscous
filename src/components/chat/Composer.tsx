@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { SendOutlined, SettingOutlined } from '@ant-design/icons'
+import { DeleteOutlined, PlusOutlined, SendOutlined, SettingOutlined } from '@ant-design/icons'
 import { Alert, Button, Card, Drawer, Input, Modal, Segmented, Select, Space, Table, Tabs, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import type { ModelSpec, SideMode } from '../../types/chat'
@@ -33,6 +33,7 @@ interface SyncPreviewState {
 
 interface ComposerProps {
   draft: string
+  sourceImages: Array<{ id: string; file: File; previewUrl: string }>
   sendError: string
   models: ModelSpec[]
   showAdvancedVariables: boolean
@@ -50,6 +51,9 @@ interface ComposerProps {
   sideMode: SideMode
   isSideConfigLocked: boolean
   onDraftChange: (value: string) => void
+  onSourceImagesAppend: (files: File[]) => void
+  onSourceImageRemove: (id: string) => void
+  onSourceImagesClear: () => void
   onPanelValueFormatChange: (value: PanelValueFormat) => void
   onPanelVariablesChange: (rows: PanelVariableRow[]) => void
   onDynamicPromptEnabledChange: (value: boolean) => void
@@ -200,6 +204,7 @@ function getLongestDraftLine(draft: string): string {
 export function Composer(props: ComposerProps) {
   const {
     draft,
+    sourceImages,
     sendError,
     models,
     showAdvancedVariables,
@@ -216,6 +221,9 @@ export function Composer(props: ComposerProps) {
     sideMode,
     isSideConfigLocked,
     onDraftChange,
+    onSourceImagesAppend,
+    onSourceImageRemove,
+    onSourceImagesClear,
     onPanelValueFormatChange,
     onPanelVariablesChange,
     onDynamicPromptEnabledChange,
@@ -241,6 +249,7 @@ export function Composer(props: ComposerProps) {
   const [modelShortcutQuery, setModelShortcutQuery] = useState('')
   const [dashCommandQuery, setDashCommandQuery] = useState('')
   const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null)
+  const sourceImageInputRef = useRef<HTMLInputElement | null>(null)
   const quickPickerRootRef = useRef<HTMLDivElement | null>(null)
   const preferredWidthMeasureRef = useRef<HTMLSpanElement | null>(null)
   const actionColRef = useRef<HTMLDivElement | null>(null)
@@ -332,9 +341,7 @@ export function Composer(props: ComposerProps) {
   }, [isQuickPickerOpen])
 
   const mismatchSet = new Set(panelMismatchRowIds)
-  const draftPlaceholder = dynamicPromptEnabled
-    ? '输入模板 prompt，例如：a {{style}} portrait of {{subject}}'
-    : '输入普通 prompt，例如：a cinematic portrait of a girl'
+  const draftPlaceholder = dynamicPromptEnabled ? '输入模板 prompt，如：{{subject}} portrait' : undefined
 
   const panelValueFormatOptions: Array<{ label: string; value: PanelValueFormat }> = [
     { label: 'JSON', value: 'json' },
@@ -774,7 +781,30 @@ export function Composer(props: ComposerProps) {
           </div>
         ) : null}
         <Card variant="borderless" className="composer-card">
+          <input
+            ref={sourceImageInputRef}
+            type="file"
+            multiple
+            accept="image/png,image/jpeg,image/jpg,image/webp"
+            className="composer-source-image-input"
+            onChange={(event) => {
+              const fileList = event.target.files
+              if (!fileList || fileList.length === 0) {
+                return
+              }
+              onSourceImagesAppend(Array.from(fileList))
+              event.currentTarget.value = ''
+            }}
+          />
           <div className="composer-main-row">
+            <Button
+              type="text"
+              icon={<PlusOutlined />}
+              onClick={() => sourceImageInputRef.current?.click()}
+              className="composer-plus-btn"
+              aria-label="上传参考图"
+              title="上传参考图（最多 6 张）"
+            />
             <div
               className={`composer-textarea-wrap ${selectedQuickActions.length > 0 ? 'has-chip-row' : ''}`}
               ref={quickPickerRootRef}
@@ -964,8 +994,9 @@ export function Composer(props: ComposerProps) {
                   icon={<SettingOutlined />}
                   onClick={() => setIsAdvancedPanelOpen(true)}
                   className="composer-advanced-btn"
+                  aria-label="高级变量"
                 >
-                  高级变量
+                  {useSheet ? null : '高级变量'}
                 </Button>
               ) : null}
               <Button
@@ -981,6 +1012,40 @@ export function Composer(props: ComposerProps) {
               </Button>
             </div>
           </div>
+          {sourceImages.length > 0 ? (
+            <div className="composer-source-image-panel">
+              <div className="composer-source-image-toolbar">
+                <Text type="secondary">已添加 {sourceImages.length} 张参考图</Text>
+                <Button
+                  type="text"
+                  icon={<DeleteOutlined />}
+                  onClick={onSourceImagesClear}
+                  className="composer-clear-upload-btn"
+                >
+                  清空
+                </Button>
+              </div>
+              <div className="composer-source-image-list" aria-label="参考图列表">
+                {sourceImages.map((item) => (
+                  <div key={item.id} className="composer-source-image-item">
+                    <img src={item.previewUrl} alt={item.file.name || '参考图'} className="composer-source-image-thumb" />
+                    <div className="composer-source-image-meta">
+                      <Text className="composer-source-image-name" ellipsis={{ tooltip: item.file.name || '未命名文件' }}>
+                        {item.file.name || '未命名文件'}
+                      </Text>
+                    </div>
+                    <Button
+                      type="text"
+                      size="small"
+                      icon={<DeleteOutlined />}
+                      onClick={() => onSourceImageRemove(item.id)}
+                      aria-label={`删除参考图 ${item.file.name || ''}`}
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
         </Card>
       </div>
 

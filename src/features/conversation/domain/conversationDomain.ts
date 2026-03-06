@@ -13,6 +13,7 @@ import type {
   FailureCode,
   ModelCatalog,
   Run,
+  RunSourceImageRef,
   SettingPrimitive,
   Side,
   SideMode,
@@ -40,6 +41,7 @@ export interface PlannedRun {
   modelId: string
   modelName: string
   paramsSnapshot: Record<string, SettingPrimitive>
+  sourceImages: RunSourceImageRef[]
   channel: ApiChannel | undefined
   pendingRun: Run
 }
@@ -75,6 +77,7 @@ export interface RetryPlan {
   modelId: string
   modelName: string
   paramsSnapshot: Record<string, SettingPrimitive>
+  sourceImages: RunSourceImageRef[]
   channel: ApiChannel | undefined
 }
 
@@ -85,6 +88,7 @@ export interface ReplayPlan {
   modelId: string
   modelName: string
   paramsSnapshot: Record<string, SettingPrimitive>
+  sourceImages: RunSourceImageRef[]
   channel: ApiChannel | undefined
 }
 
@@ -832,6 +836,31 @@ function normalizeRun(run: Run): Run {
     }
   })
 
+  const normalizedSourceImages = (Array.isArray(run.sourceImages) ? run.sourceImages : [])
+    .map((item) => {
+      if (!item || typeof item !== 'object') {
+        return null
+      }
+      const id = typeof item.id === 'string' ? item.id.trim() : ''
+      const assetKey = typeof item.assetKey === 'string' ? item.assetKey.trim() : ''
+      if (!id || !assetKey) {
+        return null
+      }
+      const fileName = typeof item.fileName === 'string' && item.fileName.trim() ? item.fileName.trim() : 'image'
+      const mimeType =
+        typeof item.mimeType === 'string' && item.mimeType.trim() ? item.mimeType.trim() : 'image/png'
+      const sizeRaw = typeof item.size === 'number' ? item.size : Number(item.size)
+      const size = Number.isFinite(sizeRaw) && sizeRaw >= 0 ? sizeRaw : 0
+      return {
+        id,
+        assetKey,
+        fileName,
+        mimeType,
+        size,
+      } satisfies RunSourceImageRef
+    })
+    .filter((item): item is RunSourceImageRef => Boolean(item))
+
   return {
     ...run,
     sideMode: raw.sideMode === 'ab' ? 'multi' : run.sideMode,
@@ -840,6 +869,7 @@ function normalizeRun(run: Run): Run {
     finalPrompt: raw.finalPrompt ?? run.prompt ?? '',
     variablesSnapshot: raw.variablesSnapshot ?? {},
     retryAttempt: raw.retryAttempt ?? 0,
+    sourceImages: normalizedSourceImages,
     images: normalizedImages,
     settingsSnapshot: run.settingsSnapshot ?? {
       resolution: '1K',
@@ -939,6 +969,7 @@ export function planRunBatch(input: {
   settingsBySide: Record<Side, SingleSideSettings>
   channels: ApiChannel[]
   modelCatalog: ModelCatalog
+  sourceImages?: RunSourceImageRef[]
 }): SendDraftPlanResult {
   const templatePrompt = input.draft.trim()
   if (!templatePrompt) {
@@ -962,6 +993,7 @@ export function planRunBatch(input: {
   const batchId = makeId()
   const sides = mode === 'single' ? (['single'] as Side[]) : getMultiSideIds(sideCount)
   const iterationCount = variableBatches.batches.length
+  const sourceImages = Array.isArray(input.sourceImages) ? input.sourceImages : []
 
   const runPlans: PlannedRun[] = []
   for (const variablesSnapshot of variableBatches.batches) {
@@ -1004,6 +1036,7 @@ export function planRunBatch(input: {
         finalPrompt,
         variablesSnapshot: dynamicPromptEnabled ? variablesSnapshot : {},
         paramsSnapshot,
+        sourceImages,
         settingsSnapshot: toSettingsSnapshot(settings),
         retryAttempt: 0,
         images: Array.from({ length: imageCount }, (_, index) => ({
@@ -1020,6 +1053,7 @@ export function planRunBatch(input: {
         modelId: model?.id ?? settings.modelId,
         modelName: model?.name ?? settings.modelId,
         paramsSnapshot,
+        sourceImages,
         channel,
         pendingRun,
       })
@@ -1106,6 +1140,7 @@ export function buildRetryPlan(input: {
     modelId: model?.id ?? sourceRun.modelId,
     modelName: model?.name ?? sourceRun.modelName,
     paramsSnapshot: { ...sourceRun.paramsSnapshot },
+    sourceImages: Array.isArray(sourceRun.sourceImages) ? sourceRun.sourceImages : [],
     channel: channel ?? fallbackChannel,
   }
 }
@@ -1159,6 +1194,7 @@ export function buildReplayPlan(input: {
     modelId: model?.id ?? sourceRun.modelId,
     modelName: model?.name ?? sourceRun.modelName,
     paramsSnapshot: { ...sourceRun.paramsSnapshot },
+    sourceImages: Array.isArray(sourceRun.sourceImages) ? sourceRun.sourceImages : [],
     channel: channel ?? fallbackChannel,
   }
 }

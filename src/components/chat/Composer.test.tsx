@@ -41,6 +41,7 @@ function renderComposer(
   return render(
     <Composer
       draft={draft}
+      sourceImages={[]}
       sendError=""
       models={models}
       showAdvancedVariables
@@ -58,6 +59,9 @@ function renderComposer(
       sideMode={sideMode}
       isSideConfigLocked={isSideConfigLocked}
       onDraftChange={onDraftChange}
+      onSourceImagesAppend={vi.fn()}
+      onSourceImageRemove={vi.fn()}
+      onSourceImagesClear={vi.fn()}
       onPanelValueFormatChange={onFormatChange}
       onPanelVariablesChange={onPanelVariablesChange}
       onDynamicPromptEnabledChange={onDynamicPromptEnabledChange}
@@ -75,6 +79,7 @@ function renderControlledComposer(initialDraft = '') {
     return (
       <Composer
         draft={draft}
+        sourceImages={[]}
         sendError=""
         models={makeModels()}
         showAdvancedVariables
@@ -92,6 +97,9 @@ function renderControlledComposer(initialDraft = '') {
         sideMode="single"
         isSideConfigLocked={false}
         onDraftChange={setDraft}
+        onSourceImagesAppend={vi.fn()}
+        onSourceImageRemove={vi.fn()}
+        onSourceImagesClear={vi.fn()}
         onPanelValueFormatChange={vi.fn()}
         onPanelVariablesChange={vi.fn()}
         onDynamicPromptEnabledChange={vi.fn()}
@@ -187,7 +195,7 @@ describe('Composer panel value format', () => {
     const onSend = vi.fn()
     renderComposer('json', vi.fn(), vi.fn(), onSend, true)
 
-    const textarea = screen.getByPlaceholderText('输入模板 prompt，例如：a {{style}} portrait of {{subject}}')
+    const textarea = screen.getByPlaceholderText('输入模板 prompt，如：{{subject}} portrait')
     fireEvent.keyDown(textarea, { key: 'Enter', code: 'Enter' })
 
     expect(onSend).toHaveBeenCalledTimes(1)
@@ -196,7 +204,7 @@ describe('Composer panel value format', () => {
   it('opens quick picker when typing "/" at line start', () => {
     renderComposer('json')
 
-    const textarea = screen.getByPlaceholderText('输入模板 prompt，例如：a {{style}} portrait of {{subject}}')
+    const textarea = screen.getByPlaceholderText('输入模板 prompt，如：{{subject}} portrait')
     fireEvent.change(textarea, { target: { value: '/', selectionStart: 1, selectionEnd: 1 } })
 
     expect(screen.getByRole('listbox', { name: '快捷功能选择' })).toBeInTheDocument()
@@ -204,10 +212,135 @@ describe('Composer panel value format', () => {
     expect(screen.getByRole('button', { name: '对照模式' })).toBeInTheDocument()
   })
 
+  it('calls onSourceImagesAppend when selecting upload files', () => {
+    const onSourceImagesAppend = vi.fn()
+    const file = new File(['a'], 'ref.png', { type: 'image/png' })
+
+    const { container } = render(
+      <Composer
+        draft=""
+        sourceImages={[]}
+        sendError=""
+        models={makeModels()}
+        showAdvancedVariables
+        dynamicPromptEnabled
+        panelValueFormat="json"
+        panelVariables={makeRows()}
+        resolvedVariables={{}}
+        finalPromptPreview=""
+        missingKeys={[]}
+        unusedVariableKeys={[]}
+        isSending={false}
+        isSendBlocked={false}
+        panelBatchError=""
+        panelMismatchRowIds={[]}
+        sideMode="single"
+        isSideConfigLocked={false}
+        onDraftChange={vi.fn()}
+        onSourceImagesAppend={onSourceImagesAppend}
+        onSourceImageRemove={vi.fn()}
+        onSourceImagesClear={vi.fn()}
+        onPanelValueFormatChange={vi.fn()}
+        onPanelVariablesChange={vi.fn()}
+        onDynamicPromptEnabledChange={vi.fn()}
+        onSideModeChange={vi.fn()}
+        onSend={vi.fn()}
+      />,
+    )
+
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement
+    fireEvent.change(input, { target: { files: [file] } })
+    expect(onSourceImagesAppend).toHaveBeenCalledTimes(1)
+    expect(onSourceImagesAppend.mock.calls[0]?.[0]).toHaveLength(1)
+  })
+
+  it('renders plus upload trigger and forwards click to file input', async () => {
+    const user = userEvent.setup()
+    const { container } = render(
+      <Composer
+        draft=""
+        sourceImages={[]}
+        sendError=""
+        models={makeModels()}
+        showAdvancedVariables
+        dynamicPromptEnabled
+        panelValueFormat="json"
+        panelVariables={makeRows()}
+        resolvedVariables={{}}
+        finalPromptPreview=""
+        missingKeys={[]}
+        unusedVariableKeys={[]}
+        isSending={false}
+        isSendBlocked={false}
+        panelBatchError=""
+        panelMismatchRowIds={[]}
+        sideMode="single"
+        isSideConfigLocked={false}
+        onDraftChange={vi.fn()}
+        onSourceImagesAppend={vi.fn()}
+        onSourceImageRemove={vi.fn()}
+        onSourceImagesClear={vi.fn()}
+        onPanelValueFormatChange={vi.fn()}
+        onPanelVariablesChange={vi.fn()}
+        onDynamicPromptEnabledChange={vi.fn()}
+        onSideModeChange={vi.fn()}
+        onSend={vi.fn()}
+      />,
+    )
+
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement
+    const clickSpy = vi.spyOn(input, 'click')
+    await user.click(screen.getByRole('button', { name: '上传参考图' }))
+    expect(clickSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('renders source image item and supports remove/clear actions', () => {
+    const onSourceImageRemove = vi.fn()
+    const onSourceImagesClear = vi.fn()
+    const file = new File(['abc'], 'ref.webp', { type: 'image/webp' })
+
+    render(
+      <Composer
+        draft=""
+        sourceImages={[{ id: 'img-1', file, previewUrl: 'blob:test' }]}
+        sendError=""
+        models={makeModels()}
+        showAdvancedVariables
+        dynamicPromptEnabled
+        panelValueFormat="json"
+        panelVariables={makeRows()}
+        resolvedVariables={{}}
+        finalPromptPreview=""
+        missingKeys={[]}
+        unusedVariableKeys={[]}
+        isSending={false}
+        isSendBlocked={false}
+        panelBatchError=""
+        panelMismatchRowIds={[]}
+        sideMode="single"
+        isSideConfigLocked={false}
+        onDraftChange={vi.fn()}
+        onSourceImagesAppend={vi.fn()}
+        onSourceImageRemove={onSourceImageRemove}
+        onSourceImagesClear={onSourceImagesClear}
+        onPanelValueFormatChange={vi.fn()}
+        onPanelVariablesChange={vi.fn()}
+        onDynamicPromptEnabledChange={vi.fn()}
+        onSideModeChange={vi.fn()}
+        onSend={vi.fn()}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /删除参考图 ref.webp/ }))
+    expect(onSourceImageRemove).toHaveBeenCalledWith('img-1')
+    fireEvent.click(screen.getByRole('button', { name: /清空/ }))
+    expect(onSourceImagesClear).toHaveBeenCalledTimes(1)
+  })
+
   it('does not open quick picker when "/" is not at line start', () => {
     renderComposer('json')
 
-    const textarea = screen.getByPlaceholderText('输入模板 prompt，例如：a {{style}} portrait of {{subject}}')
+    const textarea = screen.getByPlaceholderText('输入模板 prompt，如：{{subject}} portrait')
     fireEvent.change(textarea, { target: { value: 'abc/', selectionStart: 4, selectionEnd: 4 } })
 
     expect(screen.queryByRole('listbox', { name: '快捷功能选择' })).not.toBeInTheDocument()
@@ -216,7 +349,7 @@ describe('Composer panel value format', () => {
   it('opens quick picker when typing "、" at line start', () => {
     renderComposer('json')
 
-    const textarea = screen.getByPlaceholderText('输入模板 prompt，例如：a {{style}} portrait of {{subject}}')
+    const textarea = screen.getByPlaceholderText('输入模板 prompt，如：{{subject}} portrait')
     fireEvent.change(textarea, { target: { value: '、', selectionStart: 1, selectionEnd: 1 } })
 
     expect(screen.getByRole('listbox', { name: '快捷功能选择' })).toBeInTheDocument()
@@ -225,7 +358,7 @@ describe('Composer panel value format', () => {
   it('opens command picker when typing "--" at line start', () => {
     renderComposer('json')
 
-    const textarea = screen.getByPlaceholderText('输入模板 prompt，例如：a {{style}} portrait of {{subject}}')
+    const textarea = screen.getByPlaceholderText('输入模板 prompt，如：{{subject}} portrait')
     fireEvent.change(textarea, { target: { value: '--', selectionStart: 2, selectionEnd: 2 } })
 
     expect(screen.getByRole('listbox', { name: '快捷功能选择' })).toBeInTheDocument()
@@ -236,7 +369,7 @@ describe('Composer panel value format', () => {
 
   it('opens command picker when typing "--" in the middle of text', () => {
     const { onSend } = renderControlledComposer()
-    const textarea = screen.getByPlaceholderText('输入模板 prompt，例如：a {{style}} portrait of {{subject}}') as HTMLTextAreaElement
+    const textarea = screen.getByPlaceholderText('输入模板 prompt，如：{{subject}} portrait') as HTMLTextAreaElement
 
     fireEvent.change(textarea, { target: { value: 'draw a cat --', selectionStart: 13, selectionEnd: 13 } })
 
@@ -250,7 +383,7 @@ describe('Composer panel value format', () => {
   it('filters command picker options for "--s"', () => {
     renderComposer('json')
 
-    const textarea = screen.getByPlaceholderText('输入模板 prompt，例如：a {{style}} portrait of {{subject}}')
+    const textarea = screen.getByPlaceholderText('输入模板 prompt，如：{{subject}} portrait')
     fireEvent.change(textarea, { target: { value: '--s', selectionStart: 3, selectionEnd: 3 } })
 
     expect(screen.getByRole('button', { name: '--size' })).toBeInTheDocument()
@@ -261,7 +394,7 @@ describe('Composer panel value format', () => {
   it('shows empty state when command picker has no match', () => {
     renderComposer('json')
 
-    const textarea = screen.getByPlaceholderText('输入模板 prompt，例如：a {{style}} portrait of {{subject}}')
+    const textarea = screen.getByPlaceholderText('输入模板 prompt，如：{{subject}} portrait')
     fireEvent.change(textarea, { target: { value: '--zzz', selectionStart: 5, selectionEnd: 5 } })
 
     expect(screen.getByText('未找到匹配命令')).toBeInTheDocument()
@@ -269,7 +402,7 @@ describe('Composer panel value format', () => {
 
   it('applies highlighted command on Enter when command picker is open instead of sending', () => {
     const { onSend } = renderControlledComposer()
-    const textarea = screen.getByPlaceholderText('输入模板 prompt，例如：a {{style}} portrait of {{subject}}') as HTMLTextAreaElement
+    const textarea = screen.getByPlaceholderText('输入模板 prompt，如：{{subject}} portrait') as HTMLTextAreaElement
 
     fireEvent.change(textarea, { target: { value: '--', selectionStart: 2, selectionEnd: 2 } })
     fireEvent.keyDown(textarea, { key: 'ArrowDown', code: 'ArrowDown' })
@@ -283,7 +416,7 @@ describe('Composer panel value format', () => {
     const onDraftChange = vi.fn()
     renderComposer('json', vi.fn(), vi.fn(), vi.fn(), false, '', onDraftChange)
 
-    const textarea = screen.getByPlaceholderText('输入模板 prompt，例如：a {{style}} portrait of {{subject}}')
+    const textarea = screen.getByPlaceholderText('输入模板 prompt，如：{{subject}} portrait')
     fireEvent.change(textarea, { target: { value: '--wfoo', selectionStart: 3, selectionEnd: 3 } })
     fireEvent.click(screen.getByRole('button', { name: '--wh' }))
 
@@ -296,7 +429,7 @@ describe('Composer panel value format', () => {
     const onDynamicPromptEnabledChange = vi.fn()
     renderComposer('json', vi.fn(), vi.fn(), onSend, false, '', onDraftChange, false, onDynamicPromptEnabledChange)
 
-    const textarea = screen.getByPlaceholderText('输入普通 prompt，例如：a cinematic portrait of a girl')
+    const textarea = screen.getByRole('textbox')
     fireEvent.change(textarea, { target: { value: '/', selectionStart: 1, selectionEnd: 1 } })
     fireEvent.click(screen.getByRole('button', { name: '动态提示词' }))
 
@@ -310,7 +443,7 @@ describe('Composer panel value format', () => {
     const onDraftChange = vi.fn()
     renderComposer('json', vi.fn(), vi.fn(), vi.fn(), false, '', onDraftChange)
 
-    const textarea = screen.getByPlaceholderText('输入模板 prompt，例如：a {{style}} portrait of {{subject}}')
+    const textarea = screen.getByPlaceholderText('输入模板 prompt，如：{{subject}} portrait')
     fireEvent.change(textarea, {
       target: { value: '@gemi', selectionStart: 5, selectionEnd: 5 },
     })
@@ -340,7 +473,7 @@ describe('Composer panel value format', () => {
       makeRows(),
     )
 
-    const textarea = screen.getByPlaceholderText('输入模板 prompt，例如：a {{style}} portrait of {{subject}}')
+    const textarea = screen.getByPlaceholderText('输入模板 prompt，如：{{subject}} portrait')
     fireEvent.change(textarea, {
       target: { value: '@gemini-2.5-flash-image', selectionStart: 23, selectionEnd: 23 },
     })
@@ -353,7 +486,7 @@ describe('Composer panel value format', () => {
   it('keeps selected model token in the input as plain text', () => {
     const { onSend, container } = renderControlledComposer()
 
-    const textarea = screen.getByPlaceholderText('输入模板 prompt，例如：a {{style}} portrait of {{subject}}') as HTMLTextAreaElement
+    const textarea = screen.getByPlaceholderText('输入模板 prompt，如：{{subject}} portrait') as HTMLTextAreaElement
     fireEvent.change(textarea, {
       target: { value: '@gemi', selectionStart: 5, selectionEnd: 5 },
     })
@@ -367,7 +500,7 @@ describe('Composer panel value format', () => {
   it('preserves the selected model token when continuing to type prompt text', () => {
     renderControlledComposer()
 
-    const textarea = screen.getByPlaceholderText('输入模板 prompt，例如：a {{style}} portrait of {{subject}}') as HTMLTextAreaElement
+    const textarea = screen.getByPlaceholderText('输入模板 prompt，如：{{subject}} portrait') as HTMLTextAreaElement
     fireEvent.change(textarea, {
       target: { value: '@gemi', selectionStart: 5, selectionEnd: 5 },
     })
@@ -396,6 +529,7 @@ describe('Composer panel value format', () => {
     rerender(
       <Composer
         draft=""
+        sourceImages={[]}
         sendError=""
         models={makeModels()}
         showAdvancedVariables
@@ -413,6 +547,9 @@ describe('Composer panel value format', () => {
         sideMode="single"
         isSideConfigLocked={false}
         onDraftChange={vi.fn()}
+        onSourceImagesAppend={vi.fn()}
+        onSourceImageRemove={vi.fn()}
+        onSourceImagesClear={vi.fn()}
         onPanelValueFormatChange={vi.fn()}
         onPanelVariablesChange={vi.fn()}
         onDynamicPromptEnabledChange={vi.fn()}
@@ -428,7 +565,7 @@ describe('Composer panel value format', () => {
     const onSideModeChange = vi.fn()
     renderComposer('json', vi.fn(), vi.fn(), vi.fn(), false, '', vi.fn(), true, vi.fn(), 'single', onSideModeChange)
 
-    const textarea = screen.getByPlaceholderText('输入模板 prompt，例如：a {{style}} portrait of {{subject}}')
+    const textarea = screen.getByPlaceholderText('输入模板 prompt，如：{{subject}} portrait')
     fireEvent.change(textarea, { target: { value: '/', selectionStart: 1, selectionEnd: 1 } })
     fireEvent.click(screen.getByRole('button', { name: '对照模式' }))
 
@@ -458,7 +595,7 @@ describe('Composer panel value format', () => {
     const onSideModeChange = vi.fn()
     renderComposer('json', vi.fn(), vi.fn(), vi.fn(), false, '', vi.fn(), true, vi.fn(), 'single', onSideModeChange, true)
 
-    const textarea = screen.getByPlaceholderText('输入模板 prompt，例如：a {{style}} portrait of {{subject}}')
+    const textarea = screen.getByPlaceholderText('输入模板 prompt，如：{{subject}} portrait')
     fireEvent.change(textarea, { target: { value: '/', selectionStart: 1, selectionEnd: 1 } })
 
     const comparisonButton = screen.getByRole('button', { name: '对照模式' })
@@ -474,6 +611,7 @@ describe('Composer panel value format', () => {
     rerender(
       <Composer
         draft=""
+        sourceImages={[]}
         sendError=""
         models={makeModels()}
         showAdvancedVariables
@@ -491,6 +629,9 @@ describe('Composer panel value format', () => {
         sideMode="multi"
         isSideConfigLocked={false}
         onDraftChange={vi.fn()}
+        onSourceImagesAppend={vi.fn()}
+        onSourceImageRemove={vi.fn()}
+        onSourceImagesClear={vi.fn()}
         onPanelValueFormatChange={vi.fn()}
         onPanelVariablesChange={vi.fn()}
         onDynamicPromptEnabledChange={vi.fn()}
@@ -505,7 +646,7 @@ describe('Composer panel value format', () => {
   it('closes quick picker with Escape', () => {
     renderComposer('json')
 
-    const textarea = screen.getByPlaceholderText('输入模板 prompt，例如：a {{style}} portrait of {{subject}}')
+    const textarea = screen.getByPlaceholderText('输入模板 prompt，如：{{subject}} portrait')
     fireEvent.change(textarea, { target: { value: '/', selectionStart: 1, selectionEnd: 1 } })
     fireEvent.keyDown(textarea, { key: 'Escape', code: 'Escape' })
 
@@ -619,7 +760,7 @@ describe('Composer panel value format', () => {
     const user = userEvent.setup()
     renderComposer('json', vi.fn(), vi.fn(), onSend, false, 'a {{subject}} portrait', vi.fn(), false, onDynamicPromptEnabledChange)
 
-    const textarea = screen.getByPlaceholderText('输入普通 prompt，例如：a cinematic portrait of a girl')
+    const textarea = screen.getByRole('textbox')
     fireEvent.keyDown(textarea, { key: 'Enter', code: 'Enter' })
 
     expect(await screen.findByRole('button', { name: '帮我开启' })).toBeInTheDocument()

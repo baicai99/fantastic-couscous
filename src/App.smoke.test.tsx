@@ -11,7 +11,7 @@ describe('App smoke flow', () => {
     const user = userEvent.setup()
     render(<App />)
 
-    const input = screen.getByPlaceholderText(/prompt/i)
+    const input = screen.getByRole('textbox')
     await user.type(input, 'a cat portrait')
     await user.click(screen.getByRole('button', { name: /发送|send/i }))
 
@@ -31,4 +31,3 @@ describe('App smoke flow', () => {
     })
   }, 15000)
 })
-

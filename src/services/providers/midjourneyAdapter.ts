@@ -33,7 +33,37 @@ function createProviderError(input: {
   } satisfies Omit<ProviderError, keyof Error>)
 }
 
+function normalizeMidjourneyFailureMessage(payload: Record<string, unknown>, fallback: string): string {
+  const message = readString(payload.message) ?? readString(payload.description) ?? readString(payload.error) ?? fallback
+  const lower = message.toLowerCase()
+  const code = readString(payload.code)?.toLowerCase()
+  if (
+    code === 'custom_router_error' ||
+    lower.includes('custom_router_error') ||
+    lower.includes('no such host') ||
+    (lower.includes('dial tcp') && lower.includes('lookup'))
+  ) {
+    return '上游服务路由异常（DNS 解析失败），请切换渠道或稍后重试。'
+  }
+  return message
+}
+
 function toImageSource(payload: Record<string, unknown>): string | undefined {
+  const rawResult = payload.result
+  if (typeof rawResult === 'string' && /^(https?:\/\/|data:image\/)/i.test(rawResult.trim())) {
+    return rawResult.trim()
+  }
+  if (rawResult && typeof rawResult === 'object') {
+    const resultObject = rawResult as Record<string, unknown>
+    const nested =
+      readString(resultObject.image_url) ??
+      readString(resultObject.imageUrl) ??
+      readString(resultObject.url)
+    if (nested) {
+      return nested
+    }
+  }
+
   const direct =
     readString(payload.image_url) ??
     readString(payload.imageUrl) ??
@@ -61,6 +91,23 @@ function toImageSource(payload: Record<string, unknown>): string | undefined {
 }
 
 function toTaskId(payload: Record<string, unknown>): string | undefined {
+  const resultField = payload.result
+  if (typeof resultField === 'string' && resultField.trim()) {
+    return resultField.trim()
+  }
+  if (resultField && typeof resultField === 'object') {
+    const resultObject = resultField as Record<string, unknown>
+    const nested =
+      readString(resultObject.task_id) ??
+      readString(resultObject.taskId) ??
+      readString(resultObject.job_id) ??
+      readString(resultObject.jobId) ??
+      readString(resultObject.id)
+    if (nested) {
+      return nested
+    }
+  }
+
   return (
     readString(payload.task_id) ??
     readString(payload.taskId) ??
@@ -71,6 +118,14 @@ function toTaskId(payload: Record<string, unknown>): string | undefined {
 }
 
 function toStatus(payload: Record<string, unknown>): string | undefined {
+  const resultField = payload.result
+  if (resultField && typeof resultField === 'object') {
+    const resultObject = resultField as Record<string, unknown>
+    const nested = readString(resultObject.status) ?? readString(resultObject.state)
+    if (nested) {
+      return nested
+    }
+  }
   return (
     readString(payload.status) ??
     readString(payload.state) ??
@@ -124,6 +179,64 @@ function isPendingStatus(value: string | undefined): boolean {
   return ['queued', 'pending', 'processing', 'running', 'submitted', 'in_progress'].includes(value.toLowerCase())
 }
 
+function parseBase64ArrayParam(raw: unknown): string[] | undefined {
+  if (Array.isArray(raw)) {
+    const normalized = raw
+      .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+      .map((item) => item.trim())
+    return normalized.length > 0 ? normalized : undefined
+  }
+  if (typeof raw !== 'string') {
+    return undefined
+  }
+  const trimmed = raw.trim()
+  if (!trimmed) {
+    return undefined
+  }
+
+  if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+    try {
+      const parsed = JSON.parse(trimmed) as unknown
+      if (Array.isArray(parsed)) {
+        return parsed
+          .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+          .map((item) => item.trim())
+      }
+    } catch {
+      // Fall through to split parsing.
+    }
+  }
+
+  if (/^data:image\/[a-zA-Z0-9.+-]+;base64,/i.test(trimmed)) {
+    return [trimmed]
+  }
+
+  const separator = trimmed.includes('\n') ? /\n/ : /,/
+  const list = trimmed
+    .split(separator)
+    .map((item) => item.trim())
+    .filter(Boolean)
+  return list.length > 0 ? list : undefined
+}
+
+function resolveBotType(input: { modelId: string; botTypeParam: unknown }): 'MID_JOURNEY' | 'NIJI_JOURNEY' {
+  if (typeof input.botTypeParam === 'string') {
+    const normalized = input.botTypeParam.trim().toUpperCase()
+    if (normalized === 'NIJI_JOURNEY' || normalized === 'NIJI') {
+      return 'NIJI_JOURNEY'
+    }
+    if (normalized === 'MID_JOURNEY' || normalized === 'MJ') {
+      return 'MID_JOURNEY'
+    }
+  }
+
+  const modelValue = input.modelId.toLowerCase()
+  if (modelValue.includes('niji')) {
+    return 'NIJI_JOURNEY'
+  }
+  return 'MID_JOURNEY'
+}
+
 const capabilities: ProviderCapabilities = {
   endpointStyle: 'task-based',
   auth: 'bearer',
@@ -132,11 +245,11 @@ const capabilities: ProviderCapabilities = {
   modelTag: 'midjourney',
   defaultImageParamSchema: [
     {
-      key: 'quality',
-      label: '质量',
+      key: 'botType',
+      label: 'Bot 类型',
       type: 'enum',
-      default: 'standard',
-      options: ['standard', 'hd'],
+      default: 'MID_JOURNEY',
+      options: ['MID_JOURNEY', 'NIJI_JOURNEY'],
     },
   ],
 }
@@ -164,6 +277,22 @@ export const midjourneyAdapter: ProviderAdapter = {
 
     for (const seq of sequence) {
       try {
+        const base64Array = parseBase64ArrayParam(
+          request.paramValues.base64Array ?? request.paramValues.imageBase64Array,
+        )
+        const botType = resolveBotType({
+          modelId: request.modelId,
+          botTypeParam: request.paramValues.botType,
+        })
+        const notifyHook =
+          typeof request.paramValues.notifyHook === 'string' && request.paramValues.notifyHook.trim()
+            ? request.paramValues.notifyHook.trim()
+            : undefined
+        const state =
+          typeof request.paramValues.state === 'string' && request.paramValues.state.trim()
+            ? request.paramValues.state.trim()
+            : undefined
+
         const response = await fetch(submitUrl, {
           method: 'POST',
           headers: {
@@ -172,9 +301,10 @@ export const midjourneyAdapter: ProviderAdapter = {
           },
           body: JSON.stringify({
             prompt: request.prompt,
-            model: request.modelId,
-            n: 1,
-            ...(typeof request.paramValues.quality === 'string' ? { quality: request.paramValues.quality } : {}),
+            botType,
+            ...(Array.isArray(base64Array) && base64Array.length > 0 ? { base64Array } : {}),
+            ...(notifyHook ? { notifyHook } : {}),
+            ...(state ? { state } : {}),
           }),
           signal: request.signal,
         })
@@ -188,8 +318,22 @@ export const midjourneyAdapter: ProviderAdapter = {
         }
 
         if (!response.ok) {
-          const message = readString(payload.error) ?? `HTTP ${response.status}`
-          const failedItem: NormalizedImageItem = { seq, error: message }
+          const message = normalizeMidjourneyFailureMessage(payload, `HTTP ${response.status}`)
+          const failedItem: NormalizedImageItem = { seq, requestUrl: submitUrl, error: message }
+          onImageCompleted?.(failedItem)
+          items.push(failedItem)
+          continue
+        }
+
+        const responseCode =
+          typeof payload.code === 'number'
+            ? payload.code
+            : typeof payload.code === 'string'
+              ? Number(payload.code)
+              : 1
+        if (!Number.isFinite(responseCode) || responseCode !== 1) {
+          const message = normalizeMidjourneyFailureMessage(payload, 'Midjourney submit failed.')
+          const failedItem: NormalizedImageItem = { seq, requestUrl: submitUrl, error: message }
           onImageCompleted?.(failedItem)
           items.push(failedItem)
           continue
@@ -200,8 +344,9 @@ export const midjourneyAdapter: ProviderAdapter = {
         if (taskId || resumeUrl) {
           onTaskRegistered?.({
             seq,
+            requestUrl: submitUrl,
             serverTaskId: taskId,
-            serverTaskMeta: resumeUrl ? { resumeUrl } : undefined,
+            serverTaskMeta: resumeUrl ? { resumeUrl, requestUrl: submitUrl } : { requestUrl: submitUrl },
           })
         }
 
@@ -209,9 +354,10 @@ export const midjourneyAdapter: ProviderAdapter = {
         if (imageSource) {
           const successItem: NormalizedImageItem = {
             seq,
+            requestUrl: submitUrl,
             src: imageSource,
             serverTaskId: taskId,
-            serverTaskMeta: resumeUrl ? { resumeUrl } : undefined,
+            serverTaskMeta: resumeUrl ? { resumeUrl, requestUrl: submitUrl } : { requestUrl: submitUrl },
           }
           onImageCompleted?.(successItem)
           items.push(successItem)
@@ -220,8 +366,9 @@ export const midjourneyAdapter: ProviderAdapter = {
 
         const pendingItem: NormalizedImageItem = {
           seq,
+          requestUrl: submitUrl,
           serverTaskId: taskId,
-          serverTaskMeta: resumeUrl ? { resumeUrl } : undefined,
+          serverTaskMeta: resumeUrl ? { resumeUrl, requestUrl: submitUrl } : { requestUrl: submitUrl },
         }
         onImageCompleted?.(pendingItem)
         items.push(pendingItem)
@@ -231,6 +378,7 @@ export const midjourneyAdapter: ProviderAdapter = {
         }
         const failedItem: NormalizedImageItem = {
           seq,
+          requestUrl: submitUrl,
           error: error instanceof Error ? error.message : 'Image generation failed.',
         }
         onImageCompleted?.(failedItem)

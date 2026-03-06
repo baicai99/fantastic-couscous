@@ -1,7 +1,18 @@
 ﻿import { generateImagesByProvider } from '../../../services/providerGateway'
-import { putImageBlob } from '../../../services/imageAssetStore'
+import { getImageBlob, putImageBlob } from '../../../services/imageAssetStore'
 import { autoSaveImage, isSaveDirectoryReady } from '../../../services/imageSave'
-import type { ApiChannel, ImageRefKind, ImageThreadState, Run, SettingPrimitive, Side, SideMode, SingleSideSettings } from '../../../types/chat'
+import type {
+  ApiChannel,
+  ImageRefKind,
+  ImageThreadState,
+  Run,
+  RunSourceImageRef,
+  SettingPrimitive,
+  Side,
+  SideMode,
+  SingleSideSettings,
+} from '../../../types/chat'
+import type { ProviderSourceImage } from '../../../types/provider'
 import { makeId, toSettingsSnapshot } from '../../../utils/chat'
 import { classifyFailure } from '../domain/conversationDomain'
 
@@ -16,6 +27,7 @@ export interface CreateRunInput {
   modelId: string
   modelName: string
   paramsSnapshot: Record<string, SettingPrimitive>
+  sourceImages?: RunSourceImageRef[]
   channel: ApiChannel | undefined
   retryOfRunId?: string
   retryAttempt?: number
@@ -25,6 +37,7 @@ export interface CreateRunInput {
     runId: string
     seq: number
     status: 'pending' | 'success' | 'failed'
+    requestUrl?: string
     threadState?: ImageThreadState
     fileRef?: string
     thumbRef?: string
@@ -48,6 +61,7 @@ export interface RunExecutorDeps {
 interface ProcessedSuccessImage {
   status: 'success'
   threadState: 'settled'
+  requestUrl?: string
   fileRef?: string
   thumbRef?: string
   fullRef?: string
@@ -61,6 +75,7 @@ interface ProcessedSuccessImage {
 interface ProcessedFailedImage {
   status: 'failed'
   threadState: 'settled'
+  requestUrl?: string
   error: string
   errorCode: ReturnType<typeof classifyFailure>
   serverTaskId?: string
@@ -70,6 +85,7 @@ interface ProcessedFailedImage {
 interface ProcessedPendingImage {
   status: 'pending'
   threadState: 'active'
+  requestUrl?: string
   serverTaskId?: string
   serverTaskMeta?: Record<string, string>
 }
@@ -244,6 +260,7 @@ export function createRunExecutor(deps: RunExecutorDeps = {}) {
         modelId,
         modelName,
         paramsSnapshot,
+        sourceImages = [],
         channel,
         retryOfRunId,
         retryAttempt = 0,
@@ -269,6 +286,7 @@ export function createRunExecutor(deps: RunExecutorDeps = {}) {
         finalPrompt,
         variablesSnapshot,
         paramsSnapshot,
+        sourceImages,
         settingsSnapshot: toSettingsSnapshot(settings),
         retryOfRunId,
         retryAttempt,
@@ -290,6 +308,36 @@ export function createRunExecutor(deps: RunExecutorDeps = {}) {
 
       try {
         const shouldAutoSave = settings.autoSave && isSaveDirectoryReady(settings.saveDirectory)
+        const providerSourceImages: ProviderSourceImage[] = []
+        const missingSourceImageNames: string[] = []
+        for (const sourceImage of sourceImages) {
+          const blob = await getImageBlob(sourceImage.assetKey)
+          if (!blob) {
+            missingSourceImageNames.push(sourceImage.fileName || sourceImage.id)
+            continue
+          }
+          providerSourceImages.push({
+            blob,
+            fileName: sourceImage.fileName,
+            mimeType: sourceImage.mimeType,
+          })
+        }
+
+        if (sourceImages.length > 0 && providerSourceImages.length === 0) {
+          const missingSummary = missingSourceImageNames.length > 0 ? missingSourceImageNames.join('、') : '参考图'
+          return {
+            ...baseRun,
+            images: Array.from({ length: imageCount }, (_, index) => ({
+              id: makeId(),
+              seq: index + 1,
+              status: 'failed',
+              threadState: 'settled',
+              error: `参考图已失效（${missingSummary}），请重新上传后重试。`,
+              errorCode: 'unknown',
+            })),
+          }
+        }
+
         const effectiveParamValues = {
           ...paramsSnapshot,
           responseFormat:
@@ -307,12 +355,14 @@ export function createRunExecutor(deps: RunExecutorDeps = {}) {
             prompt: finalPrompt,
             imageCount,
             paramValues: effectiveParamValues,
+            sourceImages: providerSourceImages,
             signal: options.signal,
           },
           onTaskRegistered: (item) => {
             const pending: ProcessedPendingImage = {
               status: 'pending',
               threadState: 'active',
+              requestUrl: item.requestUrl,
               serverTaskId: item.serverTaskId,
               serverTaskMeta: item.serverTaskMeta,
             }
@@ -321,6 +371,7 @@ export function createRunExecutor(deps: RunExecutorDeps = {}) {
               runId,
               seq: item.seq,
               status: 'pending',
+              requestUrl: item.requestUrl,
               threadState: 'active',
               serverTaskId: item.serverTaskId,
               serverTaskMeta: item.serverTaskMeta,
@@ -335,6 +386,7 @@ export function createRunExecutor(deps: RunExecutorDeps = {}) {
                   const pending: ProcessedPendingImage = {
                     status: 'pending',
                     threadState: 'active',
+                    requestUrl: item.requestUrl,
                     serverTaskId: item.serverTaskId,
                     serverTaskMeta: item.serverTaskMeta,
                   }
@@ -343,6 +395,7 @@ export function createRunExecutor(deps: RunExecutorDeps = {}) {
                     runId,
                     seq: item.seq,
                     status: 'pending',
+                    requestUrl: item.requestUrl,
                     threadState: 'active',
                     serverTaskId: item.serverTaskId,
                     serverTaskMeta: item.serverTaskMeta,
@@ -353,6 +406,7 @@ export function createRunExecutor(deps: RunExecutorDeps = {}) {
                 const failed: ProcessedFailedImage = {
                   status: 'failed',
                   threadState: 'settled',
+                  requestUrl: item.requestUrl,
                   error: errorMessage,
                   errorCode: classifyFailure(errorMessage),
                   serverTaskId: item.serverTaskId,
@@ -363,6 +417,7 @@ export function createRunExecutor(deps: RunExecutorDeps = {}) {
                   runId,
                   seq: item.seq,
                   status: 'failed',
+                  requestUrl: item.requestUrl,
                   threadState: 'settled',
                   serverTaskId: item.serverTaskId,
                   serverTaskMeta: item.serverTaskMeta,
@@ -377,6 +432,7 @@ export function createRunExecutor(deps: RunExecutorDeps = {}) {
                 ...refs,
                 status: 'success',
                 threadState: 'settled',
+                requestUrl: item.requestUrl,
                 serverTaskId: item.serverTaskId,
                 serverTaskMeta: item.serverTaskMeta,
               }
@@ -385,6 +441,7 @@ export function createRunExecutor(deps: RunExecutorDeps = {}) {
                 runId,
                 seq: item.seq,
                 status: 'success',
+                requestUrl: success.requestUrl,
                 threadState: 'settled',
                 fileRef: success.fileRef,
                 thumbRef: success.thumbRef,
@@ -423,6 +480,7 @@ export function createRunExecutor(deps: RunExecutorDeps = {}) {
                 seq,
                 status: 'success' as const,
                 threadState: 'settled' as const,
+                requestUrl: fallbackItem.requestUrl,
                 fileRef: refs.fileRef,
                 thumbRef: refs.thumbRef,
                 fullRef: refs.fullRef,
@@ -440,6 +498,7 @@ export function createRunExecutor(deps: RunExecutorDeps = {}) {
                 seq,
                 status: 'pending' as const,
                 threadState: 'active' as const,
+                requestUrl: fallbackItem.requestUrl,
                 serverTaskId: fallbackItem.serverTaskId,
                 serverTaskMeta: fallbackItem.serverTaskMeta,
               }
@@ -452,6 +511,7 @@ export function createRunExecutor(deps: RunExecutorDeps = {}) {
               seq,
               status: 'failed' as const,
               threadState: 'settled' as const,
+              requestUrl: completed?.requestUrl ?? fallbackItem?.requestUrl,
               serverTaskId: completed?.serverTaskId ?? fallbackItem?.serverTaskId,
               serverTaskMeta: completed?.serverTaskMeta ?? fallbackItem?.serverTaskMeta,
               error: message,
@@ -465,6 +525,7 @@ export function createRunExecutor(deps: RunExecutorDeps = {}) {
               seq,
               status: 'pending' as const,
               threadState: 'active' as const,
+              requestUrl: completed.requestUrl,
               serverTaskId: completed.serverTaskId,
               serverTaskMeta: completed.serverTaskMeta,
             }
@@ -475,6 +536,7 @@ export function createRunExecutor(deps: RunExecutorDeps = {}) {
             seq,
             status: 'success' as const,
             threadState: 'settled' as const,
+            requestUrl: completed.requestUrl,
             fileRef: completed.fileRef,
             thumbRef: completed.thumbRef,
             fullRef: completed.fullRef,

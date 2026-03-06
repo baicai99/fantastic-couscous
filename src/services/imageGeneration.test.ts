@@ -40,6 +40,80 @@ describe('imageGeneration request body', () => {
     expect(body).not.toHaveProperty('aspect_ratio')
   })
 
+  it('uses multipart /images/edits when source images are provided', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: [{ url: 'https://img.example/edit.png' }] }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const sourceBlob = new Blob(['abc'], { type: 'image/png' })
+    await generateImages({
+      channel: {
+        id: 'ch',
+        name: 'c',
+        baseUrl: 'https://api.example.com/v1',
+        apiKey: 'k',
+      },
+      modelId: 'nano-banana',
+      prompt: 'edit',
+      imageCount: 1,
+      paramValues: {
+        responseFormat: 'url',
+        size: '1K',
+      },
+      sourceImages: [{ blob: sourceBlob, fileName: 'input.png', mimeType: 'image/png' }],
+    })
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('https://api.example.com/v1/images/edits')
+    const request = fetchMock.mock.calls[0]?.[1] as { body?: FormData; headers?: Record<string, string> }
+    expect(request.headers?.['Content-Type']).toBeUndefined()
+    expect(request.body).toBeInstanceOf(FormData)
+    const model = request.body?.get('model')
+    const prompt = request.body?.get('prompt')
+    const responseFormat = request.body?.get('response_format')
+    const images = request.body?.getAll('image') ?? []
+    expect(model).toBe('nano-banana')
+    expect(prompt).toBe('edit')
+    expect(responseFormat).toBe('url')
+    expect(images).toHaveLength(1)
+  })
+
+  it('falls back from /images/edits to /image/edits when provider returns endpoint mismatch', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+        text: async () => '{"error":{"message":"Invalid URL (POST /v1/images/edits)"}}',
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ data: [{ url: 'https://img.example/edit-fallback.png' }] }),
+      })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await generateImages({
+      channel: {
+        id: 'ch',
+        name: 'c',
+        baseUrl: 'https://api.example.com/v1',
+        apiKey: 'k',
+      },
+      modelId: 'nano-banana',
+      prompt: 'edit',
+      imageCount: 1,
+      paramValues: {
+        responseFormat: 'url',
+      },
+      sourceImages: [{ blob: new Blob(['1'], { type: 'image/png' }), fileName: 'a.png', mimeType: 'image/png' }],
+    })
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('https://api.example.com/v1/images/edits')
+    expect(fetchMock.mock.calls[1]?.[0]).toBe('https://api.example.com/v1/image/edits')
+    expect(result.items[0]?.src).toBe('https://img.example/edit-fallback.png')
+  })
+
   it('keeps custom pixel size and omits aspect_ratio for fixed-tier model', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
@@ -238,6 +312,166 @@ describe('imageGeneration request body', () => {
       seq: 1,
       serverTaskId: 'task-1',
       serverTaskMeta: { resumeUrl: 'https://api.example.com/tasks/task-1', location: 'https://api.example.com/tasks/task-1' },
+    })
+    expect(result.items[0]?.src).toBeUndefined()
+  })
+
+  it('falls back to /volcv/v1/images/generations when common image endpoints return invalid-url 404', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+        text: async () =>
+          '{"error":{"message":"Invalid URL (POST /v1/images/generations), you may need [POST /volcv/v1/images/generations]"}}',
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+        text: async () =>
+          '{"error":{"message":"Invalid URL (POST /v1/image/generations), you may need [POST /volcv/v1/images/generations]"}}',
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ data: [{ url: 'https://img.example/volcv.png' }] }),
+      })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await generateImages({
+      channel: {
+        id: 'ch',
+        name: 'c',
+        baseUrl: 'https://api.example.com',
+        apiKey: 'k',
+      },
+      modelId: 'gpt-image-1',
+      prompt: 'x',
+      imageCount: 1,
+      paramValues: {
+        responseFormat: 'url',
+      },
+    })
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('https://api.example.com/v1/images/generations')
+    expect(fetchMock.mock.calls[1]?.[0]).toBe('https://api.example.com/v1/image/generations')
+    expect(fetchMock.mock.calls[2]?.[0]).toBe('https://api.example.com/volcv/v1/images/generations')
+    expect(result.items[0]?.src).toBe('https://img.example/volcv.png')
+  })
+
+  it('maps flux model params to flux-compatible request fields', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: [{ url: 'https://img.example/flux.png' }] }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await generateImages({
+      channel: {
+        id: 'ch',
+        name: 'c',
+        baseUrl: 'https://api.gpt.ge',
+        apiKey: 'k',
+      },
+      modelId: 'flux-pro',
+      prompt: 'stone age city',
+      imageCount: 1,
+      paramValues: {
+        size: '3:4',
+        outputFormat: 'jpeg',
+        seed: 12345,
+        promptUpsampling: false,
+        safetyTolerance: 4,
+      },
+    })
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('https://api.gpt.ge/v1/images/generations')
+    const request = fetchMock.mock.calls[0]?.[1] as { body?: string }
+    const body = JSON.parse(request.body ?? '{}') as Record<string, unknown>
+    expect(body.model).toBe('flux-pro')
+    expect(body.prompt).toBe('stone age city')
+    expect(body.size).toBe('3:4')
+    expect(body.output_format).toBe('jpeg')
+    expect(body.seed).toBe(12345)
+    expect(body.prompt_upsampling).toBe(false)
+    expect(body.safety_tolerance).toBe(4)
+    expect(body).not.toHaveProperty('response_format')
+  })
+
+  it('maps kling model params to kling-compatible request fields', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: [{ url: 'https://img.example/kling.png' }] }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await generateImages({
+      channel: {
+        id: 'ch',
+        name: 'c',
+        baseUrl: 'https://api.example.com',
+        apiKey: 'k',
+      },
+      modelId: 'kling-v1',
+      prompt: 'a dog',
+      imageCount: 1,
+      paramValues: {
+        aspectRatio: '9:16',
+        negativePrompt: 'blurry',
+        imageFidelity: 0.75,
+        callbackUrl: 'https://webhook.example.com/callback',
+        modelName: 'kling-v2',
+      },
+    })
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('https://api.example.com/kling/v1/images/generations')
+    const request = fetchMock.mock.calls[0]?.[1] as { body?: string }
+    const body = JSON.parse(request.body ?? '{}') as Record<string, unknown>
+    expect(body.prompt).toBe('a dog')
+    expect(body.model_name).toBe('kling-v2')
+    expect(body.n).toBe(1)
+    expect(body.aspect_ratio).toBe('9:16')
+    expect(body.negative_prompt).toBe('blurry')
+    expect(body.image_fidelity).toBe(0.75)
+    expect(body.callback_url).toBe('https://webhook.example.com/callback')
+    expect(body).not.toHaveProperty('model')
+    expect(body).not.toHaveProperty('response_format')
+  })
+
+  it('captures kling task registration from data object payload', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      json: async () => ({
+        code: 0,
+        message: 'ok',
+        request_id: 'req-1',
+        data: {
+          task_id: 'kling-task-1',
+          task_status: 'submitted',
+          created_at: 1,
+          updated_at: 1,
+        },
+      }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await generateImages({
+      channel: {
+        id: 'ch',
+        name: 'c',
+        baseUrl: 'https://api.example.com',
+        apiKey: 'k',
+      },
+      modelId: 'kling-v1',
+      prompt: 'x',
+      imageCount: 1,
+      paramValues: { aspectRatio: '1:1' },
+    })
+
+    expect(result.items[0]).toMatchObject({
+      seq: 1,
+      serverTaskId: 'kling-task-1',
     })
     expect(result.items[0]?.src).toBeUndefined()
   })
