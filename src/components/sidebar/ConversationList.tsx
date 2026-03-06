@@ -1,12 +1,14 @@
-import { DeleteOutlined, HistoryOutlined, MessageOutlined, PlusOutlined } from '@ant-design/icons'
+﻿import { DeleteOutlined, HistoryOutlined, MessageOutlined, PlusOutlined } from '@ant-design/icons'
 import { Button, Menu, Popconfirm, Tooltip } from 'antd'
 import type { MenuProps } from 'antd'
+import type { PanelMode } from '../../hooks/usePersistentPanelMode'
 import type { ConversationSummary } from '../../types/chat'
 
 interface ConversationListProps {
   summaries: ConversationSummary[]
   activeId: string | null
-  isCollapsed: boolean
+  isCollapsed?: boolean
+  viewMode?: PanelMode
   onToggleCollapse: () => void
   onCreateConversation: () => void
   onClearAllConversations: () => void
@@ -19,12 +21,16 @@ export function ConversationList(props: ConversationListProps) {
     summaries,
     activeId,
     isCollapsed,
+    viewMode,
     onToggleCollapse,
     onCreateConversation,
     onClearAllConversations,
     onDeleteConversation,
     onSwitchConversation,
   } = props
+
+  const mode: PanelMode = viewMode ?? (isCollapsed ? 'collapsed' : 'expanded')
+  const isCollapsedMode = mode === 'collapsed'
 
   const items: MenuProps['items'] = summaries.map((item) => ({
     key: item.id,
@@ -59,67 +65,91 @@ export function ConversationList(props: ConversationListProps) {
     ),
   }))
 
+  const actions = [
+    {
+      key: 'toggle',
+      title: isCollapsedMode ? '展开左侧导航' : '收起左侧导航',
+      ariaLabel: isCollapsedMode ? 'expand-left-sidebar' : 'collapse-left-sidebar',
+      icon: <HistoryOutlined />,
+      onClick: onToggleCollapse,
+      withConfirm: false,
+    },
+    {
+      key: 'create',
+      title: '新建对话',
+      ariaLabel: 'create-conversation',
+      icon: <PlusOutlined />,
+      onClick: onCreateConversation,
+      withConfirm: false,
+    },
+    {
+      key: 'clear',
+      title: '清空记录',
+      ariaLabel: 'clear-conversations',
+      icon: <DeleteOutlined />,
+      onClick: onClearAllConversations,
+      withConfirm: true,
+    },
+  ] as const
+
+  const actionClassName = isCollapsedMode ? 'conversation-collapsed-action-btn' : 'conversation-top-action-btn'
+  const actionContainerClassName = isCollapsedMode ? 'conversation-menu-top-collapsed' : 'conversation-menu-top'
+
+  const renderActionButton = (action: (typeof actions)[number]) => {
+    const baseButton = (
+      <Button
+        icon={action.icon}
+        aria-label={action.ariaLabel}
+        className={actionClassName}
+        onClick={action.withConfirm ? undefined : action.onClick}
+      >
+        {!isCollapsedMode ? <span className="conversation-top-action-label">{action.title}</span> : null}
+      </Button>
+    )
+
+    const decoratedButton = isCollapsedMode ? (
+      <Tooltip title={action.title} placement="right">
+        {baseButton}
+      </Tooltip>
+    ) : (
+      baseButton
+    )
+
+    if (!action.withConfirm) {
+      return decoratedButton
+    }
+
+    return (
+      <Popconfirm
+        title="确认清空所有对话？"
+        description="此操作不可恢复。"
+        okText="清空"
+        okButtonProps={{ danger: true }}
+        cancelText="取消"
+        onConfirm={action.onClick}
+      >
+        {decoratedButton}
+      </Popconfirm>
+    )
+  }
+
   return (
-    <div className="conversation-shell">
-      <div className={`conversation-panel conversation-panel-expanded ${isCollapsed ? 'is-inactive' : 'is-active'}`}>
-        <div className="panel-scroll conversation-menu-layout">
-          <div className="conversation-menu-top">
-            <Button icon={<HistoryOutlined />} onClick={onToggleCollapse} className="conversation-top-action-btn">
-              <span className="conversation-top-action-label">收起左侧导航</span>
-            </Button>
-            <Button onClick={onCreateConversation} className="conversation-top-action-btn" icon={<PlusOutlined />}>
-              <span className="conversation-top-action-label">新建对话</span>
-            </Button>
-            <Popconfirm
-              title="确认清空所有对话？"
-              description="此操作不可恢复。"
-              okText="清空"
-              okButtonProps={{ danger: true }}
-              cancelText="取消"
-              onConfirm={onClearAllConversations}
-            >
-              <Button icon={<DeleteOutlined />} aria-label="清空记录" className="conversation-top-action-btn">
-                <span className="conversation-top-action-label">清空记录</span>
-              </Button>
-            </Popconfirm>
-          </div>
-
-          {summaries.length > 0 ? (
-            <Menu
-              mode="inline"
-              selectedKeys={activeId ? [activeId] : []}
-              items={items}
-              className="conversation-menu"
-              onClick={(event) => onSwitchConversation(String(event.key))}
-            />
-          ) : null}
-        </div>
+    <div className={`panel-scroll conversation-menu-layout ${isCollapsedMode ? 'is-collapsed' : 'is-expanded'}`}>
+      <div className={actionContainerClassName}>
+        {actions.map((action) => (
+          <div key={action.key}>{renderActionButton(action)}</div>
+        ))}
       </div>
 
-      <div className={`conversation-panel conversation-panel-collapsed ${isCollapsed ? 'is-active' : 'is-inactive'}`}>
-        <div className="panel-scroll conversation-menu-layout-collapsed">
-          <div className="conversation-menu-top-collapsed">
-            <Tooltip title="展开左侧导航" placement="right">
-              <Button icon={<HistoryOutlined />} onClick={onToggleCollapse} className="conversation-collapsed-action-btn" />
-            </Tooltip>
-            <Tooltip title="新建对话" placement="right">
-              <Button onClick={onCreateConversation} className="conversation-collapsed-action-btn" icon={<PlusOutlined />} />
-            </Tooltip>
-            <Popconfirm
-              title="确认清空所有对话？"
-              description="此操作不可恢复。"
-              okText="清空"
-              okButtonProps={{ danger: true }}
-              cancelText="取消"
-              onConfirm={onClearAllConversations}
-            >
-              <Tooltip title="清空记录" placement="right">
-                <Button icon={<DeleteOutlined />} aria-label="清空记录" className="conversation-collapsed-action-btn" />
-              </Tooltip>
-            </Popconfirm>
-          </div>
-        </div>
-      </div>
+      {!isCollapsedMode && summaries.length > 0 ? (
+        <Menu
+          mode="inline"
+          selectedKeys={activeId ? [activeId] : []}
+          items={items}
+          className="conversation-menu"
+          onClick={(event) => onSwitchConversation(String(event.key))}
+        />
+      ) : null}
     </div>
   )
 }

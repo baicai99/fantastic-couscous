@@ -23,52 +23,38 @@
   border-left: 1px solid #f0f0f0;
 }
 
-.settings-sider.ant-layout-sider {
+.sidebar-shell.ant-layout-sider {
   position: relative;
   overflow: hidden;
   transition: width 0.18s ease, min-width 0.18s ease, max-width 0.18s ease !important;
 }
 
-.settings-sider.ant-layout-sider .ant-layout-sider-children {
+.sidebar-shell.ant-layout-sider .ant-layout-sider-children {
   overflow: hidden;
 }
 
-.settings-sider-inner {
+.sidebar-shell-inner {
   position: relative;
   width: 100%;
   height: 100%;
 }
 
-.settings-expanded-layer,
-.settings-mini-layer {
+.sidebar-shell-layer {
   position: absolute;
   inset: 0;
   transition: opacity 0.18s ease;
-}
-
-.settings-expanded-layer {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.settings-mini-layer {
-  display: flex;
-  align-items: flex-start;
-  justify-content: flex-end;
-  padding-top: 16px;
-  padding-right: 8px;
   opacity: 0;
   pointer-events: none;
 }
 
-.settings-sider.is-mini .settings-expanded-layer {
-  opacity: 0;
-  pointer-events: none;
-}
-
-.settings-sider.is-mini .settings-mini-layer {
+.sidebar-shell-layer.is-active {
   opacity: 1;
   pointer-events: auto;
+}
+
+.sidebar-shell-layer.is-inactive {
+  opacity: 0;
+  pointer-events: none;
 }
 
 .panel-scroll {
@@ -526,30 +512,11 @@
   min-width: 0;
   padding: 16px 8px;
   box-sizing: border-box;
-}
-
-.conversation-shell {
-  position: relative;
   height: 100%;
-  overflow: hidden;
 }
 
-.conversation-panel {
-  position: absolute;
-  inset: 0;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.16s ease;
-}
-
-.conversation-panel.is-active {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.conversation-panel.is-inactive {
-  opacity: 0;
-  pointer-events: none;
+.conversation-menu-layout.is-collapsed {
+  padding: 16px 8px;
 }
 
 .conversation-menu-top {
@@ -706,17 +673,6 @@
   background: rgba(255, 255, 255, 0.6);
 }
 
-.conversation-menu-layout-collapsed {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  overflow: hidden;
-  width: 100%;
-  min-width: 0;
-  padding: 16px 8px;
-  box-sizing: border-box;
-}
-
 .conversation-menu-top-collapsed {
   display: flex;
   flex-direction: column;
@@ -761,6 +717,13 @@
 .conversation-collapsed-action-btn.ant-btn::after,
 .conversation-collapsed-action-btn.ant-btn.ant-wave-target::after {
   display: none !important;
+}
+
+.settings-mini-content {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  padding-right: 8px;
 }
 
 .message-card {

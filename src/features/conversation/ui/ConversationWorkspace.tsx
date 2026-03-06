@@ -7,33 +7,28 @@ import { MessageList } from '../../../components/chat/MessageList'
 import { ImagePreviewModal } from '../../../components/preview/ImagePreviewModal'
 import { SettingsPanel } from '../../../components/settings/SettingsPanel'
 import { ConversationList } from '../../../components/sidebar/ConversationList'
+import { SidebarShell } from '../../../components/sidebar/SidebarShell'
 import { useImagePreview } from '../../../hooks/useImagePreview'
 import { useDebouncedCallback } from '../../../hooks/useDebouncedCallback'
+import { usePersistentPanelMode } from '../../../hooks/usePersistentPanelMode'
 import { useConversationController } from './useConversationController'
 
-const { Sider, Content } = Layout
+const { Content } = Layout
 const { Text, Title } = Typography
+const LEFT_PANEL_COLLAPSED_STORAGE_KEY = 'm3:left-panel-collapsed'
 const RIGHT_PANEL_COLLAPSED_STORAGE_KEY = 'm3:right-panel-collapsed'
 const SETTINGS_SIDER_EXPANDED_WIDTH = 320
 const SETTINGS_SIDER_MINI_WIDTH = 56
 
 export function ConversationWorkspace() {
-  const [isLeftPanelCollapsed, setIsLeftPanelCollapsed] = useState(false)
-  const [isMiniMode, setIsMiniMode] = useState<boolean>(() => {
-    try {
-      return localStorage.getItem(RIGHT_PANEL_COLLAPSED_STORAGE_KEY) === '1'
-    } catch {
-      return false
-    }
+  const { mode: leftPanelMode, setMode: setLeftPanelMode, toggleMode: toggleLeftPanelMode } = usePersistentPanelMode({
+    storageKey: LEFT_PANEL_COLLAPSED_STORAGE_KEY,
+    defaultMode: 'expanded',
   })
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(RIGHT_PANEL_COLLAPSED_STORAGE_KEY, isMiniMode ? '1' : '0')
-    } catch {
-      // Ignore storage errors in restricted environments.
-    }
-  }, [isMiniMode])
+  const { mode: rightPanelMode, setMode: setRightPanelMode, toggleMode: toggleRightPanelMode } = usePersistentPanelMode({
+    storageKey: RIGHT_PANEL_COLLAPSED_STORAGE_KEY,
+    defaultMode: 'expanded',
+  })
   const composerLayerRef = useRef<HTMLDivElement | null>(null)
   const headerLayerRef = useRef<HTMLDivElement | null>(null)
   const [composerInset, setComposerInset] = useState(170)
@@ -213,32 +208,44 @@ export function ConversationWorkspace() {
   }, [debouncedSetHeaderInset])
 
   const handleTopSettingsClick = () => {
-    setIsMiniMode((prev) => !prev)
+    toggleRightPanelMode()
   }
 
   return (
     <Layout className="app-shell">
-      <Sider
-        width={280}
+      <SidebarShell
+        side="left"
+        mode={leftPanelMode}
+        expandedWidth={280}
         collapsedWidth={52}
-        collapsible
-        trigger={null}
-        collapsed={isLeftPanelCollapsed}
+        onModeChange={setLeftPanelMode}
         breakpoint="lg"
-        onBreakpoint={(broken) => setIsLeftPanelCollapsed(broken)}
-        className="panel panel-left"
-      >
-        <ConversationList
-          summaries={summaries}
-          activeId={activeId}
-          isCollapsed={isLeftPanelCollapsed}
-          onToggleCollapse={() => setIsLeftPanelCollapsed((prev) => !prev)}
-          onCreateConversation={createNewConversation}
-          onClearAllConversations={clearAllConversations}
-          onDeleteConversation={removeConversation}
-          onSwitchConversation={switchConversation}
-        />
-      </Sider>
+        autoModeByBreakpoint
+        expandedContent={
+          <ConversationList
+            summaries={summaries}
+            activeId={activeId}
+            viewMode="expanded"
+            onToggleCollapse={toggleLeftPanelMode}
+            onCreateConversation={createNewConversation}
+            onClearAllConversations={clearAllConversations}
+            onDeleteConversation={removeConversation}
+            onSwitchConversation={switchConversation}
+          />
+        }
+        collapsedContent={
+          <ConversationList
+            summaries={summaries}
+            activeId={activeId}
+            viewMode="collapsed"
+            onToggleCollapse={toggleLeftPanelMode}
+            onCreateConversation={createNewConversation}
+            onClearAllConversations={clearAllConversations}
+            onDeleteConversation={removeConversation}
+            onSwitchConversation={switchConversation}
+          />
+        }
+      />
 
       <Layout className="panel-center">
         <div className="chat-stage" style={chatStageStyle}>
@@ -339,36 +346,39 @@ export function ConversationWorkspace() {
         </div>
       </Layout>
 
-      <Sider
-        width={isMiniMode ? SETTINGS_SIDER_MINI_WIDTH : SETTINGS_SIDER_EXPANDED_WIDTH}
-        className={`panel panel-right settings-sider ${isMiniMode ? 'is-mini' : 'is-expanded'}`}
-      >
-        <div className="settings-sider-inner">
-          <div className="settings-expanded-layer">
-            <SettingsPanel
-              sideMode={activeSideMode}
-              sideCount={activeSideCount}
-              sideIds={activeSides.filter((side) => side !== 'single')}
-              isSideConfigLocked={isSideConfigLocked}
-              settingsBySide={activeSettingsBySide}
-              models={modelCatalog.models}
-              channels={channels}
-              showAdvancedVariables={showAdvancedVariables}
-              dynamicPromptEnabled={dynamicPromptEnabled}
-              runConcurrency={runConcurrency}
-              onSideModeChange={updateSideMode}
-              onSideCountChange={updateSideCount}
-              onSettingsChange={updateSideSettings}
-              onModelChange={setSideModel}
-              onModelParamChange={setSideModelParam}
-              onChannelsChange={setChannels}
-              onShowAdvancedVariablesChange={setShowAdvancedVariables}
-              onDynamicPromptEnabledChange={setDynamicPromptEnabled}
-              onRunConcurrencyChange={setRunConcurrency}
-              onTogglePanelMode={handleTopSettingsClick}
-            />
-          </div>
-          <div className="settings-mini-layer">
+      <SidebarShell
+        side="right"
+        mode={rightPanelMode}
+        expandedWidth={SETTINGS_SIDER_EXPANDED_WIDTH}
+        collapsedWidth={SETTINGS_SIDER_MINI_WIDTH}
+        onModeChange={setRightPanelMode}
+        className="settings-sider"
+        expandedContent={
+          <SettingsPanel
+            sideMode={activeSideMode}
+            sideCount={activeSideCount}
+            sideIds={activeSides.filter((side) => side !== 'single')}
+            isSideConfigLocked={isSideConfigLocked}
+            settingsBySide={activeSettingsBySide}
+            models={modelCatalog.models}
+            channels={channels}
+            showAdvancedVariables={showAdvancedVariables}
+            dynamicPromptEnabled={dynamicPromptEnabled}
+            runConcurrency={runConcurrency}
+            onSideModeChange={updateSideMode}
+            onSideCountChange={updateSideCount}
+            onSettingsChange={updateSideSettings}
+            onModelChange={setSideModel}
+            onModelParamChange={setSideModelParam}
+            onChannelsChange={setChannels}
+            onShowAdvancedVariablesChange={setShowAdvancedVariables}
+            onDynamicPromptEnabledChange={setDynamicPromptEnabled}
+            onRunConcurrencyChange={setRunConcurrency}
+            onTogglePanelMode={handleTopSettingsClick}
+          />
+        }
+        collapsedContent={
+          <div className="panel-scroll settings-mini-content">
             <Button
               className="settings-header-btn"
               type="text"
@@ -378,8 +388,8 @@ export function ConversationWorkspace() {
               aria-label="Settings"
             />
           </div>
-        </div>
-      </Sider>
+        }
+      />
 
       <ImagePreviewModal
         isPreviewOpen={isPreviewOpen}
