@@ -19,7 +19,8 @@ const { Text } = Typography
 type AdvancedTabKey = 'table' | 'bulk'
 type SyncDirection = 'bulk-to-table' | 'table-to-bulk'
 type QuickPickerRange = { start: number; end: number }
-type PickerMode = 'quick-actions' | 'models'
+type PickerMode = 'quick-actions' | 'models' | 'commands'
+type DashCommandOption = { key: string; insertText: string; label: string }
 
 interface SyncPreviewState {
   direction: SyncDirection
@@ -60,6 +61,11 @@ interface ComposerProps {
 const DYNAMIC_PROMPT_QUICK_ACTION = '动态提示词'
 const COMPARISON_MODE_QUICK_ACTION = '对照模式'
 const QUICK_PICKER_ITEMS = [DYNAMIC_PROMPT_QUICK_ACTION, COMPARISON_MODE_QUICK_ACTION]
+const DASH_COMMAND_OPTIONS: DashCommandOption[] = [
+  { key: 'ar', insertText: '--ar ', label: '--ar ' },
+  { key: 'size', insertText: '--size ', label: '--size ' },
+  { key: 'wh', insertText: '--wh ', label: '--wh ' },
+]
 
 function renderResolvedVars(variables: Record<string, string>) {
   const entries = Object.entries(variables)
@@ -154,6 +160,30 @@ function findModelShortcutAtLineStart(value: string, cursor: number): (QuickPick
   }
 }
 
+function normalizeDashCommandQuery(value: string): string {
+  return value.trim().toLowerCase()
+}
+
+function findDashCommandAtLineStart(value: string, cursor: number): (QuickPickerRange & { query: string }) | null {
+  if (cursor <= 0) {
+    return null
+  }
+
+  const lineStart = value.lastIndexOf('\n', cursor - 1) + 1
+  const lineSlice = value.slice(lineStart, cursor)
+  const match = lineSlice.match(/^(\s*)--([^\s]*)$/)
+  if (!match) {
+    return null
+  }
+
+  const start = lineStart + (match[1]?.length ?? 0)
+  return {
+    start,
+    end: cursor,
+    query: match[2] ?? '',
+  }
+}
+
 function getLongestDraftLine(draft: string): string {
   const lines = draft.split('\n')
   return lines.reduce((longest, line) => (line.length > longest.length ? line : longest), '')
@@ -201,6 +231,7 @@ export function Composer(props: ComposerProps) {
   const [quickPickerActiveIndex, setQuickPickerActiveIndex] = useState(0)
   const [pickerMode, setPickerMode] = useState<PickerMode>('quick-actions')
   const [modelShortcutQuery, setModelShortcutQuery] = useState('')
+  const [dashCommandQuery, setDashCommandQuery] = useState('')
   const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null)
   const quickPickerRootRef = useRef<HTMLDivElement | null>(null)
   const preferredWidthMeasureRef = useRef<HTMLSpanElement | null>(null)
@@ -211,6 +242,7 @@ export function Composer(props: ComposerProps) {
   ]
   const isComparisonModeLocked = isSideConfigLocked && sideMode === 'multi'
   const normalizedModelShortcutQuery = normalizeModelShortcutQuery(modelShortcutQuery)
+  const normalizedDashCommandQuery = normalizeDashCommandQuery(dashCommandQuery)
   const longestDraftLine = useMemo(() => getLongestDraftLine(draft), [draft])
   const matchedModels = useMemo(() => {
     if (normalizedModelShortcutQuery.length === 0) {
@@ -228,6 +260,12 @@ export function Composer(props: ComposerProps) {
       })
       .map(({ model }) => model)
   }, [models, normalizedModelShortcutQuery])
+  const matchedDashCommands = useMemo(() => {
+    if (normalizedDashCommandQuery.length === 0) {
+      return DASH_COMMAND_OPTIONS
+    }
+    return DASH_COMMAND_OPTIONS.filter((item) => item.key.includes(normalizedDashCommandQuery))
+  }, [normalizedDashCommandQuery])
 
   useLayoutEffect(() => {
     if (!onPreferredWidthChange) {
@@ -541,6 +579,7 @@ export function Composer(props: ComposerProps) {
     setQuickPickerActiveIndex(0)
     setPickerMode('quick-actions')
     setModelShortcutQuery('')
+    setDashCommandQuery('')
   }
 
   const applyModelShortcutWithRange = (model: ModelSpec, range: QuickPickerRange, baseDraft: string) => {
@@ -570,6 +609,33 @@ export function Composer(props: ComposerProps) {
     }
     const baseDraft = composerTextareaRef.current?.value ?? draft
     applyModelShortcutWithRange(model, quickPickerRange, baseDraft)
+  }
+
+  const applyDashCommandWithRange = (command: DashCommandOption, range: QuickPickerRange, baseDraft: string) => {
+    const prefix = baseDraft.slice(0, range.start)
+    const suffix = baseDraft.slice(range.end)
+    const separator = suffix.length === 0 || /^\s/.test(suffix) || /\s$/.test(command.insertText) ? '' : ' '
+    const nextDraft = `${prefix}${command.insertText}${separator}${suffix}`
+    const nextCursor = prefix.length + command.insertText.length + separator.length
+    onDraftChange(nextDraft)
+    closeQuickPicker()
+
+    window.requestAnimationFrame(() => {
+      const input = composerTextareaRef.current
+      if (!input) {
+        return
+      }
+      input.focus()
+      input.setSelectionRange(nextCursor, nextCursor)
+    })
+  }
+
+  const applyDashCommandItem = (command: DashCommandOption) => {
+    if (!quickPickerRange) {
+      return
+    }
+    const baseDraft = composerTextareaRef.current?.value ?? draft
+    applyDashCommandWithRange(command, quickPickerRange, baseDraft)
   }
 
   const openConfirm = (input: { title: string; content: string; okText: string }): Promise<boolean> =>
@@ -726,6 +792,16 @@ export function Composer(props: ComposerProps) {
                     return
                   }
 
+                  const dashCommand = findDashCommandAtLineStart(nextText, cursor)
+                  if (dashCommand) {
+                    setQuickPickerRange({ start: dashCommand.start, end: dashCommand.end })
+                    setQuickPickerActiveIndex(0)
+                    setPickerMode('commands')
+                    setDashCommandQuery(dashCommand.query)
+                    setIsQuickPickerOpen(true)
+                    return
+                  }
+
                   const triggerIndex = cursor - 1
                   if (isQuickPickerTriggerAtLineStart(nextText, triggerIndex)) {
                     setQuickPickerRange({ start: triggerIndex, end: triggerIndex + 1 })
@@ -768,7 +844,12 @@ export function Composer(props: ComposerProps) {
                   }
                   if (event.key === 'ArrowDown') {
                     event.preventDefault()
-                    const length = pickerMode === 'models' ? matchedModels.length : QUICK_PICKER_ITEMS.length
+                    const length =
+                      pickerMode === 'models'
+                        ? matchedModels.length
+                        : pickerMode === 'commands'
+                          ? matchedDashCommands.length
+                          : QUICK_PICKER_ITEMS.length
                     if (length > 0) {
                       setQuickPickerActiveIndex((prev) => (prev + 1) % length)
                     }
@@ -776,7 +857,12 @@ export function Composer(props: ComposerProps) {
                   }
                   if (event.key === 'ArrowUp') {
                     event.preventDefault()
-                    const length = pickerMode === 'models' ? matchedModels.length : QUICK_PICKER_ITEMS.length
+                    const length =
+                      pickerMode === 'models'
+                        ? matchedModels.length
+                        : pickerMode === 'commands'
+                          ? matchedDashCommands.length
+                          : QUICK_PICKER_ITEMS.length
                     if (length > 0) {
                       setQuickPickerActiveIndex((prev) => (prev - 1 + length) % length)
                     }
@@ -797,6 +883,14 @@ export function Composer(props: ComposerProps) {
                     const selected = matchedModels[quickPickerActiveIndex] ?? matchedModels[0]
                     if (selected) {
                       applyModelShortcutItem(selected)
+                    }
+                    return
+                  }
+                  if (isQuickPickerOpen && pickerMode === 'commands') {
+                    event.preventDefault()
+                    const selected = matchedDashCommands[quickPickerActiveIndex] ?? matchedDashCommands[0]
+                    if (selected) {
+                      applyDashCommandItem(selected)
                     }
                     return
                   }
@@ -824,6 +918,21 @@ export function Composer(props: ComposerProps) {
                         </button>
                       ))
                       : <div className="composer-quick-picker-empty">未找到匹配模型</div>
+                    : pickerMode === 'commands'
+                      ? matchedDashCommands.length > 0
+                        ? matchedDashCommands.map((item, index) => (
+                          <button
+                            key={item.key}
+                            type="button"
+                            className={`composer-quick-picker-item ${index === quickPickerActiveIndex ? 'is-active' : ''}`}
+                            onMouseEnter={() => setQuickPickerActiveIndex(index)}
+                            onMouseDown={(event) => event.preventDefault()}
+                            onClick={() => applyDashCommandItem(item)}
+                          >
+                            {item.label}
+                          </button>
+                        ))
+                        : <div className="composer-quick-picker-empty">未找到匹配命令</div>
                     : QUICK_PICKER_ITEMS.map((item, index) => (
                       <button
                         key={item}

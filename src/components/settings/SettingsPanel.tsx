@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { ReloadOutlined, SettingOutlined } from '@ant-design/icons'
 import {
   Alert,
   Button,
+  Checkbox,
   Collapse,
   Drawer,
   Form,
@@ -22,6 +23,7 @@ import {
 } from 'antd'
 import type {
   ApiChannel,
+  ImportAction,
   ModelParamSpec,
   ModelSpec,
   SettingPrimitive,
@@ -30,6 +32,12 @@ import type {
   SingleSideSettings,
 } from '../../types/chat'
 import { fetchChannelModels } from '../../services/channelModels'
+import {
+  applyChannelImport,
+  buildChannelImportPreview,
+  parseApiChannelsFromText,
+  type ChannelImportPreviewItem,
+} from '../../services/channelImport'
 import { getAspectRatioOptions, getComputedPresetResolution, getSizeTierOptions, normalizeSizeTier } from '../../services/imageSizing'
 import { isSaveDirectoryReady, pickSaveDirectory } from '../../services/imageSave'
 import { makeId } from '../../utils/chat'
@@ -46,6 +54,8 @@ type ChannelFormValues = {
   baseUrl: string
   apiKey: string
 }
+
+const CHANNEL_IMPORT_DEBOUNCE_MS = 500
 
 interface SettingsPanelProps {
   sideMode: SideMode
@@ -68,6 +78,7 @@ interface SettingsPanelProps {
   onDynamicPromptEnabledChange: (enabled: boolean) => void
   onRunConcurrencyChange: (value: number) => void
   onTogglePanelMode: () => void
+  openAddChannelModalSignal?: number
 }
 
 type SettingsPanelCollapseState = {
@@ -250,6 +261,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
     onDynamicPromptEnabledChange,
     onRunConcurrencyChange,
     onTogglePanelMode,
+    openAddChannelModalSignal,
   } = props
 
   const [activeSideTab, setActiveSideTab] = useState<Side>(sideIds[0] ?? 'single')
@@ -262,6 +274,11 @@ export function SettingsPanel(props: SettingsPanelProps) {
   const [channelForm] = Form.useForm<ChannelFormValues>()
   const [isSavingChannel, setIsSavingChannel] = useState(false)
   const [isRefreshingChannels, setIsRefreshingChannels] = useState(false)
+  const [channelImportText, setChannelImportText] = useState('')
+  const [channelImportItems, setChannelImportItems] = useState<ChannelImportPreviewItem[]>([])
+  const [channelImportDetected, setChannelImportDetected] = useState(0)
+  const [channelImportError, setChannelImportError] = useState('')
+  const [isApplyingChannelImport, setIsApplyingChannelImport] = useState(false)
   const [messageApi, messageContextHolder] = message.useMessage()
   const [topCollapseKeys, setTopCollapseKeys] = useState<string[]>(() => {
     try {
@@ -323,6 +340,19 @@ export function SettingsPanel(props: SettingsPanelProps) {
       return changed ? next : prev
     })
   }, [sideIds, sideMode])
+
+  useEffect(() => {
+    if (!openAddChannelModalSignal) {
+      return
+    }
+    setEditingChannelId(null)
+    channelForm.resetFields()
+    setChannelImportText('')
+    setChannelImportItems([])
+    setChannelImportDetected(0)
+    setChannelImportError('')
+    setIsModalOpen(true)
+  }, [channelForm, openAddChannelModalSignal])
 
   const availableModelTags = useMemo(() => {
     const tags = new Set<string>(FIXED_VENDOR_TAGS)
@@ -396,6 +426,125 @@ export function SettingsPanel(props: SettingsPanelProps) {
       setIsRefreshingChannels(false)
     }
   }
+
+  const parseChannelImportText = useCallback((text: string) => {
+    const parsed = parseApiChannelsFromText(text)
+    setChannelImportDetected(parsed.totalDetected)
+    setChannelImportError('')
+    const previewItems = buildChannelImportPreview(parsed.candidates, channels)
+    setChannelImportItems(previewItems)
+    const firstValid = previewItems.find((item) => !item.invalidReason)
+    if (firstValid) {
+      channelForm.setFieldsValue({
+        name: firstValid.name,
+        baseUrl: firstValid.baseUrl,
+        apiKey: firstValid.apiKey,
+      })
+    }
+  }, [channelForm, channels])
+
+  const clearChannelImportState = useCallback(() => {
+    setChannelImportText('')
+    setChannelImportItems([])
+    setChannelImportDetected(0)
+    setChannelImportError('')
+  }, [])
+
+  useEffect(() => {
+    if (!isModalOpen) {
+      return
+    }
+
+    const timer = window.setTimeout(() => {
+      if (!channelImportText.trim()) {
+        setChannelImportItems([])
+        setChannelImportDetected(0)
+        setChannelImportError('')
+        return
+      }
+      parseChannelImportText(channelImportText)
+    }, CHANNEL_IMPORT_DEBOUNCE_MS)
+
+    return () => window.clearTimeout(timer)
+  }, [channelImportText, isModalOpen, parseChannelImportText])
+
+  const updateImportItem = useCallback((itemId: string, patch: Partial<ChannelImportPreviewItem>) => {
+    setChannelImportItems((prev) => prev.map((item) => (item.id === itemId ? { ...item, ...patch } : item)))
+  }, [])
+
+  const applyParsedChannels = async () => {
+    const selectedItems = channelImportItems.filter((item) => item.selected && !item.invalidReason && item.action !== 'skip')
+    if (selectedItems.length === 0) {
+      messageApi.info('请选择至少一条可导入渠道')
+      return
+    }
+
+    setIsApplyingChannelImport(true)
+    setChannelImportError('')
+    try {
+      const modelFetchResult = await Promise.all(
+        selectedItems.map(async (item) => {
+          try {
+            const modelIds = await fetchChannelModels({ baseUrl: item.baseUrl, apiKey: item.apiKey })
+            if (modelIds.length === 0) {
+              throw new Error('上游返回空模型列表')
+            }
+            return { id: item.id, modelIds }
+          } catch (error) {
+            const reason = error instanceof Error ? error.message : '未知错误'
+            return { id: item.id, modelIds: null, reason }
+          }
+        }),
+      )
+
+      const failedMap = new Map(
+        modelFetchResult.filter((item) => !Array.isArray(item.modelIds)).map((item) => [item.id, item.reason ?? '未知错误']),
+      )
+      const modelsByCandidateId: Record<string, string[]> = {}
+      for (const result of modelFetchResult) {
+        if (Array.isArray(result.modelIds)) {
+          modelsByCandidateId[result.id] = result.modelIds
+        }
+      }
+
+      const effectiveItems = channelImportItems.map((item) => {
+        if (failedMap.has(item.id)) {
+          return { ...item, selected: false, action: 'skip' as ImportAction }
+        }
+        return item
+      })
+
+      const applied = applyChannelImport(channels, effectiveItems, modelsByCandidateId)
+      onChannelsChange(applied.channels)
+
+      const failedCount = failedMap.size
+      const summary = `新增 ${applied.created} / 覆盖 ${applied.overwritten} / 跳过 ${applied.skipped} / 失败 ${failedCount}`
+      if (failedCount > 0) {
+        const failedNames = selectedItems
+          .filter((item) => failedMap.has(item.id))
+          .slice(0, 2)
+          .map((item) => item.name)
+          .join('、')
+        const suffix = failedCount > 2 ? '等' : ''
+        messageApi.warning(`渠道导入完成：${summary}（失败：${failedNames}${suffix}）`)
+      } else {
+        messageApi.success(`渠道导入完成：${summary}`)
+      }
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : '未知错误'
+      setChannelImportError(reason)
+      messageApi.error(reason)
+    } finally {
+      setIsApplyingChannelImport(false)
+    }
+  }
+
+  const importSummary = useMemo(() => {
+    const invalid = channelImportItems.filter((item) => item.status === 'invalid').length
+    const duplicated = channelImportItems.filter((item) => item.status === 'duplicate').length
+    const selected = channelImportItems.filter((item) => item.selected && item.action !== 'skip' && !item.invalidReason).length
+    return { invalid, duplicated, selected, total: channelImportItems.length }
+  }, [channelImportItems])
 
   const renderSettingForm = (side: Side) => {
     const settings = settingsBySide[side]
@@ -500,6 +649,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
             children: (
               <Space orientation="vertical" className="full-width" size={10}>
                 <Select
+                  className="full-width"
                   placeholder="选择生成渠道"
                   value={settings.channelId ?? undefined}
                   options={channels.map((item) => ({ label: item.name, value: item.id }))}
@@ -665,6 +815,77 @@ export function SettingsPanel(props: SettingsPanelProps) {
     )
   }
 
+  const channelImportColumns = useMemo(
+    () => [
+      {
+        title: '选择',
+        key: 'selected',
+        width: 76,
+        render: (_: unknown, row: ChannelImportPreviewItem) => (
+          <Checkbox
+            checked={row.selected}
+            disabled={row.status === 'invalid'}
+            onChange={(event) => updateImportItem(row.id, { selected: event.target.checked })}
+          />
+        ),
+      },
+      {
+        title: '名称',
+        dataIndex: 'name',
+        key: 'name',
+        render: (value: string, row: ChannelImportPreviewItem) => (
+          <Input
+            size="small"
+            disabled={row.status === 'invalid'}
+            value={value}
+            onChange={(event) => updateImportItem(row.id, { name: event.target.value })}
+          />
+        ),
+      },
+      {
+        title: 'Base URL',
+        dataIndex: 'baseUrl',
+        key: 'baseUrl',
+        ellipsis: true,
+      },
+      {
+        title: 'API Key',
+        dataIndex: 'apiKey',
+        key: 'apiKey',
+        render: (value: string) => maskApiKey(value),
+      },
+      {
+        title: '状态',
+        key: 'status',
+        render: (_: unknown, row: ChannelImportPreviewItem) => {
+          if (row.status === 'invalid') {
+            return <Text type="danger">无效：{row.invalidReason}</Text>
+          }
+          return <Text>{row.status === 'duplicate' ? '重复（可覆盖）' : '新增'}</Text>
+        },
+      },
+      {
+        title: '处理策略',
+        key: 'action',
+        width: 190,
+        render: (_: unknown, row: ChannelImportPreviewItem) => (
+          <Select<ImportAction>
+            size="small"
+            value={row.action}
+            disabled={row.status === 'invalid'}
+            options={[
+              { label: '新增', value: 'create' },
+              { label: '覆盖', value: 'overwrite', disabled: row.status !== 'duplicate' },
+              { label: '跳过', value: 'skip' },
+            ]}
+            onChange={(value) => updateImportItem(row.id, { action: value })}
+          />
+        ),
+      },
+    ],
+    [updateImportItem],
+  )
+
   const channelColumns = useMemo(
     () => [
       {
@@ -698,6 +919,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
                   baseUrl: row.baseUrl,
                   apiKey: row.apiKey,
                 })
+                clearChannelImportState()
                 setIsModalOpen(true)
               }}
             >
@@ -717,7 +939,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
         ),
       },
     ],
-    [channelForm, channels, onChannelsChange],
+    [channelForm, channels, clearChannelImportState, onChannelsChange],
   )
 
   return (
@@ -834,6 +1056,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
               onClick={() => {
                 setEditingChannelId(null)
                 channelForm.resetFields()
+                clearChannelImportState()
                 setIsModalOpen(true)
               }}
             >
@@ -854,8 +1077,17 @@ export function SettingsPanel(props: SettingsPanelProps) {
       <Modal
         title={editingChannelId ? '编辑渠道' : '新增渠道'}
         open={isModalOpen}
+        centered
+        width={760}
+        zIndex={1200}
+        cancelText="取消"
+        okText="确定"
+        styles={{ body: { maxHeight: '70vh', overflowY: 'auto' } }}
         confirmLoading={isSavingChannel}
-        onCancel={() => setIsModalOpen(false)}
+        onCancel={() => {
+          setIsModalOpen(false)
+          clearChannelImportState()
+        }}
         onOk={async () => {
           setIsSavingChannel(true)
           try {
@@ -887,6 +1119,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
             setIsModalOpen(false)
             channelForm.resetFields()
             setEditingChannelId(null)
+            clearChannelImportState()
           } catch (error) {
             const reason = error instanceof Error ? error.message : '未知错误'
             messageApi.error(reason)
@@ -895,21 +1128,79 @@ export function SettingsPanel(props: SettingsPanelProps) {
           }
         }}
       >
-        <Form form={channelForm} layout="vertical">
-          <Form.Item label="名称" name="name" rules={[{ required: true, message: '请输入渠道名称' }]}>
-            <Input placeholder="例如：OpenAI Proxy" />
-          </Form.Item>
-          <Form.Item
-            label="Base URL"
-            name="baseUrl"
-            rules={[{ required: true, message: '请输入 Base URL' }]}
-          >
-            <Input placeholder="https://api.example.com/v1" />
-          </Form.Item>
-          <Form.Item label="API Key" name="apiKey" rules={[{ required: true, message: '请输入 API Key' }]}>
-            <Input.Password placeholder="sk-..." />
-          </Form.Item>
-        </Form>
+        <Space orientation="vertical" className="full-width" size={12}>
+          <Form layout="vertical">
+            <Form.Item label="批量文本导入" style={{ marginBottom: 8 }}>
+              <Input.TextArea
+                value={channelImportText}
+                autoSize={{ minRows: 6, maxRows: 10 }}
+                placeholder="粘贴包含 Base URL 与 API Key 的复杂文本，系统会自动提取可导入渠道。"
+                onChange={(event) => setChannelImportText(event.target.value)}
+              />
+            </Form.Item>
+          </Form>
+          <Space>
+            <Button
+              size="small"
+              onClick={() => {
+                if (!channelImportText.trim()) {
+                  setChannelImportItems([])
+                  setChannelImportDetected(0)
+                  setChannelImportError('')
+                  return
+                }
+                parseChannelImportText(channelImportText)
+              }}
+            >
+              自动提取
+            </Button>
+            <Button size="small" onClick={clearChannelImportState}>
+              清空
+            </Button>
+            <Button
+              size="small"
+              type="primary"
+              loading={isApplyingChannelImport}
+              disabled={channelImportItems.length === 0}
+              onClick={() => {
+                void applyParsedChannels()
+              }}
+            >
+              应用导入
+            </Button>
+          </Space>
+          <Text type="secondary">
+            已识别条目 {importSummary.total}，事件 {channelImportDetected}，重复 {importSummary.duplicated}，无效 {importSummary.invalid}，待导入{' '}
+            {importSummary.selected}
+          </Text>
+          {channelImportError ? <Alert type="error" message={channelImportError} /> : null}
+          {channelImportItems.length > 0 ? (
+            <Table<ChannelImportPreviewItem>
+              size="small"
+              rowKey="id"
+              columns={channelImportColumns}
+              dataSource={channelImportItems}
+              pagination={false}
+              scroll={{ x: 760 }}
+            />
+          ) : null}
+
+          <Form form={channelForm} layout="vertical" autoComplete="off">
+            <Form.Item label="名称" name="name" rules={[{ required: true, message: '请输入渠道名称' }]}>
+              <Input placeholder="例如：OpenAI Proxy" autoComplete="off" />
+            </Form.Item>
+            <Form.Item
+              label="Base URL"
+              name="baseUrl"
+              rules={[{ required: true, message: '请输入 Base URL' }]}
+            >
+              <Input placeholder="https://api.example.com/v1" autoComplete="off" />
+            </Form.Item>
+            <Form.Item label="API Key" name="apiKey" rules={[{ required: true, message: '请输入 API Key' }]}>
+              <Input.Password placeholder="sk-..." autoComplete="new-password" />
+            </Form.Item>
+          </Form>
+        </Space>
       </Modal>
     </div>
   )

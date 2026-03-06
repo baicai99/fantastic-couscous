@@ -222,6 +222,61 @@ describe('Composer panel value format', () => {
     expect(screen.getByRole('listbox', { name: '快捷功能选择' })).toBeInTheDocument()
   })
 
+  it('opens command picker when typing "--" at line start', () => {
+    renderComposer('json')
+
+    const textarea = screen.getByPlaceholderText('输入模板 prompt，例如：a {{style}} portrait of {{subject}}')
+    fireEvent.change(textarea, { target: { value: '--', selectionStart: 2, selectionEnd: 2 } })
+
+    expect(screen.getByRole('listbox', { name: '快捷功能选择' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '--ar' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '--size' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '--wh' })).toBeInTheDocument()
+  })
+
+  it('filters command picker options for "--s"', () => {
+    renderComposer('json')
+
+    const textarea = screen.getByPlaceholderText('输入模板 prompt，例如：a {{style}} portrait of {{subject}}')
+    fireEvent.change(textarea, { target: { value: '--s', selectionStart: 3, selectionEnd: 3 } })
+
+    expect(screen.getByRole('button', { name: '--size' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '--ar' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '--wh' })).not.toBeInTheDocument()
+  })
+
+  it('shows empty state when command picker has no match', () => {
+    renderComposer('json')
+
+    const textarea = screen.getByPlaceholderText('输入模板 prompt，例如：a {{style}} portrait of {{subject}}')
+    fireEvent.change(textarea, { target: { value: '--zzz', selectionStart: 5, selectionEnd: 5 } })
+
+    expect(screen.getByText('未找到匹配命令')).toBeInTheDocument()
+  })
+
+  it('applies highlighted command on Enter when command picker is open instead of sending', () => {
+    const { onSend } = renderControlledComposer()
+    const textarea = screen.getByPlaceholderText('输入模板 prompt，例如：a {{style}} portrait of {{subject}}') as HTMLTextAreaElement
+
+    fireEvent.change(textarea, { target: { value: '--', selectionStart: 2, selectionEnd: 2 } })
+    fireEvent.keyDown(textarea, { key: 'ArrowDown', code: 'ArrowDown' })
+    fireEvent.keyDown(textarea, { key: 'Enter', code: 'Enter' })
+
+    expect(onSend).not.toHaveBeenCalled()
+    expect(textarea.value).toBe('--size ')
+  })
+
+  it('applies command item click with separator when suffix text exists', () => {
+    const onDraftChange = vi.fn()
+    renderComposer('json', vi.fn(), vi.fn(), vi.fn(), false, '', onDraftChange)
+
+    const textarea = screen.getByPlaceholderText('输入模板 prompt，例如：a {{style}} portrait of {{subject}}')
+    fireEvent.change(textarea, { target: { value: '--wfoo', selectionStart: 3, selectionEnd: 3 } })
+    fireEvent.click(screen.getByRole('button', { name: '--wh' }))
+
+    expect(onDraftChange).toHaveBeenLastCalledWith('--wh foo')
+  })
+
   it('clicking quick picker item enables dynamic prompt and does not send', () => {
     const onDraftChange = vi.fn()
     const onSend = vi.fn()

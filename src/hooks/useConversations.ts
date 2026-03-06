@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { message, notification } from 'antd'
 import { resumeImageTaskOnce } from '../services/imageGeneration'
 import { getModelCatalogFromChannels } from '../services/modelCatalog'
+import { getAspectRatioOptions } from '../services/imageSizing'
 import type {
   ApiChannel,
   Conversation,
@@ -14,7 +15,7 @@ import type {
   SideMode,
   SingleSideSettings,
 } from '../types/chat'
-import { createConversation, makeId, toSummary } from '../utils/chat'
+import { createConversation, makeId, summarizePromptAsTitle, toSummary } from '../utils/chat'
 import { buildImageFileName } from '../utils/fileName'
 import { isDownloadableImageRef, resolveImageSourceForDownload } from '../services/imageRef'
 import {
@@ -53,6 +54,25 @@ const MESSAGE_HISTORY_PAGE_SIZE = 50
 const MAX_IN_MEMORY_CONVERSATIONS = 5
 const ARCHIVE_ILLEGAL_FILE_CHAR_PATTERN = /[<>:"/\\|?*\x00-\x1F]/g
 const ARCHIVE_TRAILING_DOT_SPACE_PATTERN = /[.\s]+$/g
+const ONE_SHOT_CUSTOM_SIZE_MIN = 256
+const ONE_SHOT_CUSTOM_SIZE_MAX = 8192
+const ONE_SHOT_SIZE_TIER_SET = new Set(['0.5K', '1K', '2K', '4K'])
+const ONE_SHOT_ASPECT_RATIO_SET = new Set(getAspectRatioOptions())
+const ONE_SHOT_COMMAND_PATTERN = /(^|[\t \n])(--ar|--size|--wh)\s+([^\t \n]+)/gi
+
+interface OneShotSizeOverrides {
+  mode: 'preset' | 'custom'
+  aspectRatio?: string
+  resolution?: string
+  customWidth?: number
+  customHeight?: number
+}
+
+interface OneShotSizeCommandParseResult {
+  cleanedPrompt: string
+  overrides: OneShotSizeOverrides | null
+  error?: string
+}
 
 function toEpoch(value: string | null | undefined): number {
   if (typeof value !== 'string' || value.trim().length === 0) {
@@ -97,6 +117,7 @@ export function sortConversationSummariesByLastMessageTime(
     .map((summary, index) => ({
       summary,
       index,
+      pinnedEpoch: Math.max(toEpoch(summary.pinnedAt), toEpoch(contents[summary.id]?.pinnedAt)),
       lastMessageEpoch: Math.max(
         getConversationLastMessageEpoch(contents[summary.id]),
         toEpoch(summary.updatedAt),
@@ -105,6 +126,14 @@ export function sortConversationSummariesByLastMessageTime(
       createdAtEpoch: toEpoch(summary.createdAt),
     }))
     .sort((left, right) => {
+      const leftPinned = left.pinnedEpoch > 0
+      const rightPinned = right.pinnedEpoch > 0
+      if (leftPinned !== rightPinned) {
+        return leftPinned ? -1 : 1
+      }
+      if (leftPinned && rightPinned && right.pinnedEpoch !== left.pinnedEpoch) {
+        return right.pinnedEpoch - left.pinnedEpoch
+      }
       if (right.lastMessageEpoch !== left.lastMessageEpoch) {
         return right.lastMessageEpoch - left.lastMessageEpoch
       }
@@ -248,6 +277,182 @@ function parseModelCommandDraft(
     scope: cleanedPrompt.length > 0 ? 'temporary' : 'permanent',
     cleanedPrompt,
   }
+}
+
+function gcd(a: number, b: number): number {
+  let left = Math.abs(a)
+  let right = Math.abs(b)
+  while (right !== 0) {
+    const next = left % right
+    left = right
+    right = next
+  }
+  return left || 1
+}
+
+function normalizeAspectRatio(input: string): string | null {
+  const match = input.trim().match(/^(\d+)\s*:\s*(\d+)$/)
+  if (!match) {
+    return null
+  }
+  const width = Number(match[1])
+  const height = Number(match[2])
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    return null
+  }
+  const divisor = gcd(width, height)
+  return `${Math.floor(width / divisor)}:${Math.floor(height / divisor)}`
+}
+
+function normalizeOneShotSizeTier(input: string): string | null {
+  const normalized = input.trim().toUpperCase()
+  return ONE_SHOT_SIZE_TIER_SET.has(normalized) ? normalized : null
+}
+
+function normalizePromptAfterCommandStrip(value: string): string {
+  return value
+    .replace(/[ \t]+/g, ' ')
+    .replace(/[ \t]*\n[ \t]*/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+function parseOneShotSizeCommands(draft: string): OneShotSizeCommandParseResult {
+  const values: { aspectRatio?: string; resolution?: string; customWidth?: number; customHeight?: number } = {}
+  let hasWh = false
+  let hasSize = false
+  let parseError = ''
+
+  const stripped = draft.replace(ONE_SHOT_COMMAND_PATTERN, (full, prefix, command, rawValue: string) => {
+    const nextPrefix = typeof prefix === 'string' ? prefix : ''
+    if (parseError) {
+      return nextPrefix
+    }
+
+    const commandKey = String(command).toLowerCase()
+    if (commandKey === '--ar') {
+      const normalizedRatio = normalizeAspectRatio(rawValue)
+      if (!normalizedRatio || !ONE_SHOT_ASPECT_RATIO_SET.has(normalizedRatio)) {
+        parseError = `无效比例命令：${rawValue}。支持示例：1:1、16:9、9:16。`
+        return nextPrefix
+      }
+      values.aspectRatio = normalizedRatio
+      return nextPrefix
+    }
+
+    if (commandKey === '--size') {
+      const normalizedTier = normalizeOneShotSizeTier(rawValue)
+      if (!normalizedTier) {
+        parseError = `无效尺寸命令：${rawValue}。仅支持 0.5K / 1K / 2K / 4K。`
+        return nextPrefix
+      }
+      hasSize = true
+      values.resolution = normalizedTier
+      return nextPrefix
+    }
+
+    const sizeMatch = rawValue.trim().match(/^(\d+)x(\d+)$/i)
+    if (!sizeMatch) {
+      parseError = `无效宽高命令：${rawValue}。请使用 --wh 1024x1536。`
+      return nextPrefix
+    }
+
+    const width = Number(sizeMatch[1])
+    const height = Number(sizeMatch[2])
+    if (
+      !Number.isFinite(width) ||
+      !Number.isFinite(height) ||
+      width < ONE_SHOT_CUSTOM_SIZE_MIN ||
+      width > ONE_SHOT_CUSTOM_SIZE_MAX ||
+      height < ONE_SHOT_CUSTOM_SIZE_MIN ||
+      height > ONE_SHOT_CUSTOM_SIZE_MAX
+    ) {
+      parseError = `宽高范围需在 ${ONE_SHOT_CUSTOM_SIZE_MIN}-${ONE_SHOT_CUSTOM_SIZE_MAX} 像素之间。`
+      return nextPrefix
+    }
+
+    hasWh = true
+    values.customWidth = Math.floor(width)
+    values.customHeight = Math.floor(height)
+    return nextPrefix
+  })
+
+  if (parseError) {
+    return {
+      cleanedPrompt: normalizePromptAfterCommandStrip(stripped),
+      overrides: null,
+      error: parseError,
+    }
+  }
+
+  if (hasWh && hasSize) {
+    return {
+      cleanedPrompt: normalizePromptAfterCommandStrip(stripped),
+      overrides: null,
+      error: '不能同时使用 --size 和 --wh，请保留一个尺寸命令。',
+    }
+  }
+
+  if (!values.aspectRatio && !values.resolution && !values.customWidth && !values.customHeight) {
+    return {
+      cleanedPrompt: normalizePromptAfterCommandStrip(draft),
+      overrides: null,
+    }
+  }
+
+  if (hasWh) {
+    return {
+      cleanedPrompt: normalizePromptAfterCommandStrip(stripped),
+      overrides: {
+        mode: 'custom',
+        customWidth: values.customWidth,
+        customHeight: values.customHeight,
+      },
+    }
+  }
+
+  return {
+    cleanedPrompt: normalizePromptAfterCommandStrip(stripped),
+    overrides: {
+      mode: 'preset',
+      aspectRatio: values.aspectRatio,
+      resolution: values.resolution,
+    },
+  }
+}
+
+function applyOneShotSizeOverridesToSettings(
+  settingsBySide: Record<Side, SingleSideSettings>,
+  targetSides: Side[],
+  overrides: OneShotSizeOverrides | null,
+): Record<Side, SingleSideSettings> {
+  if (!overrides) {
+    return settingsBySide
+  }
+
+  const nextSettings = { ...settingsBySide }
+  for (const side of targetSides) {
+    const current = nextSettings[side]
+    if (!current) {
+      continue
+    }
+    if (overrides.mode === 'custom' && overrides.customWidth && overrides.customHeight) {
+      nextSettings[side] = {
+        ...current,
+        sizeMode: 'custom',
+        customWidth: overrides.customWidth,
+        customHeight: overrides.customHeight,
+      }
+      continue
+    }
+    nextSettings[side] = {
+      ...current,
+      sizeMode: 'preset',
+      ...(overrides.aspectRatio ? { aspectRatio: overrides.aspectRatio } : {}),
+      ...(overrides.resolution ? { resolution: overrides.resolution } : {}),
+    }
+  }
+  return nextSettings
 }
 
 function isDownloadableImage(image: Run['images'][number]): boolean {
@@ -691,6 +896,13 @@ export function useConversations() {
       favoriteModelIds,
     })
 
+    stateRef.current = {
+      ...stateRef.current,
+      stagedSideMode: mode,
+      stagedSideCount: sideCount,
+      stagedSettingsBySide: settingsBySide,
+    }
+
     dispatch({
       type: 'settings/updateSide',
       payload: {
@@ -791,6 +1003,85 @@ export function useConversations() {
       const nextActiveId = nextSummaries[0]?.id ?? null
       setActiveConversation(nextActiveId)
     }
+  }
+
+  const renameConversation = (conversationId: string, nextTitle: string) => {
+    const trimmedTitle = nextTitle.trim()
+    if (!trimmedTitle) {
+      return
+    }
+
+    const snapshot = stateRef.current
+    const targetSummary = snapshot.summaries.find((item) => item.id === conversationId)
+    if (!targetSummary) {
+      return
+    }
+
+    const nextSummaries = snapshot.summaries.map((item) =>
+      item.id === conversationId ? { ...item, title: trimmedTitle } : item,
+    )
+    const currentConversation = snapshot.contents[conversationId]
+    const nextContents = currentConversation
+      ? { ...snapshot.contents, [conversationId]: { ...currentConversation, title: trimmedTitle } }
+      : snapshot.contents
+
+    syncAndPersist({ summaries: nextSummaries, contents: nextContents })
+
+    if (currentConversation) {
+      void repository.saveConversation({
+        ...currentConversation,
+        title: trimmedTitle,
+      })
+      return
+    }
+
+    void repository.loadConversation(conversationId, trimmedTitle).then((conversation) => {
+      if (!conversation) {
+        return
+      }
+      void repository.saveConversation({
+        ...conversation,
+        title: trimmedTitle,
+      })
+    })
+  }
+
+  const togglePinConversation = (conversationId: string) => {
+    const snapshot = stateRef.current
+    const targetSummary = snapshot.summaries.find((item) => item.id === conversationId)
+    if (!targetSummary) {
+      return
+    }
+
+    const isPinned = toEpoch(targetSummary.pinnedAt) > 0
+    const nextPinnedAt = isPinned ? null : new Date().toISOString()
+    const nextSummaries = snapshot.summaries.map((item) =>
+      item.id === conversationId ? { ...item, pinnedAt: nextPinnedAt } : item,
+    )
+    const currentConversation = snapshot.contents[conversationId]
+    const nextContents = currentConversation
+      ? { ...snapshot.contents, [conversationId]: { ...currentConversation, pinnedAt: nextPinnedAt } }
+      : snapshot.contents
+
+    syncAndPersist({ summaries: nextSummaries, contents: nextContents })
+
+    if (currentConversation) {
+      void repository.saveConversation({
+        ...currentConversation,
+        pinnedAt: nextPinnedAt,
+      })
+      return
+    }
+
+    void repository.loadConversation(conversationId, targetSummary.title).then((conversation) => {
+      if (!conversation) {
+        return
+      }
+      void repository.saveConversation({
+        ...conversation,
+        pinnedAt: nextPinnedAt,
+      })
+    })
   }
 
   const updateSideMode = (mode: SideMode) => {
@@ -937,7 +1228,11 @@ export function useConversations() {
     dispatch({ type: 'settings/setFavoriteModels', payload: filteredFavoriteModelIds })
     stateRef.current = {
       ...stateRef.current,
+      channels: nextChannels,
       favoriteModelIds: filteredFavoriteModelIds,
+      stagedSideMode: activeSideMode,
+      stagedSideCount: activeSideCount,
+      stagedSettingsBySide: normalized,
     }
 
     dispatch({
@@ -1072,10 +1367,7 @@ export function useConversations() {
       actions: assistantActions,
     }
     const hadUserMessage = conversation.messages.some((message) => message.role === 'user')
-    const nextTitle = !hadUserMessage ? toSummary({
-      ...conversation,
-      messages: [...conversation.messages, { ...userMessage, content: titleSource ?? userContent }],
-    }).title : conversation.title
+    const nextTitle = !hadUserMessage ? summarizePromptAsTitle(titleSource ?? userContent) : conversation.title
 
     return {
       ...conversation,
@@ -1717,6 +2009,7 @@ export function useConversations() {
     const snapshot = stateRef.current
     const currentActive = await getLoadedActiveConversation()
     const activeState = conversationSelectors.selectActiveSettings(snapshot)
+    const targetSides = activeState.activeSideMode === 'single' ? (['single'] as Side[]) : getMultiSideIds(activeState.activeSideCount)
     const modelCommand = parseModelCommandDraft(snapshot.draft, modelCatalog.models)
 
     if (modelCommand?.scope === 'permanent') {
@@ -1739,10 +2032,16 @@ export function useConversations() {
       return
     }
 
-    const effectiveDraft = modelCommand?.cleanedPrompt?.length ? modelCommand.cleanedPrompt : snapshot.draft
-    const effectiveSettingsBySide = modelCommand?.scope === 'temporary'
+    const draftAfterModelCommand = modelCommand?.cleanedPrompt?.length ? modelCommand.cleanedPrompt : snapshot.draft
+    const oneShotParseResult = parseOneShotSizeCommands(draftAfterModelCommand)
+    if (oneShotParseResult.error) {
+      dispatch({ type: 'send/fail', payload: oneShotParseResult.error })
+      return
+    }
+
+    const effectiveDraft = oneShotParseResult.cleanedPrompt
+    const modelAdjustedSettingsBySide = modelCommand?.scope === 'temporary'
       ? (() => {
-          const targetSides = activeState.activeSideMode === 'single' ? (['single'] as Side[]) : getMultiSideIds(activeState.activeSideCount)
           const nextSettings = { ...activeState.activeSettingsBySide }
           for (const side of targetSides) {
             const current = nextSettings[side]
@@ -1758,6 +2057,11 @@ export function useConversations() {
           return nextSettings
         })()
       : activeState.activeSettingsBySide
+    const effectiveSettingsBySide = applyOneShotSizeOverridesToSettings(
+      modelAdjustedSettingsBySide,
+      targetSides,
+      oneShotParseResult.overrides,
+    )
 
     const blockedReason = resolveSendBlockedReason(snapshot, {
       ...activeState,
@@ -2433,6 +2737,8 @@ export function useConversations() {
     createNewConversation,
     clearAllConversations,
     removeConversation,
+    renameConversation,
+    togglePinConversation,
     switchConversation,
     updateSideMode,
     updateSideCount,

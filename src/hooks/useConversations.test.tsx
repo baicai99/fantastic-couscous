@@ -94,6 +94,63 @@ function seedChannels(input?: {
   })
 }
 
+function buildSuccessfulRunFromInput(input: {
+  runId: string
+  batchId?: string
+  createdAt: string
+  sideMode?: 'single' | 'multi'
+  side?: string
+  channel?: { id?: string; name?: string } | null
+  modelId: string
+  modelName?: string
+  templatePrompt: string
+  finalPrompt: string
+  variablesSnapshot?: Record<string, string>
+  paramsSnapshot?: Record<string, string | number | boolean>
+  settings: {
+    resolution: string
+    aspectRatio: string
+    imageCount: number
+    gridColumns: number
+    sizeMode: 'preset' | 'custom'
+    customWidth: number
+    customHeight: number
+    autoSave: boolean
+    saveDirectory?: string
+  }
+}): Run {
+  return {
+    id: input.runId,
+    batchId: input.batchId ?? 'batch-success',
+    createdAt: input.createdAt,
+    sideMode: input.sideMode ?? 'single',
+    side: input.side ?? 'single',
+    prompt: input.finalPrompt,
+    imageCount: Math.max(1, Math.floor(input.settings.imageCount)),
+    channelId: input.channel?.id ?? 'ch',
+    channelName: input.channel?.name ?? 'main',
+    modelId: input.modelId,
+    modelName: input.modelName ?? input.modelId,
+    templatePrompt: input.templatePrompt,
+    finalPrompt: input.finalPrompt,
+    variablesSnapshot: input.variablesSnapshot ?? {},
+    paramsSnapshot: input.paramsSnapshot ?? {},
+    settingsSnapshot: {
+      resolution: input.settings.resolution,
+      aspectRatio: input.settings.aspectRatio,
+      imageCount: input.settings.imageCount,
+      gridColumns: input.settings.gridColumns,
+      sizeMode: input.settings.sizeMode,
+      customWidth: input.settings.customWidth,
+      customHeight: input.settings.customHeight,
+      autoSave: input.settings.autoSave,
+      ...(input.settings.saveDirectory ? { saveDirectory: input.settings.saveDirectory } : {}),
+    },
+    retryAttempt: 0,
+    images: [{ id: `${input.runId}-img-1`, seq: 1, status: 'success', threadState: 'settled', fileRef: '/ok.png' }],
+  }
+}
+
 describe('useConversations', () => {
   beforeEach(async () => {
     await resetStorage()
@@ -548,6 +605,207 @@ describe('useConversations', () => {
     expect(messageSuccessSpy).toHaveBeenCalledWith('本次已临时切换到 gpt-image-1')
   })
 
+  it('applies --ar as one-shot override without mutating staged side settings', async () => {
+    mockCreateRun.mockImplementation(async (input: any) => buildSuccessfulRunFromInput({
+      runId: input.runId,
+      createdAt: input.createdAt,
+      sideMode: input.sideMode,
+      side: input.side,
+      channel: input.channel,
+      modelId: input.modelId,
+      modelName: input.modelName,
+      templatePrompt: input.templatePrompt,
+      finalPrompt: input.finalPrompt,
+      variablesSnapshot: input.variablesSnapshot,
+      paramsSnapshot: input.paramsSnapshot,
+      settings: input.settings,
+    }))
+
+    const { useConversations } = await import('./useConversations')
+    const { result } = renderHook(() => useConversations())
+    const previousAspectRatio = result.current.activeSettingsBySide.single.aspectRatio
+
+    act(() => {
+      result.current.setDraft('portrait photo --ar 16:9')
+    })
+    await act(async () => {
+      await result.current.sendDraft()
+    })
+
+    await waitFor(() => expect(mockCreateRun).toHaveBeenCalledTimes(1))
+    const callInput = mockCreateRun.mock.calls[0]?.[0]
+    expect(callInput.settings.sizeMode).toBe('preset')
+    expect(callInput.settings.aspectRatio).toBe('16:9')
+    expect(callInput.paramsSnapshot.size).toBe('1344x768')
+    expect(callInput.finalPrompt).toBe('portrait photo')
+    expect(result.current.activeSettingsBySide.single.aspectRatio).toBe(previousAspectRatio)
+  })
+
+  it('applies --size as one-shot override and strips command from final prompt', async () => {
+    mockCreateRun.mockImplementation(async (input: any) => buildSuccessfulRunFromInput({
+      runId: input.runId,
+      createdAt: input.createdAt,
+      sideMode: input.sideMode,
+      side: input.side,
+      channel: input.channel,
+      modelId: input.modelId,
+      modelName: input.modelName,
+      templatePrompt: input.templatePrompt,
+      finalPrompt: input.finalPrompt,
+      variablesSnapshot: input.variablesSnapshot,
+      paramsSnapshot: input.paramsSnapshot,
+      settings: input.settings,
+    }))
+
+    const { useConversations } = await import('./useConversations')
+    const { result } = renderHook(() => useConversations())
+    const previousResolution = result.current.activeSettingsBySide.single.resolution
+
+    act(() => {
+      result.current.setDraft('poster concept --size 4K')
+    })
+    await act(async () => {
+      await result.current.sendDraft()
+    })
+
+    await waitFor(() => expect(mockCreateRun).toHaveBeenCalledTimes(1))
+    const callInput = mockCreateRun.mock.calls[0]?.[0]
+    expect(callInput.settings.sizeMode).toBe('preset')
+    expect(callInput.settings.resolution).toBe('4K')
+    expect(callInput.paramsSnapshot.size).toBe('4096x4096')
+    expect(callInput.finalPrompt).toBe('poster concept')
+    expect(result.current.activeSettingsBySide.single.resolution).toBe(previousResolution)
+  })
+
+  it('applies --wh as one-shot custom size override', async () => {
+    mockCreateRun.mockImplementation(async (input: any) => buildSuccessfulRunFromInput({
+      runId: input.runId,
+      createdAt: input.createdAt,
+      sideMode: input.sideMode,
+      side: input.side,
+      channel: input.channel,
+      modelId: input.modelId,
+      modelName: input.modelName,
+      templatePrompt: input.templatePrompt,
+      finalPrompt: input.finalPrompt,
+      variablesSnapshot: input.variablesSnapshot,
+      paramsSnapshot: input.paramsSnapshot,
+      settings: input.settings,
+    }))
+
+    const { useConversations } = await import('./useConversations')
+    const { result } = renderHook(() => useConversations())
+
+    act(() => {
+      result.current.setDraft('draw skyline --wh 640x960')
+    })
+    await act(async () => {
+      await result.current.sendDraft()
+    })
+
+    await waitFor(() => expect(mockCreateRun).toHaveBeenCalledTimes(1))
+    const callInput = mockCreateRun.mock.calls[0]?.[0]
+    expect(callInput.settings.sizeMode).toBe('custom')
+    expect(callInput.settings.customWidth).toBe(640)
+    expect(callInput.settings.customHeight).toBe(960)
+    expect(callInput.paramsSnapshot.size).toBe('640x960')
+    expect(callInput.finalPrompt).toBe('draw skyline')
+  })
+
+  it('blocks send when --size and --wh are both provided', async () => {
+    const { useConversations } = await import('./useConversations')
+    const { result } = renderHook(() => useConversations())
+
+    act(() => {
+      result.current.setDraft('draw city --size 2K --wh 1024x1536')
+    })
+    await act(async () => {
+      await result.current.sendDraft()
+    })
+
+    expect(mockCreateRun).not.toHaveBeenCalled()
+    expect(result.current.sendError).toContain('不能同时使用 --size 和 --wh')
+  })
+
+  it('applies @model with --wh together and keeps command text in user message', async () => {
+    const messageSuccessSpy = vi.spyOn(message, 'success').mockImplementation(() => {
+      const close = () => {}
+      return close as unknown as ReturnType<typeof message.success>
+    })
+    mockCreateRun.mockImplementation(async (input: any) => buildSuccessfulRunFromInput({
+      runId: input.runId,
+      createdAt: input.createdAt,
+      sideMode: input.sideMode,
+      side: input.side,
+      channel: input.channel,
+      modelId: input.modelId,
+      modelName: input.modelName,
+      templatePrompt: input.templatePrompt,
+      finalPrompt: input.finalPrompt,
+      variablesSnapshot: input.variablesSnapshot,
+      paramsSnapshot: input.paramsSnapshot,
+      settings: input.settings,
+    }))
+
+    const { useConversations } = await import('./useConversations')
+    const { result } = renderHook(() => useConversations())
+    const previousModelId = result.current.activeSettingsBySide.single.modelId
+
+    act(() => {
+      result.current.setDraft('@gpt-image-1 draw a cat --wh 640x960')
+    })
+    await act(async () => {
+      await result.current.sendDraft()
+    })
+
+    await waitFor(() => expect(mockCreateRun).toHaveBeenCalledTimes(1))
+    const callInput = mockCreateRun.mock.calls[0]?.[0]
+    expect(callInput.modelId).toBe('gpt-image-1')
+    expect(callInput.settings.sizeMode).toBe('custom')
+    expect(callInput.settings.customWidth).toBe(640)
+    expect(callInput.settings.customHeight).toBe(960)
+    expect(callInput.finalPrompt).toBe('draw a cat')
+    expect(result.current.activeConversation?.messages[0]?.content).toBe('@gpt-image-1 draw a cat --wh 640x960')
+    expect(result.current.activeSettingsBySide.single.modelId).toBe(previousModelId)
+    expect(messageSuccessSpy).toHaveBeenCalledWith('本次已临时切换到 gpt-image-1')
+  })
+
+  it('applies one-shot override to all sides in multi mode', async () => {
+    mockCreateRun.mockImplementation(async (input: any) => buildSuccessfulRunFromInput({
+      runId: input.runId,
+      createdAt: input.createdAt,
+      sideMode: input.sideMode,
+      side: input.side,
+      channel: input.channel,
+      modelId: input.modelId,
+      modelName: input.modelName,
+      templatePrompt: input.templatePrompt,
+      finalPrompt: input.finalPrompt,
+      variablesSnapshot: input.variablesSnapshot,
+      paramsSnapshot: input.paramsSnapshot,
+      settings: input.settings,
+    }))
+
+    const { useConversations } = await import('./useConversations')
+    const { result } = renderHook(() => useConversations())
+
+    act(() => {
+      result.current.updateSideMode('multi')
+      result.current.setDraft('wide shot --ar 16:9')
+    })
+    await act(async () => {
+      await result.current.sendDraft()
+    })
+
+    await waitFor(() => expect(mockCreateRun).toHaveBeenCalledTimes(2))
+    for (const call of mockCreateRun.mock.calls) {
+      const callInput = call[0]
+      expect(callInput.settings.aspectRatio).toBe('16:9')
+      expect(callInput.paramsSnapshot.size).toBe('1344x768')
+      expect(callInput.finalPrompt).toBe('wide shot')
+    }
+  })
+
   it('appends assistant guidance when sending without a selected model', async () => {
     await resetStorage()
     seedChannels({
@@ -577,6 +835,7 @@ describe('useConversations', () => {
     await waitFor(() => expect(result.current.activeConversation?.messages).toHaveLength(2))
     expect(mockCreateRun).not.toHaveBeenCalled()
     expect(result.current.activeConversation?.messages[0]?.content).toBe('draw a cat')
+    expect(result.current.activeConversation?.title).toBe('draw a cat')
     expect(result.current.activeConversation?.messages[1]?.content).toContain('当前还没有选择模型')
     expect(result.current.activeConversation?.messages[1]?.actions).toEqual([
       expect.objectContaining({ type: 'select-model', label: '选择模型' }),
@@ -619,6 +878,60 @@ describe('useConversations', () => {
     expect(result.current.draft).toBe('')
   })
 
+  it('sends successfully after selecting api channel in a fresh conversation', async () => {
+    await resetStorage()
+    seedChannels({
+      settingsOverride: {
+        channelId: null,
+        modelId: 'model-a',
+      },
+    })
+    mockCreateRun.mockImplementation(async (input: { runId: string; createdAt: string; finalPrompt: string }) => ({
+      id: input.runId,
+      batchId: 'batch-selected-api',
+      createdAt: input.createdAt,
+      sideMode: 'single',
+      side: 'single',
+      prompt: input.finalPrompt,
+      imageCount: 1,
+      channelId: 'ch',
+      channelName: 'main',
+      modelId: 'model-a',
+      modelName: 'model-a',
+      templatePrompt: input.finalPrompt,
+      finalPrompt: input.finalPrompt,
+      variablesSnapshot: {},
+      paramsSnapshot: {},
+      settingsSnapshot: {
+        resolution: '1K',
+        aspectRatio: '1:1',
+        imageCount: 1,
+        gridColumns: 1,
+        sizeMode: 'preset',
+        customWidth: 1024,
+        customHeight: 1024,
+        autoSave: false,
+      },
+      retryAttempt: 0,
+      images: [{ id: 'selected-api-image', seq: 1, status: 'success', threadState: 'settled', fileRef: '/ok.png' }],
+    }))
+
+    const { useConversations } = await import('./useConversations')
+    const { result } = renderHook(() => useConversations())
+
+    act(() => {
+      result.current.setDraft('draw with selected api')
+    })
+
+    await act(async () => {
+      result.current.updateSideSettings('single', { channelId: 'ch' })
+      await result.current.sendDraft()
+    })
+
+    await waitFor(() => expect(mockCreateRun).toHaveBeenCalledTimes(1))
+    expect(result.current.activeConversation?.messages[1]?.content).not.toContain('还没有可用的 API 配置')
+  })
+
   it('persists favorite model ids in staged settings', async () => {
     const { useConversations } = await import('./useConversations')
     const first = renderHook(() => useConversations())
@@ -633,6 +946,127 @@ describe('useConversations', () => {
     const second = renderHook(() => useConversations())
     await waitFor(() => {
       expect(second.result.current.favoriteModelIds).toEqual(['gpt-image-1', 'gemini-2.5-flash-image'])
+    })
+  })
+
+  it('renames conversation title and persists after remount', async () => {
+    await resetStorage()
+    seedChannels()
+
+    const conversation: Conversation = {
+      id: 'rename-c1',
+      title: '旧标题',
+      pinnedAt: null,
+      createdAt: '2026-03-06T00:00:00.000Z',
+      updatedAt: '2026-03-06T00:00:00.000Z',
+      sideMode: 'single',
+      sideCount: 2,
+      settingsBySide: {
+        single: {
+          resolution: '1K',
+          aspectRatio: '1:1',
+          imageCount: 1,
+          gridColumns: 1,
+          sizeMode: 'preset',
+          customWidth: 1024,
+          customHeight: 1024,
+          autoSave: false,
+          channelId: 'ch',
+          modelId: 'model-a',
+          paramValues: {},
+        },
+      },
+      messages: [],
+    }
+    await seedConversation({ conversation })
+
+    const { useConversations } = await import('./useConversations')
+    const first = renderHook(() => useConversations())
+
+    act(() => {
+      first.result.current.renameConversation('rename-c1', '  新标题  ')
+    })
+
+    await waitFor(() => {
+      expect(first.result.current.summaries.find((item) => item.id === 'rename-c1')?.title).toBe('新标题')
+    })
+    first.unmount()
+
+    const second = renderHook(() => useConversations())
+    await waitFor(() => {
+      expect(second.result.current.summaries.find((item) => item.id === 'rename-c1')?.title).toBe('新标题')
+    })
+  })
+
+  it('toggles pin and keeps pinned conversation at top after remount', async () => {
+    await resetStorage()
+    seedChannels()
+    const repo = createConversationRepository()
+
+    const baseConversation = (id: string, title: string, updatedAt: string): Conversation => ({
+      id,
+      title,
+      pinnedAt: null,
+      createdAt: '2026-03-06T00:00:00.000Z',
+      updatedAt,
+      sideMode: 'single',
+      sideCount: 2,
+      settingsBySide: {
+        single: {
+          resolution: '1K',
+          aspectRatio: '1:1',
+          imageCount: 1,
+          gridColumns: 1,
+          sizeMode: 'preset',
+          customWidth: 1024,
+          customHeight: 1024,
+          autoSave: false,
+          channelId: 'ch',
+          modelId: 'model-a',
+          paramValues: {},
+        },
+      },
+      messages: [],
+    })
+
+    await repo.saveConversation(baseConversation('pin-c1', '较旧', '2026-03-06T00:00:00.000Z'))
+    await repo.saveConversation(baseConversation('pin-c2', '较新', '2026-03-07T00:00:00.000Z'))
+    repo.saveIndex([
+      {
+        id: 'pin-c1',
+        title: '较旧',
+        pinnedAt: null,
+        createdAt: '2026-03-06T00:00:00.000Z',
+        updatedAt: '2026-03-06T00:00:00.000Z',
+        lastMessagePreview: '',
+      },
+      {
+        id: 'pin-c2',
+        title: '较新',
+        pinnedAt: null,
+        createdAt: '2026-03-06T00:00:00.000Z',
+        updatedAt: '2026-03-07T00:00:00.000Z',
+        lastMessagePreview: '',
+      },
+    ])
+    repo.saveActiveId('pin-c2')
+
+    const { useConversations } = await import('./useConversations')
+    const first = renderHook(() => useConversations())
+
+    act(() => {
+      first.result.current.togglePinConversation('pin-c1')
+    })
+    await waitFor(() => {
+      expect(first.result.current.summaries[0]?.id).toBe('pin-c1')
+      expect(first.result.current.summaries[0]?.pinnedAt).toBeTruthy()
+    })
+    first.unmount()
+
+    const second = renderHook(() => useConversations())
+    await waitFor(() => {
+      expect(second.result.current.summaries[0]?.id).toBe('pin-c1')
+      expect(second.result.current.summaries[0]?.pinnedAt).toBeTruthy()
     })
   })
 })

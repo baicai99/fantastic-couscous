@@ -1,7 +1,8 @@
-﻿import { DeleteOutlined, HistoryOutlined, MessageOutlined, PlusOutlined } from '@ant-design/icons'
-import { Button, Menu, Popconfirm, Tooltip, message } from 'antd'
+﻿import { DeleteOutlined, EditOutlined, HistoryOutlined, MoreOutlined, PushpinOutlined, MessageOutlined, PlusOutlined } from '@ant-design/icons'
+import { Button, Dropdown, Input, Menu, Modal, Popconfirm, Tooltip, message } from 'antd'
 import type { MenuProps } from 'antd'
-import type { ReactNode } from 'react'
+import { useRef, useState } from 'react'
+import type { KeyboardEvent, ReactNode } from 'react'
 import type { PanelMode } from '../../hooks/usePersistentPanelMode'
 import type { ConversationSummary } from '../../types/chat'
 
@@ -15,6 +16,8 @@ interface ConversationListProps {
   onCreateConversation: () => void
   onClearAllConversations: () => void
   onDeleteConversation: (conversationId: string) => void
+  onRenameConversation: (conversationId: string, nextTitle: string) => void
+  onTogglePinConversation: (conversationId: string) => void
   onSwitchConversation: (conversationId: string) => void
 }
 
@@ -41,11 +44,50 @@ export function ConversationList(props: ConversationListProps) {
     onCreateConversation,
     onClearAllConversations,
     onDeleteConversation,
+    onRenameConversation,
+    onTogglePinConversation,
     onSwitchConversation,
   } = props
 
   const mode: PanelMode = viewMode ?? (isCollapsed ? 'collapsed' : 'expanded')
   const isCollapsedMode = mode === 'collapsed'
+  const [editingConversationId, setEditingConversationId] = useState<string | null>(null)
+  const [editingTitle, setEditingTitle] = useState('')
+  const skipNextBlurCommitRef = useRef<string | null>(null)
+  const skipNextBlurCommit = (conversationId: string) => {
+    skipNextBlurCommitRef.current = conversationId
+  }
+
+  const commitRename = (conversationId: string) => {
+    const trimmedTitle = editingTitle.trim()
+    if (trimmedTitle) {
+      onRenameConversation(conversationId, trimmedTitle)
+    }
+    setEditingConversationId(null)
+    setEditingTitle('')
+  }
+
+  const cancelRename = (conversationId: string) => {
+    skipNextBlurCommit(conversationId)
+    setEditingConversationId(null)
+    setEditingTitle('')
+  }
+
+  const handleRenameInputKeyDown = (event: KeyboardEvent<HTMLInputElement>, conversationId: string) => {
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      event.stopPropagation()
+      cancelRename(conversationId)
+      return
+    }
+
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      event.stopPropagation()
+      skipNextBlurCommit(conversationId)
+      commitRename(conversationId)
+    }
+  }
 
   const items: MenuProps['items'] = summaries.map((item) => ({
     key: item.id,
@@ -54,27 +96,83 @@ export function ConversationList(props: ConversationListProps) {
     label: (
       <div className="conversation-menu-item-row">
         <div className="conversation-menu-item-title" title={item.title}>
-          {item.title}
+          {item.pinnedAt ? <PushpinOutlined className="conversation-menu-item-pin-icon" /> : null}
+          {editingConversationId === item.id ? (
+            <Input
+              size="small"
+              value={editingTitle}
+              autoFocus
+              className="conversation-menu-item-rename-input"
+              onClick={(event) => event.stopPropagation()}
+              onChange={(event) => setEditingTitle(event.target.value)}
+              onBlur={() => {
+                if (skipNextBlurCommitRef.current === item.id) {
+                  skipNextBlurCommitRef.current = null
+                  return
+                }
+                commitRename(item.id)
+              }}
+              onKeyDown={(event) => handleRenameInputKeyDown(event, item.id)}
+            />
+          ) : (
+            item.title
+          )}
         </div>
         <div className="conversation-menu-item-actions" onClick={(event) => event.stopPropagation()}>
-          <Popconfirm
-            title="确认删除此对话？"
-            description="此操作不可恢复。"
-            okText="删除"
-            okButtonProps={{ danger: true }}
-            cancelText="取消"
-            onConfirm={() => onDeleteConversation(item.id)}
+          <Dropdown
+            trigger={['click']}
+            menu={{
+              selectable: false,
+              items: [
+                {
+                  key: 'rename',
+                  icon: <EditOutlined />,
+                  label: '重命名',
+                },
+                {
+                  key: 'pin',
+                  icon: <PushpinOutlined />,
+                  label: item.pinnedAt ? '取消置顶' : '置顶',
+                },
+                {
+                  key: 'delete',
+                  icon: <DeleteOutlined />,
+                  danger: true,
+                  label: '删除',
+                },
+              ],
+              onClick: ({ key, domEvent }) => {
+                domEvent.preventDefault()
+                domEvent.stopPropagation()
+                if (key === 'rename') {
+                  setEditingConversationId(item.id)
+                  setEditingTitle(item.title)
+                }
+                if (key === 'pin') {
+                  onTogglePinConversation(item.id)
+                }
+                if (key === 'delete') {
+                  Modal.confirm({
+                    title: '确认删除此对话？',
+                    content: '此操作不可恢复。',
+                    okText: '删除',
+                    okButtonProps: { danger: true },
+                    cancelText: '取消',
+                    onOk: () => onDeleteConversation(item.id),
+                  })
+                }
+              },
+            }}
           >
             <Button
-              danger
               type="text"
               size="small"
-              icon={<DeleteOutlined />}
-              className="conversation-menu-item-delete"
-              aria-label={`删除${item.title}`}
+              icon={<MoreOutlined />}
+              className="conversation-menu-item-more"
+              aria-label={`更多操作${item.title}`}
               onClick={(event) => event.stopPropagation()}
             />
-          </Popconfirm>
+          </Dropdown>
         </div>
       </div>
     ),

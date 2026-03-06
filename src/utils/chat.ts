@@ -45,6 +45,7 @@ export function createConversation(
   return {
     id: makeId(),
     title: title ?? '未命名',
+    pinnedAt: null,
     createdAt: now,
     updatedAt: now,
     sideMode,
@@ -90,6 +91,7 @@ export function toSummary(conversation: Conversation): ConversationSummary {
   return {
     id: conversation.id,
     title: conversation.title,
+    pinnedAt: conversation.pinnedAt ?? null,
     createdAt: conversation.createdAt,
     updatedAt: conversation.updatedAt,
     lastMessagePreview: latestUserMessage?.content ?? '暂无消息',

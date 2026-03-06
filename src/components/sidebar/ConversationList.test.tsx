@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { ConversationList } from './ConversationList'
@@ -19,6 +19,8 @@ const baseProps = {
   onCreateConversation: vi.fn(),
   onClearAllConversations: vi.fn(),
   onDeleteConversation: vi.fn(),
+  onRenameConversation: vi.fn(),
+  onTogglePinConversation: vi.fn(),
   onSwitchConversation: vi.fn(),
 }
 
@@ -72,5 +74,66 @@ describe('ConversationList', () => {
     await user.click(screen.getByLabelText('create-conversation'))
     expect(onCreateConversation).toHaveBeenCalledTimes(1)
     expect(messageInfoSpy).toHaveBeenCalledWith('旧会话仍在后台生成，可稍后返回查看结果。')
+  })
+
+  it('opens aggregated actions and triggers rename', async () => {
+    const user = userEvent.setup()
+    const onRenameConversation = vi.fn()
+
+    render(
+      <ConversationList
+        {...baseProps}
+        onRenameConversation={onRenameConversation}
+        viewMode="expanded"
+      />,
+    )
+
+    await user.click(screen.getByLabelText('更多操作Conversation 1'))
+    await user.click(screen.getByText('重命名'))
+
+    const input = screen.getByDisplayValue('Conversation 1')
+    await user.clear(input)
+    await user.type(input, '  新标题  {enter}')
+
+    expect(onRenameConversation).toHaveBeenCalledWith('c1', '新标题')
+  })
+
+  it('toggles pin from aggregated actions', async () => {
+    const user = userEvent.setup()
+    const onTogglePinConversation = vi.fn()
+
+    render(
+      <ConversationList
+        {...baseProps}
+        onTogglePinConversation={onTogglePinConversation}
+        viewMode="expanded"
+      />,
+    )
+
+    await user.click(screen.getByLabelText('更多操作Conversation 1'))
+    await user.click(screen.getByText('置顶'))
+
+    expect(onTogglePinConversation).toHaveBeenCalledWith('c1')
+  })
+
+  it('keeps delete confirmation flow in aggregated actions', async () => {
+    const user = userEvent.setup()
+    const onDeleteConversation = vi.fn()
+
+    render(
+      <ConversationList
+        {...baseProps}
+        onDeleteConversation={onDeleteConversation}
+        viewMode="expanded"
+      />,
+    )
+
+    await user.click(screen.getByLabelText('更多操作Conversation 1'))
+    await user.click(screen.getByText('删除'))
+    await user.click(screen.getByRole('button', { name: /删\s*除/ }))
+
+    await waitFor(() => {
+      expect(onDeleteConversation).toHaveBeenCalledWith('c1')
+    })
   })
 })

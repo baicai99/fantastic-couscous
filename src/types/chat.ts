@@ -50,6 +50,22 @@ export interface ApiChannel {
   models?: string[]
 }
 
+export type ImportAction = 'create' | 'overwrite' | 'skip'
+
+export interface ParsedApiChannelCandidate {
+  id: string
+  name: string
+  baseUrl: string
+  apiKey: string
+  sourceLine: number
+  invalidReason?: string
+}
+
+export interface ParseApiChannelsResult {
+  candidates: ParsedApiChannelCandidate[]
+  totalDetected: number
+}
+
 export interface SingleSideSettings {
   resolution: string
   aspectRatio: string
@@ -133,6 +149,7 @@ export interface Message {
 export interface Conversation {
   id: string
   title: string
+  pinnedAt?: string | null
   createdAt: string
   updatedAt: string
   sideMode: SideMode
@@ -144,6 +161,7 @@ export interface Conversation {
 export interface ConversationSummary {
   id: string
   title: string
+  pinnedAt?: string | null
   createdAt: string
   updatedAt: string
   lastMessagePreview: string

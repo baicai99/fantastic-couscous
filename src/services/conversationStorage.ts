@@ -34,11 +34,15 @@ let indexedDbPromise: Promise<IDBDatabase | null> | null = null
 
 
 function resolveConversationTitle(content: Conversation, fallbackTitle: string): string {
+  const existingTitle = content.title?.trim()
+  if (existingTitle && existingTitle !== '未命名') {
+    return existingTitle
+  }
   const firstPrompt = getFirstUserPrompt(content.messages)
   if (firstPrompt) {
     return summarizePromptAsTitle(firstPrompt)
   }
-  return content.title?.trim() || fallbackTitle
+  return existingTitle || fallbackTitle
 }
 
 function contentStorageKey(conversationId: string): string {
@@ -429,4 +433,3 @@ export function loadStagedSettingsFromStorage(): StagedSettingsState | null {
 export function saveStagedSettingsToStorage(state: StagedSettingsState): void {
   localStorage.setItem(STORAGE_STAGED_SETTINGS_KEY, JSON.stringify(state))
 }
-

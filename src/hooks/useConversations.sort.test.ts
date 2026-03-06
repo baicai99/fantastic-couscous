@@ -20,10 +20,12 @@ function createSummary(input: {
   id: string
   createdAt: string
   updatedAt: string
+  pinnedAt?: string | null
 }): ConversationSummary {
   return {
     id: input.id,
     title: input.id,
+    pinnedAt: input.pinnedAt ?? null,
     createdAt: input.createdAt,
     updatedAt: input.updatedAt,
     lastMessagePreview: 'preview',
@@ -106,5 +108,29 @@ describe('sortConversationSummariesByLastMessageTime', () => {
 
     expect(result.map((item) => item.id)).toEqual(['conv-b', 'conv-a'])
   })
-})
 
+  it('keeps pinned conversations on top by pinned time', () => {
+    const summaries = [
+      createSummary({
+        id: 'conv-a',
+        createdAt: '2026-03-01T00:00:00.000Z',
+        updatedAt: '2026-03-03T00:00:00.000Z',
+        pinnedAt: '2026-03-03T08:00:00.000Z',
+      }),
+      createSummary({
+        id: 'conv-b',
+        createdAt: '2026-03-01T00:00:00.000Z',
+        updatedAt: '2026-03-04T00:00:00.000Z',
+      }),
+      createSummary({
+        id: 'conv-c',
+        createdAt: '2026-03-01T00:00:00.000Z',
+        updatedAt: '2026-03-02T00:00:00.000Z',
+        pinnedAt: '2026-03-04T09:00:00.000Z',
+      }),
+    ]
+
+    const result = sortConversationSummariesByLastMessageTime(summaries, {})
+    expect(result.map((item) => item.id)).toEqual(['conv-c', 'conv-a', 'conv-b'])
+  })
+})

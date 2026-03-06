@@ -78,6 +78,7 @@ export function ConversationWorkspace() {
   const composerLayerRef = useRef<HTMLDivElement | null>(null)
   const [composerInset, setComposerInset] = useState(170)
   const [composerPreferredWidth, setComposerPreferredWidth] = useState(COMPOSER_MIN_WIDTH_PX)
+  const [openAddChannelModalSignal, setOpenAddChannelModalSignal] = useState(0)
   const debouncedSetComposerInset = useDebouncedCallback((nextInset: number) => {
     setComposerInset((prev) => (prev === nextInset ? prev : nextInset))
   }, 80)
@@ -119,6 +120,8 @@ export function ConversationWorkspace() {
     createNewConversation,
     clearAllConversations,
     removeConversation,
+    renameConversation,
+    togglePinConversation,
     switchConversation,
     updateSideMode,
     updateSideCount,
@@ -232,8 +235,11 @@ export function ConversationWorkspace() {
     setRightPanelMode('expanded')
   }
 
-  const handleAssistantMessageAction = (_action: MessageAction) => {
+  const handleAssistantMessageAction = (action: MessageAction) => {
     openSettingsPanel()
+    if (action.type === 'add-api') {
+      setOpenAddChannelModalSignal((prev) => prev + 1)
+    }
   }
 
   return (
@@ -256,6 +262,8 @@ export function ConversationWorkspace() {
             onCreateConversation={createNewConversation}
             onClearAllConversations={clearAllConversations}
             onDeleteConversation={removeConversation}
+            onRenameConversation={renameConversation}
+            onTogglePinConversation={togglePinConversation}
             onSwitchConversation={switchConversation}
           />
         }
@@ -269,6 +277,8 @@ export function ConversationWorkspace() {
             onCreateConversation={createNewConversation}
             onClearAllConversations={clearAllConversations}
             onDeleteConversation={removeConversation}
+            onRenameConversation={renameConversation}
+            onTogglePinConversation={togglePinConversation}
             onSwitchConversation={switchConversation}
           />
         }
@@ -408,6 +418,7 @@ export function ConversationWorkspace() {
             onDynamicPromptEnabledChange={setDynamicPromptEnabled}
             onRunConcurrencyChange={setRunConcurrency}
             onTogglePanelMode={handleTopSettingsClick}
+            openAddChannelModalSignal={openAddChannelModalSignal}
           />
         }
         collapsedContent={
