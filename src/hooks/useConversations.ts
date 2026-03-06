@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { message } from 'antd'
 import { getModelCatalogFromChannels } from '../services/modelCatalog'
 import type {
   Conversation,
@@ -1189,10 +1190,6 @@ export function useConversations() {
     return 'png'
   }
 
-  const delay = (ms: number) => new Promise<void>((resolve) => {
-    window.setTimeout(resolve, ms)
-  })
-
   const toDownloadHref = async (src: string): Promise<{ href: string; revoke?: () => void }> => {
     if (typeof window === 'undefined') {
       return { href: src }
@@ -1241,13 +1238,84 @@ export function useConversations() {
     }
   }
 
-  const triggerDownloadsSequentially = async (items: Array<{ src: string; filename: string; cleanup?: () => void }>) => {
-    for (let index = 0; index < items.length; index += 1) {
-      const item = items[index]
-      await triggerDownload(item.src, item.filename, item.cleanup)
-      if (index < items.length - 1) {
-        await delay(120)
+  type BulkDownloadItem = { src: string; filename: string; sourceKind: 'idb' | 'direct'; cleanup?: () => void }
+
+  const triggerZipDownload = async (items: BulkDownloadItem[], archivePrefix: string) => {
+    if (typeof document === 'undefined' || items.length === 0) {
+      return
+    }
+
+    let JSZipCtor: new () => { file: (name: string, data: Blob) => void; generateAsync: (options: { type: 'blob'; compression: 'DEFLATE'; compressionOptions: { level: number } }) => Promise<Blob> }
+    try {
+      const imported = await import('jszip')
+      JSZipCtor = imported.default as unknown as new () => {
+        file: (name: string, data: Blob) => void
+        generateAsync: (options: { type: 'blob'; compression: 'DEFLATE'; compressionOptions: { level: number } }) => Promise<Blob>
       }
+    } catch {
+      message.error('压缩包模块加载失败，请重试。')
+      return
+    }
+
+    const zip = new JSZipCtor()
+    let addedCount = 0
+    let failedCount = 0
+    let blockedByCorsCount = 0
+
+    for (const item of items) {
+      try {
+        if (item.sourceKind === 'direct' && /^https?:\/\//i.test(item.src)) {
+          const parsed = new URL(item.src)
+          if (typeof window !== 'undefined' && parsed.origin !== window.location.origin) {
+            blockedByCorsCount += 1
+            failedCount += 1
+            continue
+          }
+        }
+        const response = await fetch(item.src)
+        if (!response.ok) {
+          failedCount += 1
+          continue
+        }
+        const blob = await response.blob()
+        zip.file(item.filename, blob)
+        addedCount += 1
+      } catch {
+        failedCount += 1
+      } finally {
+        item.cleanup?.()
+      }
+    }
+
+    if (addedCount === 0) {
+      message.error('下载失败：当前图片源不允许打包读取（跨域限制）。请重新生成后再试。')
+      return
+    }
+
+    const archiveBlob = await zip.generateAsync({
+      type: 'blob',
+      compression: 'DEFLATE',
+      compressionOptions: { level: 6 },
+    })
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
+    const downloadName = `${archivePrefix}-${timestamp}.zip`
+    const href = URL.createObjectURL(archiveBlob)
+    const link = document.createElement('a')
+    link.href = href
+    link.download = downloadName
+    link.rel = 'noopener'
+    link.style.display = 'none'
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    window.setTimeout(() => URL.revokeObjectURL(href), 60_000)
+
+    if (blockedByCorsCount > 0) {
+      message.warning(`压缩包已下载，但有 ${blockedByCorsCount} 张为跨域远程图片，浏览器不允许打包。建议重新生成后再下载。`)
+      return
+    }
+    if (failedCount > 0) {
+      message.warning(`压缩包已下载，但有 ${failedCount} 张图片因跨域限制未能打包。`)
     }
   }
 
@@ -1270,7 +1338,7 @@ export function useConversations() {
 
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
     void (async () => {
-      const downloadItems: Array<{ src: string; filename: string; cleanup?: () => void }> = []
+      const downloadItems: BulkDownloadItem[] = []
       for (const image of successfulImages) {
         const resolved = await resolveImageSourceForDownload(image)
         if (!resolved) {
@@ -1284,9 +1352,9 @@ export function useConversations() {
           ext,
           timestamp,
         })
-        downloadItems.push({ src: resolved.src, filename, cleanup: resolved.revoke })
+        downloadItems.push({ src: resolved.src, filename, sourceKind: resolved.sourceKind, cleanup: resolved.revoke })
       }
-      await triggerDownloadsSequentially(downloadItems)
+      await triggerZipDownload(downloadItems, 'run-images')
     })()
   }
 
@@ -1341,7 +1409,7 @@ export function useConversations() {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
     let seqCounter = 0
     void (async () => {
-      const downloadItems: Array<{ src: string; filename: string; cleanup?: () => void }> = []
+      const downloadItems: BulkDownloadItem[] = []
       for (const { run, image } of successImages) {
         const resolved = await resolveImageSourceForDownload(image)
         if (!resolved) {
@@ -1356,9 +1424,9 @@ export function useConversations() {
           ext,
           timestamp,
         })
-        downloadItems.push({ src: resolved.src, filename, cleanup: resolved.revoke })
+        downloadItems.push({ src: resolved.src, filename, sourceKind: resolved.sourceKind, cleanup: resolved.revoke })
       }
-      await triggerDownloadsSequentially(downloadItems)
+      await triggerZipDownload(downloadItems, 'batch-images')
     })()
   }
 
@@ -1381,7 +1449,7 @@ export function useConversations() {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
     let seqCounter = 0
     void (async () => {
-      const downloadItems: Array<{ src: string; filename: string; cleanup?: () => void }> = []
+      const downloadItems: BulkDownloadItem[] = []
       for (const run of targetRuns) {
         const successfulImages = run.images.filter((item) => isDownloadableImage(item))
         for (const image of successfulImages) {
@@ -1398,14 +1466,14 @@ export function useConversations() {
             ext,
             timestamp,
           })
-          downloadItems.push({ src: resolved.src, filename, cleanup: resolved.revoke })
+          downloadItems.push({ src: resolved.src, filename, sourceKind: resolved.sourceKind, cleanup: resolved.revoke })
         }
       }
 
       if (downloadItems.length === 0) {
         return
       }
-      await triggerDownloadsSequentially(downloadItems)
+      await triggerZipDownload(downloadItems, 'message-images')
     })()
   }
 

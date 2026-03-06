@@ -227,6 +227,13 @@ export function createRunExecutor(deps: RunExecutorDeps = {}) {
 
       try {
         const shouldAutoSave = settings.autoSave && isSaveDirectoryReady(settings.saveDirectory)
+        const effectiveParamValues = {
+          ...paramsSnapshot,
+          responseFormat:
+            typeof paramsSnapshot.responseFormat === 'string' && paramsSnapshot.responseFormat.trim()
+              ? paramsSnapshot.responseFormat
+              : ('b64_json' as const),
+        }
         const completedBySeq = new Map<number, ProcessedImage>()
         const completionTasks: Promise<void>[] = []
 
@@ -235,7 +242,7 @@ export function createRunExecutor(deps: RunExecutorDeps = {}) {
           modelId,
           prompt: finalPrompt,
           imageCount,
-          paramValues: paramsSnapshot,
+          paramValues: effectiveParamValues,
           onImageCompleted: (item) => {
             completionTasks.push((async () => {
               const errorMessage = item.error?.trim() ? item.error : '该序号未返回图片'

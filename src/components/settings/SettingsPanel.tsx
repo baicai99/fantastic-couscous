@@ -498,7 +498,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
             key: 'api',
             label: 'API 渠道',
             children: (
-              <Space direction="vertical" className="full-width" size={10}>
+              <Space orientation="vertical" className="full-width" size={10}>
                 <Select
                   placeholder="选择生成渠道"
                   value={settings.channelId ?? undefined}
@@ -533,7 +533,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
             key: 'model',
             label: '模型与参数',
             children: (
-              <Space direction="vertical" className="full-width" size={10}>
+              <Space orientation="vertical" className="full-width" size={10}>
                 <Form layout="vertical">
                   <Form.Item label="模型厂商">
                     <Select
@@ -635,12 +635,12 @@ export function SettingsPanel(props: SettingsPanelProps) {
                     </Form.Item>
                   ) : null}
                   <Form.Item label="当前尺寸" style={{ marginBottom: 0 }}>
-                    <Alert type="info" showIcon message={computedResolution} />
+                    <Alert type="info" showIcon title={computedResolution} />
                   </Form.Item>
                 </Form>
 
                 {activeModel ? (
-                  <Space direction="vertical" className="full-width" size={8}>
+                  <Space orientation="vertical" className="full-width" size={8}>
                     {activeModel.params.map((param) => (
                       <div key={param.key}>
                         <Text>{param.label}</Text>
@@ -743,7 +743,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
             key: 'mode',
             label: '对照模式',
             children: (
-              <Space direction="vertical" className="full-width">
+              <Space orientation="vertical" className="full-width">
                 <Space>
                   <Switch
                     checked={sideMode === 'multi'}
@@ -774,7 +774,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
             key: 'advanced',
             label: '高级功能',
             children: (
-              <Space direction="vertical" className="full-width" size={10}>
+              <Space orientation="vertical" className="full-width" size={10}>
                 <Space>
                   <Switch checked={showAdvancedVariables} onChange={onShowAdvancedVariablesChange} />
                   <Text>显示输入框高级变量</Text>
@@ -818,7 +818,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
         title="API 渠道管理"
         open={isDrawerOpen}
         onClose={() => setIsDrawerOpen(false)}
-        width={560}
+        size="large"
         extra={
           <Space>
             <Button

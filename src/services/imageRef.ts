@@ -3,6 +3,7 @@ import { getImageBlob } from './imageAssetStore'
 
 export interface ResolvedImageSource {
   src: string
+  sourceKind: 'idb' | 'direct'
   revoke?: () => void
 }
 
@@ -43,6 +44,7 @@ export async function resolveImageSourceForDownload(image: ImageItem): Promise<R
       const src = URL.createObjectURL(blob)
       return {
         src,
+        sourceKind: 'idb',
         revoke: () => URL.revokeObjectURL(src),
       }
     }
@@ -50,11 +52,11 @@ export async function resolveImageSourceForDownload(image: ImageItem): Promise<R
 
   const preferred = image.fullRef ?? image.fileRef ?? image.thumbRef
   if (preferred?.trim()) {
-    return { src: preferred }
+    return { src: preferred, sourceKind: 'direct' }
   }
 
   if (image.refKind === 'url' && image.refKey?.trim()) {
-    return { src: image.refKey }
+    return { src: image.refKey, sourceKind: 'direct' }
   }
 
   return null
