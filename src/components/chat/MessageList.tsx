@@ -23,8 +23,8 @@ interface MessageListProps {
   onUseUserPrompt?: (prompt: string) => void
   onRetryRun: (runId: string) => void | Promise<void>
   onReplayRun: (runId: string) => void
-  onDownloadAllRun?: (runId: string) => void
-  onDownloadMessageImages?: (runIds: string[]) => void
+  onDownloadAllRun?: (runId: string) => void | Promise<void>
+  onDownloadMessageImages?: (runIds: string[]) => void | Promise<void>
   onDownloadSingleImage?: (runId: string, imageId: string) => void
   onDownloadBatchRun?: (runId: string) => void
   replayingRunIds?: string[]
@@ -404,6 +404,8 @@ function MessageListComponent(props: MessageListProps) {
   const [visibleImageLimitByRunId, setVisibleImageLimitByRunId] = useState<Record<string, number>>({})
   const [retryingMessageIds, setRetryingMessageIds] = useState<string[]>([])
   const retryingMessageIdsRef = useRef<Set<string>>(new Set())
+  const [downloadingMessageIds, setDownloadingMessageIds] = useState<string[]>([])
+  const downloadingMessageIdsRef = useRef<Set<string>>(new Set())
   const debouncedSetViewportHeight = useDebouncedCallback((nextHeight: number) => {
     setViewportHeight((prev) => (prev === nextHeight ? prev : nextHeight))
   }, 80)
@@ -584,6 +586,28 @@ function MessageListComponent(props: MessageListProps) {
     [onRetryRun],
   )
 
+  const handleDownloadAllForMessage = useCallback(
+    async (messageId: string, runIds: string[], primaryRunId: string) => {
+      if (downloadingMessageIdsRef.current.has(messageId)) {
+        return
+      }
+
+      downloadingMessageIdsRef.current.add(messageId)
+      setDownloadingMessageIds((prev) => (prev.includes(messageId) ? prev : [...prev, messageId]))
+      try {
+        if (onDownloadMessageImages) {
+          await Promise.resolve(onDownloadMessageImages(runIds))
+          return
+        }
+        await Promise.resolve(onDownloadAllRun?.(primaryRunId))
+      } finally {
+        downloadingMessageIdsRef.current.delete(messageId)
+        setDownloadingMessageIds((prev) => prev.filter((id) => id !== messageId))
+      }
+    },
+    [onDownloadAllRun, onDownloadMessageImages],
+  )
+
   if (!activeConversation || activeConversation.messages.length === 0) {
     return (
       <div className="empty-state">
@@ -640,6 +664,7 @@ function MessageListComponent(props: MessageListProps) {
                       ? (() => {
                           const isReplaying = replayingRunIds.includes(primaryRun.id)
                           const isRetryingAllFailed = retryingMessageIds.includes(message.id)
+                          const isDownloadingAllImages = downloadingMessageIds.includes(message.id)
                           const imagesInMessage = runsForMessage.flatMap((run) => run.images)
                           const isAllImagesCompleted = imagesInMessage.length > 0 && imagesInMessage.every(
                             (item) => item.status !== 'pending',
@@ -672,13 +697,14 @@ function MessageListComponent(props: MessageListProps) {
                                 size="small"
                                 type="default"
                                 icon={<DownloadOutlined />}
-                                disabled={!isAllImagesCompleted || !hasDownloadableImages}
+                                disabled={!isAllImagesCompleted || !hasDownloadableImages || isDownloadingAllImages}
+                                loading={isDownloadingAllImages}
                                 onClick={() => {
-                                  if (onDownloadMessageImages) {
-                                    onDownloadMessageImages(runsForMessage.map((run) => run.id))
-                                    return
-                                  }
-                                  onDownloadAllRun?.(primaryRun.id)
+                                  void handleDownloadAllForMessage(
+                                    message.id,
+                                    runsForMessage.map((run) => run.id),
+                                    primaryRun.id,
+                                  )
                                 }}
                               >
                                 下载全部
@@ -698,7 +724,7 @@ function MessageListComponent(props: MessageListProps) {
                         })()
                       : message.role === 'user'
                         ? (
-                          <Space size={4} className="message-head-actions">
+            <Space size={4} className="message-head-actions">
                             <Button
                               size="small"
                               type="default"

@@ -1,4 +1,4 @@
-﻿import { render, screen } from '@testing-library/react'
+﻿import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { vi } from 'vitest'
 import { MessageList } from './MessageList'
@@ -387,6 +387,43 @@ describe('MessageList', () => {
     expect(onDownloadAllRun).toHaveBeenCalledWith('r1')
   })
 
+  it('shows loading state while downloading message images', async () => {
+    const user = userEvent.setup()
+    const deferred = createDeferred<void>()
+    const onDownloadMessageImages = vi.fn(() => deferred.promise)
+    const conversation = makeConversation()
+    conversation.messages[0].runs = [
+      {
+        ...conversation.messages[0].runs![0],
+        images: [{ id: 's1', seq: 1, status: 'success', fileRef: 'data:image/png;base64,AA==' }],
+      },
+    ]
+
+    render(
+      <div style={{ height: 600 }}>
+        <MessageList
+          activeConversation={conversation}
+          sideView="single"
+          onOpenPreview={() => {}}
+          onRetryRun={() => {}}
+          onReplayRun={() => {}}
+          onDownloadMessageImages={onDownloadMessageImages}
+        />
+      </div>,
+    )
+
+    const button = screen.getByRole('button', { name: /下载全部/ })
+    await user.click(button)
+
+    expect(onDownloadMessageImages).toHaveBeenCalledWith(['r1'])
+    expect(button).toBeDisabled()
+
+    deferred.resolve()
+    await waitFor(() => {
+      expect(button).not.toBeDisabled()
+    })
+  })
+
   it('triggers single-image download callback', async () => {
     const user = userEvent.setup()
     const onDownloadSingleImage = vi.fn()
@@ -719,4 +756,5 @@ describe('MessageList', () => {
     expect(screen.queryByRole('button', { name: /下载这张/ })).not.toBeInTheDocument()
   })
 })
+
 

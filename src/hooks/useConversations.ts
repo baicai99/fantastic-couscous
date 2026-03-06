@@ -34,6 +34,58 @@ const PROGRESS_PERSIST_DEBOUNCE_MS = 250
 const MESSAGE_HISTORY_INITIAL_LIMIT = 100
 const MESSAGE_HISTORY_PAGE_SIZE = 50
 const MAX_IN_MEMORY_CONVERSATIONS = 5
+const ARCHIVE_ILLEGAL_FILE_CHAR_PATTERN = /[<>:"/\\|?*\x00-\x1F]/g
+const ARCHIVE_TRAILING_DOT_SPACE_PATTERN = /[.\s]+$/g
+
+function toEpoch(value: string | null | undefined): number {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    return 0
+  }
+  const epoch = Date.parse(value)
+  return Number.isFinite(epoch) ? epoch : 0
+}
+
+function getConversationLastMessageEpoch(conversation: Conversation | undefined): number {
+  if (!conversation) {
+    return 0
+  }
+
+  const lastMessageEpoch = conversation.messages.reduce((maxEpoch, message) => {
+    const messageEpoch = toEpoch(message.createdAt)
+    return messageEpoch > maxEpoch ? messageEpoch : maxEpoch
+  }, 0)
+  if (lastMessageEpoch > 0) {
+    return lastMessageEpoch
+  }
+  return toEpoch(conversation.updatedAt)
+}
+
+export function sortConversationSummariesByLastMessageTime(
+  summaries: ConversationSummary[],
+  contents: Record<string, Conversation>,
+): ConversationSummary[] {
+  return [...summaries]
+    .map((summary, index) => ({
+      summary,
+      index,
+      lastMessageEpoch: Math.max(
+        getConversationLastMessageEpoch(contents[summary.id]),
+        toEpoch(summary.updatedAt),
+        toEpoch(summary.createdAt),
+      ),
+      createdAtEpoch: toEpoch(summary.createdAt),
+    }))
+    .sort((left, right) => {
+      if (right.lastMessageEpoch !== left.lastMessageEpoch) {
+        return right.lastMessageEpoch - left.lastMessageEpoch
+      }
+      if (right.createdAtEpoch !== left.createdAtEpoch) {
+        return right.createdAtEpoch - left.createdAtEpoch
+      }
+      return left.index - right.index
+    })
+    .map((item) => item.summary)
+}
 
 function upsertConversationState(
   summaries: ConversationSummary[],
@@ -71,6 +123,24 @@ function isDownloadableImage(image: Run['images'][number]): boolean {
   return isDownloadableImageRef(image)
 }
 
+function sanitizeArchiveSegment(value: string | null | undefined, fallback: string): string {
+  const normalized = String(value ?? '')
+    .replace(ARCHIVE_ILLEGAL_FILE_CHAR_PATTERN, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(ARCHIVE_TRAILING_DOT_SPACE_PATTERN, '')
+  return normalized || fallback
+}
+
+export function buildMessageArchivePrefix(runs: Run[]): string {
+  const modelName =
+    runs
+      .map((run) => run.modelName ?? run.modelId ?? '')
+      .find((value) => value.trim().length > 0) ?? 'model'
+  const safeModelName = sanitizeArchiveSegment(modelName, 'model')
+  return safeModelName
+}
+
 export function collectBatchDownloadImagesByRunId(
   allRuns: Run[],
   runId: string,
@@ -93,11 +163,12 @@ export function useConversations() {
     const channels = repository.loadChannels()
     const modelCatalog = getModelCatalogFromChannels(channels)
     const initialLoad = repository.load()
+    const initialSummaries = sortConversationSummariesByLastMessageTime(initialLoad.summaries, {})
     return createInitialConversationState({
       channels,
       modelCatalog,
       initialLoad: {
-        summaries: initialLoad.summaries,
+        summaries: initialSummaries,
         contents: {},
         activeId: initialLoad.activeId,
       },
@@ -212,14 +283,15 @@ export function useConversations() {
     next: { summaries: ConversationSummary[]; contents: Record<string, Conversation> },
     options?: { saveIndex?: boolean },
   ) => {
+    const sortedSummaries = sortConversationSummariesByLastMessageTime(next.summaries, next.contents)
     stateRef.current = {
       ...stateRef.current,
-      summaries: next.summaries,
+      summaries: sortedSummaries,
       contents: next.contents,
     }
-    dispatch({ type: 'conversation/sync', payload: next })
+    dispatch({ type: 'conversation/sync', payload: { summaries: sortedSummaries, contents: next.contents } })
     if (options?.saveIndex ?? true) {
-      repository.saveIndex(next.summaries)
+      repository.saveIndex(sortedSummaries)
     }
   }
 
@@ -1430,7 +1502,7 @@ export function useConversations() {
     })()
   }
 
-  const downloadMessageRunImages = (runIds: string[]) => {
+  const downloadMessageRunImages = async (runIds: string[]) => {
     const snapshot = stateRef.current
     const currentActive = snapshot.activeId ? snapshot.contents[snapshot.activeId] ?? null : null
     if (!currentActive || runIds.length === 0) {
@@ -1448,33 +1520,32 @@ export function useConversations() {
 
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
     let seqCounter = 0
-    void (async () => {
-      const downloadItems: BulkDownloadItem[] = []
-      for (const run of targetRuns) {
-        const successfulImages = run.images.filter((item) => isDownloadableImage(item))
-        for (const image of successfulImages) {
-          const resolved = await resolveImageSourceForDownload(image)
-          if (!resolved) {
-            continue
-          }
-          seqCounter += 1
-          const ext = inferImageExtension(resolved.src)
-          const filename = buildImageFileName({
-            modelName: run.modelName,
-            prompt: run.finalPrompt,
-            seq: seqCounter,
-            ext,
-            timestamp,
-          })
-          downloadItems.push({ src: resolved.src, filename, sourceKind: resolved.sourceKind, cleanup: resolved.revoke })
+    const downloadItems: BulkDownloadItem[] = []
+    for (const run of targetRuns) {
+      const successfulImages = run.images.filter((item) => isDownloadableImage(item))
+      for (const image of successfulImages) {
+        const resolved = await resolveImageSourceForDownload(image)
+        if (!resolved) {
+          continue
         }
+        seqCounter += 1
+        const ext = inferImageExtension(resolved.src)
+        const filename = buildImageFileName({
+          modelName: run.modelName,
+          prompt: run.finalPrompt,
+          seq: seqCounter,
+          ext,
+          timestamp,
+        })
+        downloadItems.push({ src: resolved.src, filename, sourceKind: resolved.sourceKind, cleanup: resolved.revoke })
       }
+    }
 
-      if (downloadItems.length === 0) {
-        return
-      }
-      await triggerZipDownload(downloadItems, 'message-images')
-    })()
+    if (downloadItems.length === 0) {
+      return
+    }
+    const archivePrefix = buildMessageArchivePrefix(targetRuns)
+    await triggerZipDownload(downloadItems, archivePrefix)
   }
 
   const loadOlderMessages = () => {

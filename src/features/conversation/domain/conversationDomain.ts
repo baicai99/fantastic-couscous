@@ -135,6 +135,48 @@ interface ParsedValuesFailure {
 
 type ParsedValuesResult = ParsedValuesSuccess | ParsedValuesFailure
 
+function toChineseParserReason(reason: string): string {
+  const normalized = reason.trim()
+  if (!normalized) {
+    return '未知解析错误。'
+  }
+
+  const jsonArrayPattern = /Expected '([^']+)' or '([^']+)' after array element in JSON at position \d+ \(line (\d+) column (\d+)\)/i
+  const jsonArrayMatch = normalized.match(jsonArrayPattern)
+  if (jsonArrayMatch) {
+    const [, first, second, line, column] = jsonArrayMatch
+    return `JSON 第 ${line} 行第 ${column} 列语法错误：数组元素后应为 '${first}' 或 '${second}'。`
+  }
+
+  const yamlFlowPattern = /Missing , or : between flow sequence items at line (\d+), column (\d+)/i
+  const yamlFlowMatch = normalized.match(yamlFlowPattern)
+  if (yamlFlowMatch) {
+    const [, line, column] = yamlFlowMatch
+    return `YAML 第 ${line} 行第 ${column} 列语法错误：序列项之间缺少 ',' 或 ':'。`
+  }
+
+  const csvDelimiterPattern = /Unable to auto-detect delimiting character; defaulted to ','/i
+  if (csvDelimiterPattern.test(normalized)) {
+    return "无法自动识别 CSV 分隔符，已默认使用 ','。"
+  }
+
+  const lineColumnPatternA = /line (\d+) column (\d+)/i
+  const lineColumnMatchA = normalized.match(lineColumnPatternA)
+  if (lineColumnMatchA) {
+    const [, line, column] = lineColumnMatchA
+    return `第 ${line} 行第 ${column} 列附近语法错误。`
+  }
+
+  const lineColumnPatternB = /line (\d+), column (\d+)/i
+  const lineColumnMatchB = normalized.match(lineColumnPatternB)
+  if (lineColumnMatchB) {
+    const [, line, column] = lineColumnMatchB
+    return `第 ${line} 行第 ${column} 列附近语法错误。`
+  }
+
+  return '格式不正确，请检查语法。'
+}
+
 function legacySplitValues(valuesText: string): string[] {
   return valuesText
     .split(/[\n,;|]/)
@@ -144,12 +186,12 @@ function legacySplitValues(valuesText: string): string[] {
 
 function normalizeStringList(raw: unknown, formatLabel: string): ParsedValuesResult {
   if (!Array.isArray(raw)) {
-    return { ok: false, error: `${formatLabel} input must be a list/array.` }
+    return { ok: false, error: `${formatLabel} 输入必须是列表/数组。` }
   }
 
   for (const item of raw) {
     if (typeof item !== 'string') {
-      return { ok: false, error: `${formatLabel} list items must be strings.` }
+      return { ok: false, error: `${formatLabel} 列表项必须是字符串。` }
     }
   }
 
@@ -164,8 +206,8 @@ function parseJsonValues(valuesText: string): ParsedValuesResult {
     const parsed = JSON.parse(valuesText)
     return normalizeStringList(parsed, 'JSON')
   } catch (error) {
-    const reason = error instanceof Error ? error.message : 'Invalid JSON.'
-    return { ok: false, error: `Invalid JSON list: ${reason}` }
+    const reason = error instanceof Error ? toChineseParserReason(error.message) : 'JSON 格式无效。'
+    return { ok: false, error: `JSON 列表解析失败：${reason}` }
   }
 }
 
@@ -174,8 +216,8 @@ function parseYamlValues(valuesText: string): ParsedValuesResult {
     const parsed = parseYaml(valuesText)
     return normalizeStringList(parsed, 'YAML')
   } catch (error) {
-    const reason = error instanceof Error ? error.message : 'Invalid YAML.'
-    return { ok: false, error: `Invalid YAML list: ${reason}` }
+    const reason = error instanceof Error ? toChineseParserReason(error.message) : 'YAML 格式无效。'
+    return { ok: false, error: `YAML 列表解析失败：${reason}` }
   }
 }
 
@@ -195,7 +237,7 @@ function parseCsvValues(valuesText: string): ParsedValuesResult {
   })
 
   if (parsed.errors.length > 0) {
-    return { ok: false, error: `Invalid CSV list: ${parsed.errors[0].message}` }
+    return { ok: false, error: `CSV 列表解析失败：${toChineseParserReason(parsed.errors[0].message)}` }
   }
 
   return {
@@ -289,7 +331,7 @@ function parseCsvKeyedRows(valuesText: string): BulkParseResult {
     skipEmptyLines: 'greedy',
   })
   if (parsed.errors.length > 0) {
-    return { ok: false, error: `Invalid CSV input: ${parsed.errors[0].message}` }
+    return { ok: false, error: `CSV 解析失败：${toChineseParserReason(parsed.errors[0].message)}` }
   }
 
   const rows: PanelVariableRow[] = []
@@ -328,7 +370,7 @@ function parseLineKeyedRows(valuesText: string): BulkParseResult {
     const line = lines[index]
     const sepIndex = line.indexOf(':')
     if (sepIndex <= 0) {
-      return { ok: false, error: `Invalid line ${index + 1}: expected "key: v1 | v2".` }
+      return { ok: false, error: `第 ${index + 1} 行格式错误：应为 "key: v1 | v2"。` }
     }
     const key = line.slice(0, sepIndex).trim()
     const rawValues = line.slice(sepIndex + 1).trim()
@@ -368,7 +410,7 @@ function normalizeBulkObject(raw: Record<string, unknown>, detectedFormat: BulkD
       })
       continue
     }
-    return { ok: false, error: `Key "${cleanKey}" must map to string or string[].` }
+    return { ok: false, error: `键 "${cleanKey}" 的值必须是字符串或字符串数组。` }
   }
 
   return { ok: true, rows, detectedFormat }
@@ -379,7 +421,7 @@ function normalizeBulkArray(raw: unknown[], detectedFormat: BulkDetectedFormat):
   for (let index = 0; index < raw.length; index += 1) {
     const item = raw[index]
     if (!item || typeof item !== 'object') {
-      return { ok: false, error: `Invalid item at index ${index}: expected object.` }
+      return { ok: false, error: `第 ${index} 项格式错误：应为对象。` }
     }
     const record = item as Record<string, unknown>
     const key = String(record.key ?? '').trim()
@@ -396,7 +438,7 @@ function normalizeBulkArray(raw: unknown[], detectedFormat: BulkDetectedFormat):
       rows.push({ id: makeId(), key, valuesText: encodeBulkRowValues([values.trim()]), selectedValue: '' })
       continue
     }
-    return { ok: false, error: `Item "${key}" must have values as string or string[].` }
+    return { ok: false, error: `项 "${key}" 的 values 必须是字符串或字符串数组。` }
   }
 
   return { ok: true, rows, detectedFormat }
@@ -409,7 +451,7 @@ function normalizeBulkStructured(raw: unknown, detectedFormat: BulkDetectedForma
   if (raw && typeof raw === 'object') {
     return normalizeBulkObject(raw as Record<string, unknown>, detectedFormat)
   }
-  return { ok: false, error: 'Expected object map or row array.' }
+  return { ok: false, error: '输入必须是对象映射或行对象数组。' }
 }
 
 function parseStructuredWith(
@@ -421,8 +463,8 @@ function parseStructuredWith(
     const raw = parser(valuesText)
     return normalizeBulkStructured(raw, format)
   } catch (error) {
-    const reason = error instanceof Error ? error.message : `Invalid ${format.toUpperCase()}.`
-    return { ok: false, error: reason }
+    const reason = error instanceof Error ? toChineseParserReason(error.message) : `${format.toUpperCase()} 格式无效。`
+    return { ok: false, error: `${format.toUpperCase()} 解析失败：${reason}` }
   }
 }
 
@@ -435,7 +477,7 @@ function parseRowValuesForSync(rows: PanelVariableRow[], format: PanelValueForma
     }
     const parsed = parseValuesText(row.valuesText, format)
     if (!parsed.ok) {
-      return { ok: false, error: `Invalid values for key "${key}": ${parsed.error}` }
+      return { ok: false, error: `键 "${key}" 的值解析失败：${parsed.error}` }
     }
     map[key] = parsed.values
   }
@@ -574,7 +616,7 @@ export function buildPanelVariableBatches(rows: PanelVariableRow[], format: Pane
       validation: {
         ok: false,
         mismatchRowIds: parseErrorRows.map((item) => item.row.id),
-        error: `Invalid values for key "${first.key}": ${first.parsed.error}`,
+        error: `键 "${first.key}" 的值解析失败：${first.parsed.error}`,
       },
       batches: [],
     }
@@ -600,7 +642,7 @@ export function buildPanelVariableBatches(rows: PanelVariableRow[], format: Pane
       validation: {
         ok: false,
         mismatchRowIds: mismatchRows.map((item) => item.row.id),
-        error: 'Panel variable lists must have the same non-zero length.',
+        error: '变量列表长度必须一致且大于 0。',
       },
       batches: [],
     }

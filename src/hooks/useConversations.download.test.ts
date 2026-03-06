@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Run } from '../types/chat'
-import { collectBatchDownloadImagesByRunId } from './useConversations'
+import { buildMessageArchivePrefix, collectBatchDownloadImagesByRunId } from './useConversations'
 
 function createRun(input: {
   id: string
@@ -92,5 +92,33 @@ describe('collectBatchDownloadImagesByRunId', () => {
     const result = collectBatchDownloadImagesByRunId([run], 'missing-run')
 
     expect(result).toEqual([])
+  })
+})
+
+describe('buildMessageArchivePrefix', () => {
+  it('builds archive prefix using model name only', () => {
+    const run = createRun({
+      id: 'run-1',
+      batchId: 'batch-1',
+      images: [{ id: 'img-1', seq: 1, status: 'success', fileRef: '/img-1.png' }],
+    })
+    run.modelName = 'gpt-image-1'
+
+    const result = buildMessageArchivePrefix([run])
+
+    expect(result).toBe('gpt-image-1')
+  })
+
+  it('sanitizes illegal file characters in model name', () => {
+    const run = createRun({
+      id: 'run-1',
+      batchId: 'batch-1',
+      images: [{ id: 'img-1', seq: 1, status: 'success', fileRef: '/img-1.png' }],
+    })
+    run.modelName = 'qwen/image:pro*max'
+
+    const result = buildMessageArchivePrefix([run])
+
+    expect(result).toBe('qwen image pro max')
   })
 })

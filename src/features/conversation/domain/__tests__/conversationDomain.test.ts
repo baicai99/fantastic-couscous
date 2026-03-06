@@ -182,8 +182,8 @@ describe('conversationDomain variables', () => {
     const batches = buildPanelVariableBatches([{ id: 'e1', key: 'subject', valuesText: '["a",}', selectedValue: '' }], 'json')
 
     expect(batches.validation.ok).toBe(false)
-    expect(batches.validation.error).toContain('Invalid values for key "subject"')
-    expect(batches.validation.error).toContain('Invalid JSON list')
+    expect(batches.validation.error).toContain('键 "subject" 的值解析失败')
+    expect(batches.validation.error).toContain('JSON 列表解析失败')
   })
 
   it('classifies sensitive-content provider errors as rejected', () => {
@@ -263,7 +263,7 @@ describe('conversationDomain variables', () => {
 
     expect(result.ok).toBe(false)
     if (!result.ok) {
-      expect(result.error).toContain('same non-zero length')
+      expect(result.error).toContain('长度必须一致且大于 0')
     }
   })
 
@@ -301,7 +301,7 @@ describe('conversationDomain variables', () => {
 
     expect(result.ok).toBe(false)
     if (!result.ok) {
-      expect(result.error).toContain('Invalid JSON list')
+      expect(result.error).toContain('JSON 列表解析失败')
     }
   })
 })
