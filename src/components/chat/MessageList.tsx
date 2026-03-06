@@ -2,7 +2,7 @@
 import { DownloadOutlined, ReloadOutlined, RetweetOutlined, SettingOutlined } from '@ant-design/icons'
 import { Button, Card, Collapse, Dropdown, Modal, Space, Tooltip, Typography } from 'antd'
 import type { MenuProps } from 'antd'
-import type { Conversation, FailureCode, ImageItem, Message, Run, Side } from '../../types/chat'
+import type { Conversation, FailureCode, ImageItem, Message, MessageAction, Run, Side } from '../../types/chat'
 import { gridColumnCount, sortImagesBySeq } from '../../utils/chat'
 import { ENABLE_MESSAGE_WINDOWING } from '../../features/performance/flags'
 import { startMetric, trackDuration } from '../../features/performance/runtimeMetrics'
@@ -42,6 +42,7 @@ interface MessageListProps {
   multiRunPageSize?: number
   multiImageInitialLimit?: number
   multiImagePageSize?: number
+  onAssistantMessageAction?: (action: MessageAction) => void
 }
 
 interface DisplayImage {
@@ -517,6 +518,7 @@ function MessageListComponent(props: MessageListProps) {
     multiRunPageSize = DEFAULT_MULTI_RUN_PAGE_SIZE,
     multiImageInitialLimit = DEFAULT_MULTI_IMAGE_INITIAL_LIMIT,
     multiImagePageSize = DEFAULT_MULTI_IMAGE_PAGE_SIZE,
+    onAssistantMessageAction,
   } = props
 
   const viewportRef = useRef<HTMLDivElement | null>(null)
@@ -940,6 +942,21 @@ function MessageListComponent(props: MessageListProps) {
                 <Card size="small" className={`message-card ${message.role}`}>
                   <Space orientation="vertical" size={8} className="full-width">
                     <Paragraph style={{ marginBottom: 0 }}>{message.content}</Paragraph>
+                    {message.role === 'assistant' && message.actions?.length ? (
+                      <Space size={8} wrap className="message-inline-actions">
+                        {message.actions.map((action) => (
+                          <Button
+                            key={action.id}
+                            size="small"
+                            type="default"
+                            className="assistant-inline-action-btn"
+                            onClick={() => onAssistantMessageAction?.(action)}
+                          >
+                            {action.label}
+                          </Button>
+                        ))}
+                      </Space>
+                    ) : null}
 
                     {message.role === 'assistant'
                       ? visibleRuns.map((run, index) => {

@@ -870,6 +870,38 @@ describe('MessageList', () => {
     expect(screen.getByText(/Batch ID: b1/)).toBeInTheDocument()
   })
 
+  it('renders assistant inline config actions and forwards clicks', async () => {
+    const user = userEvent.setup()
+    const onAssistantMessageAction = vi.fn()
+    const conversation = makeConversation()
+    conversation.messages[0] = {
+      ...conversation.messages[0],
+      runs: [],
+      content: '当前还没有选择模型，请先选择模型，再重新发送这条消息。',
+      actions: [{ id: 'a1', type: 'select-model', label: '选择模型' }],
+    }
+
+    render(
+      <div style={{ height: 600 }}>
+        <MessageList
+          activeConversation={conversation}
+          sideView="single"
+          onOpenPreview={() => {}}
+          onRetryRun={() => {}}
+          onReplayRun={() => {}}
+          onAssistantMessageAction={onAssistantMessageAction}
+        />
+      </div>,
+    )
+
+    await user.click(screen.getByRole('button', { name: '选择模型' }))
+    expect(onAssistantMessageAction).toHaveBeenCalledWith({
+      id: 'a1',
+      type: 'select-model',
+      label: '选择模型',
+    })
+  })
+
   it('smoothly scrolls to bottom when auto scroll is triggered', () => {
     const scrollIntoView = vi.fn()
     Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {

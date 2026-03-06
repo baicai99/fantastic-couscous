@@ -49,9 +49,18 @@ async function seedConversation(input: { conversation: Conversation; activeId?: 
   repo.saveActiveId(input.activeId ?? input.conversation.id)
 }
 
-function seedChannels() {
+function seedChannels(input?: {
+  channels?: Array<{
+    id: string
+    name: string
+    baseUrl: string
+    apiKey: string
+    models: string[]
+  }>
+  settingsOverride?: Partial<Conversation['settingsBySide']['single']>
+}) {
   const repo = createConversationRepository()
-  repo.saveChannels([{
+  repo.saveChannels(input?.channels ?? [{
     id: 'ch',
     name: 'main',
     baseUrl: 'https://example.com',
@@ -74,6 +83,7 @@ function seedChannels() {
         channelId: 'ch',
         modelId: 'model-a',
         paramValues: {},
+        ...input?.settingsOverride,
       },
     },
     runConcurrency: 1,
@@ -536,6 +546,77 @@ describe('useConversations', () => {
     expect(result.current.activeConversation?.messages[1]?.runs?.[0]?.modelId).toBe('gpt-image-1')
     expect(result.current.activeSettingsBySide.single.modelId).toBe(previousModelId)
     expect(messageSuccessSpy).toHaveBeenCalledWith('本次已临时切换到 gpt-image-1')
+  })
+
+  it('appends assistant guidance when sending without a selected model', async () => {
+    await resetStorage()
+    seedChannels({
+      channels: [{
+        id: 'ch',
+        name: 'main',
+        baseUrl: 'https://example.com',
+        apiKey: 'key',
+        models: [],
+      }],
+      settingsOverride: {
+        channelId: 'ch',
+        modelId: '',
+      },
+    })
+
+    const { useConversations } = await import('./useConversations')
+    const { result } = renderHook(() => useConversations())
+
+    act(() => {
+      result.current.setDraft('draw a cat')
+    })
+    await act(async () => {
+      await result.current.sendDraft()
+    })
+
+    await waitFor(() => expect(result.current.activeConversation?.messages).toHaveLength(2))
+    expect(mockCreateRun).not.toHaveBeenCalled()
+    expect(result.current.activeConversation?.messages[0]?.content).toBe('draw a cat')
+    expect(result.current.activeConversation?.messages[1]?.content).toContain('当前还没有选择模型')
+    expect(result.current.activeConversation?.messages[1]?.actions).toEqual([
+      expect.objectContaining({ type: 'select-model', label: '选择模型' }),
+    ])
+    expect(result.current.draft).toBe('')
+  })
+
+  it('appends assistant guidance when model exists but api is not configured', async () => {
+    await resetStorage()
+    seedChannels({
+      channels: [{
+        id: 'ch',
+        name: 'main',
+        baseUrl: '',
+        apiKey: '',
+        models: ['model-a'],
+      }],
+      settingsOverride: {
+        channelId: 'ch',
+        modelId: 'model-a',
+      },
+    })
+
+    const { useConversations } = await import('./useConversations')
+    const { result } = renderHook(() => useConversations())
+
+    act(() => {
+      result.current.setDraft('draw a dog')
+    })
+    await act(async () => {
+      await result.current.sendDraft()
+    })
+
+    await waitFor(() => expect(result.current.activeConversation?.messages).toHaveLength(2))
+    expect(mockCreateRun).not.toHaveBeenCalled()
+    expect(result.current.activeConversation?.messages[1]?.content).toContain('还没有可用的 API 配置')
+    expect(result.current.activeConversation?.messages[1]?.actions).toEqual([
+      expect.objectContaining({ type: 'add-api', label: '添加 API' }),
+    ])
+    expect(result.current.draft).toBe('')
   })
 
   it('persists favorite model ids in staged settings', async () => {

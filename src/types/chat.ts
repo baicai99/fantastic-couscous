@@ -3,6 +3,13 @@ export type Side = string
 export type ImageStatus = 'pending' | 'success' | 'failed'
 export type ImageThreadState = 'active' | 'detached' | 'settled'
 export type MessageRole = 'user' | 'assistant'
+export type MessageActionType = 'select-model' | 'add-api'
+
+export interface MessageAction {
+  id: string
+  type: MessageActionType
+  label: string
+}
 export type SettingPrimitive = string | number | boolean
 export type ModelParamType = 'number' | 'enum' | 'boolean'
 export type ImageRefKind = 'url' | 'idb-blob' | 'inline'
@@ -120,6 +127,7 @@ export interface Message {
   role: MessageRole
   content: string
   runs?: Run[]
+  actions?: MessageAction[]
 }
 
 export interface Conversation {

@@ -5,6 +5,7 @@ import { getModelCatalogFromChannels } from '../services/modelCatalog'
 import type {
   ApiChannel,
   Conversation,
+  MessageAction,
   ConversationSummary,
   Message,
   ModelSpec,
@@ -74,6 +75,18 @@ function getConversationLastMessageEpoch(conversation: Conversation | undefined)
     return lastMessageEpoch
   }
   return toEpoch(conversation.updatedAt)
+}
+
+function hasConfiguredApiChannel(channels: ApiChannel[]): boolean {
+  return channels.some((channel) => channel.baseUrl.trim() && channel.apiKey.trim())
+}
+
+function buildSendBlockedAssistantActions(kind: 'missing-model' | 'missing-api'): MessageAction[] {
+  if (kind === 'missing-model') {
+    return [{ id: makeId(), type: 'select-model', label: '选择模型' }]
+  }
+
+  return [{ id: makeId(), type: 'add-api', label: '添加 API' }]
 }
 
 export function sortConversationSummariesByLastMessageTime(
@@ -1041,6 +1054,7 @@ export function useConversations() {
     assistantContent: string,
     runs: Run[] = [],
     titleSource?: string,
+    assistantActions?: MessageAction[],
   ): Conversation => {
     const now = new Date().toISOString()
     const userMessage: Message = {
@@ -1055,6 +1069,7 @@ export function useConversations() {
       role: 'assistant',
       content: assistantContent,
       runs,
+      actions: assistantActions,
     }
     const hadUserMessage = conversation.messages.some((message) => message.role === 'user')
     const nextTitle = !hadUserMessage ? toSummary({
@@ -1651,6 +1666,53 @@ export function useConversations() {
     }
   }
 
+  const resolveSendBlockedReason = (
+    snapshot: typeof stateRef.current,
+    activeState: ReturnType<typeof conversationSelectors.selectActiveSettings>,
+  ): { kind: 'missing-model' | 'missing-api'; assistantContent: string; actions: MessageAction[] } | null => {
+    const targetSides = activeState.activeSideMode === 'single'
+      ? (['single'] as Side[])
+      : getMultiSideIds(activeState.activeSideCount)
+    const selectedSettings = targetSides
+      .map((side) => activeState.activeSettingsBySide[side])
+      .filter((settings): settings is SingleSideSettings => Boolean(settings))
+    const modelIds = selectedSettings.map((settings) => settings.modelId.trim())
+    const hasAvailableModels = modelCatalog.models.length > 0
+    const hasAnyConfiguredApi = hasConfiguredApiChannel(snapshot.channels)
+    const isModelMissing = modelIds.some((modelId) => !modelId || !modelCatalog.models.some((model) => model.id === modelId))
+
+    if (!hasAvailableModels && !hasAnyConfiguredApi) {
+      return {
+        kind: 'missing-api',
+        assistantContent: '当前还没有可用的 API 配置，请先添加 API，再重新发送这条消息。',
+        actions: buildSendBlockedAssistantActions('missing-api'),
+      }
+    }
+
+    if (isModelMissing) {
+      return {
+        kind: 'missing-model',
+        assistantContent: '当前还没有选择模型，请先选择模型，再重新发送这条消息。',
+        actions: buildSendBlockedAssistantActions('missing-model'),
+      }
+    }
+
+    const hasInvalidChannel = selectedSettings.some((settings) => {
+      const channel = snapshot.channels.find((item) => item.id === settings.channelId)
+      return !channel || !channel.baseUrl.trim() || !channel.apiKey.trim()
+    })
+
+    if (hasInvalidChannel) {
+      return {
+        kind: 'missing-api',
+        assistantContent: '当前模型已选中，但还没有可用的 API 配置，请先添加 API，再重新发送这条消息。',
+        actions: buildSendBlockedAssistantActions('missing-api'),
+      }
+    }
+
+    return null
+  }
+
   const sendDraft = async () => {
     const snapshot = stateRef.current
     const currentActive = await getLoadedActiveConversation()
@@ -1696,6 +1758,30 @@ export function useConversations() {
           return nextSettings
         })()
       : activeState.activeSettingsBySide
+
+    const blockedReason = resolveSendBlockedReason(snapshot, {
+      ...activeState,
+      activeSettingsBySide: effectiveSettingsBySide,
+    })
+    if (blockedReason) {
+      const baseConversation =
+        currentActive ??
+        createConversation(activeState.activeSettingsBySide, activeState.activeSideMode, activeState.activeSideCount)
+      const updatedConversation = appendConversationEntry(
+        baseConversation,
+        snapshot.draft,
+        blockedReason.assistantContent,
+        [],
+        effectiveDraft,
+        blockedReason.actions,
+      )
+      persistConversation(updatedConversation)
+      setActiveConversation(updatedConversation.id)
+      setSendScrollTrigger((prev) => prev + 1)
+      actions.setDraft('')
+      dispatch({ type: 'send/clearError' })
+      return
+    }
 
     const planned = orchestrator.planSendDraft({
       ...snapshot,

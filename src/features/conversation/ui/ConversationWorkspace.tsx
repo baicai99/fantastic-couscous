@@ -12,6 +12,7 @@ import { SidebarShell } from '../../../components/sidebar/SidebarShell'
 import { useImagePreview } from '../../../hooks/useImagePreview'
 import { useDebouncedCallback } from '../../../hooks/useDebouncedCallback'
 import { usePersistentPanelMode } from '../../../hooks/usePersistentPanelMode'
+import type { MessageAction } from '../../../types/chat'
 import { useConversationController } from './useConversationController'
 
 const { Content } = Layout
@@ -227,6 +228,14 @@ export function ConversationWorkspace() {
     toggleRightPanelMode()
   }
 
+  const openSettingsPanel = () => {
+    setRightPanelMode('expanded')
+  }
+
+  const handleAssistantMessageAction = (_action: MessageAction) => {
+    openSettingsPanel()
+  }
+
   return (
     <Layout className="app-shell">
       <SidebarShell
@@ -308,6 +317,7 @@ export function ConversationWorkspace() {
                         multiImagePageSize={multiRenderProfile.imagePageSize}
                         autoScrollTrigger={sendScrollTrigger}
                         onLoadOlderMessages={loadOlderMessages}
+                        onAssistantMessageAction={handleAssistantMessageAction}
                       />
                     </Card>
                   </Col>
@@ -330,6 +340,7 @@ export function ConversationWorkspace() {
                 messagePageSize={historyPageSize}
                 autoScrollTrigger={sendScrollTrigger}
                 onLoadOlderMessages={loadOlderMessages}
+                onAssistantMessageAction={handleAssistantMessageAction}
               />
             )}
           </Content>
