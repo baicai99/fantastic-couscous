@@ -5,6 +5,7 @@ import type { Conversation, FailureCode, ImageItem, Message, Run, Side } from '.
 import { gridColumnCount, sortImagesBySeq } from '../../utils/chat'
 import { ENABLE_MESSAGE_WINDOWING, ENABLE_PROGRESSIVE_IMAGE_RENDER } from '../../features/performance/flags'
 import { startMetric, trackDuration } from '../../features/performance/runtimeMetrics'
+import { useDebouncedCallback } from '../../hooks/useDebouncedCallback'
 
 const { Paragraph, Text } = Typography
 const DEFAULT_ESTIMATED_MESSAGE_HEIGHT = 220
@@ -330,6 +331,9 @@ function MessageListComponent(props: MessageListProps) {
   const [expandedPromptByRunId, setExpandedPromptByRunId] = useState<Record<string, boolean>>({})
   const [messageLimit, setMessageLimit] = useState(initialMessageLimit)
   const [expandedImageCountByRunId, setExpandedImageCountByRunId] = useState<Record<string, number>>({})
+  const debouncedSetViewportHeight = useDebouncedCallback((nextHeight: number) => {
+    setViewportHeight((prev) => (prev === nextHeight ? prev : nextHeight))
+  }, 80)
 
   const messages = activeConversation?.messages ?? []
   const boundedLimit = Math.max(1, messageLimit)
@@ -371,20 +375,21 @@ function MessageListComponent(props: MessageListProps) {
       })
     }
 
-    setViewportHeight(node.clientHeight)
+    setViewportHeight((prev) => (prev === node.clientHeight ? prev : node.clientHeight))
     node.addEventListener('scroll', onScroll, { passive: true })
-    const resize = () => setViewportHeight(node.clientHeight)
+    const resize = () => debouncedSetViewportHeight(node.clientHeight)
     window.addEventListener('resize', resize)
 
     return () => {
       node.removeEventListener('scroll', onScroll)
       window.removeEventListener('resize', resize)
+      debouncedSetViewportHeight.cancel()
       if (scrollRafRef.current !== null) {
         window.cancelAnimationFrame(scrollRafRef.current)
         scrollRafRef.current = null
       }
     }
-  }, [onReachBottom])
+  }, [debouncedSetViewportHeight, onReachBottom])
 
   const windowed = useMemo(() => {
     if (!ENABLE_MESSAGE_WINDOWING || historyMessages.length <= windowSize + overscan * 2) {

@@ -8,6 +8,7 @@ import { ImagePreviewModal } from '../../../components/preview/ImagePreviewModal
 import { SettingsPanel } from '../../../components/settings/SettingsPanel'
 import { ConversationList } from '../../../components/sidebar/ConversationList'
 import { useImagePreview } from '../../../hooks/useImagePreview'
+import { useDebouncedCallback } from '../../../hooks/useDebouncedCallback'
 import { useConversationController } from './useConversationController'
 
 const { Sider, Content } = Layout
@@ -35,6 +36,12 @@ export function ConversationWorkspace() {
   const headerLayerRef = useRef<HTMLDivElement | null>(null)
   const [composerInset, setComposerInset] = useState(170)
   const [headerInset, setHeaderInset] = useState(96)
+  const debouncedSetComposerInset = useDebouncedCallback((nextInset: number) => {
+    setComposerInset((prev) => (prev === nextInset ? prev : nextInset))
+  }, 80)
+  const debouncedSetHeaderInset = useDebouncedCallback((nextInset: number) => {
+    setHeaderInset((prev) => (prev === nextInset ? prev : nextInset))
+  }, 80)
 
   const {
     summaries,
@@ -135,14 +142,22 @@ export function ConversationWorkspace() {
       return undefined
     }
 
+    const measureInset = () => Math.ceil(node.getBoundingClientRect().height) + 24
+    const updateInsetImmediate = () => {
+      const nextInset = measureInset()
+      setComposerInset((prev) => (prev === nextInset ? prev : nextInset))
+    }
     const updateInset = () => {
-      setComposerInset(Math.ceil(node.getBoundingClientRect().height) + 24)
+      debouncedSetComposerInset(measureInset())
     }
 
-    updateInset()
+    updateInsetImmediate()
     if (typeof ResizeObserver === 'undefined') {
       window.addEventListener('resize', updateInset)
-      return () => window.removeEventListener('resize', updateInset)
+      return () => {
+        window.removeEventListener('resize', updateInset)
+        debouncedSetComposerInset.cancel()
+      }
     }
 
     const observer = new ResizeObserver(() => {
@@ -154,8 +169,9 @@ export function ConversationWorkspace() {
     return () => {
       observer.disconnect()
       window.removeEventListener('resize', updateInset)
+      debouncedSetComposerInset.cancel()
     }
-  }, [])
+  }, [debouncedSetComposerInset])
 
   useEffect(() => {
     const node = headerLayerRef.current
@@ -163,14 +179,22 @@ export function ConversationWorkspace() {
       return undefined
     }
 
+    const measureInset = () => Math.ceil(node.getBoundingClientRect().height) + 24
+    const updateInsetImmediate = () => {
+      const nextInset = measureInset()
+      setHeaderInset((prev) => (prev === nextInset ? prev : nextInset))
+    }
     const updateInset = () => {
-      setHeaderInset(Math.ceil(node.getBoundingClientRect().height) + 24)
+      debouncedSetHeaderInset(measureInset())
     }
 
-    updateInset()
+    updateInsetImmediate()
     if (typeof ResizeObserver === 'undefined') {
       window.addEventListener('resize', updateInset)
-      return () => window.removeEventListener('resize', updateInset)
+      return () => {
+        window.removeEventListener('resize', updateInset)
+        debouncedSetHeaderInset.cancel()
+      }
     }
 
     const observer = new ResizeObserver(() => {
@@ -182,14 +206,15 @@ export function ConversationWorkspace() {
     return () => {
       observer.disconnect()
       window.removeEventListener('resize', updateInset)
+      debouncedSetHeaderInset.cancel()
     }
-  }, [])
+  }, [debouncedSetHeaderInset])
 
   return (
     <Layout className="app-shell">
       <Sider
         width={280}
-        collapsedWidth={72}
+        collapsedWidth={52}
         collapsible
         trigger={null}
         collapsed={isLeftPanelCollapsed}
@@ -293,6 +318,7 @@ export function ConversationWorkspace() {
               panelBatchError={panelBatchError}
               panelMismatchRowIds={panelMismatchRowIds}
               sideMode={activeSideMode}
+              isSideConfigLocked={isSideConfigLocked}
               showAdvancedVariables={showAdvancedVariables}
               dynamicPromptEnabled={dynamicPromptEnabled}
               panelValueFormat={panelValueFormat}

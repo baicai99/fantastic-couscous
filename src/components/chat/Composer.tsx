@@ -44,6 +44,7 @@ interface ComposerProps {
   panelBatchError: string
   panelMismatchRowIds: string[]
   sideMode: SideMode
+  isSideConfigLocked: boolean
   onDraftChange: (value: string) => void
   onPanelValueFormatChange: (value: PanelValueFormat) => void
   onPanelVariablesChange: (rows: PanelVariableRow[]) => void
@@ -107,6 +108,7 @@ export function Composer(props: ComposerProps) {
     panelBatchError,
     panelMismatchRowIds,
     sideMode,
+    isSideConfigLocked,
     onDraftChange,
     onPanelValueFormatChange,
     onPanelVariablesChange,
@@ -134,6 +136,7 @@ export function Composer(props: ComposerProps) {
     ...(dynamicPromptEnabled ? [DYNAMIC_PROMPT_QUICK_ACTION] : []),
     ...(sideMode === 'multi' ? [COMPARISON_MODE_QUICK_ACTION] : []),
   ]
+  const isComparisonModeLocked = isSideConfigLocked && sideMode === 'multi'
 
   useEffect(() => {
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
@@ -450,7 +453,9 @@ export function Composer(props: ComposerProps) {
       onDynamicPromptEnabledChange(true)
     }
     if (label === COMPARISON_MODE_QUICK_ACTION && sideMode !== 'multi') {
-      onSideModeChange('multi')
+      if (!isSideConfigLocked) {
+        onSideModeChange('multi')
+      }
     }
     closeQuickPicker()
 
@@ -468,6 +473,9 @@ export function Composer(props: ComposerProps) {
     if (label === DYNAMIC_PROMPT_QUICK_ACTION && dynamicPromptEnabled) {
       onDynamicPromptEnabledChange(false)
     }
+    if (label === COMPARISON_MODE_QUICK_ACTION && isSideConfigLocked) {
+      return
+    }
     if (label === COMPARISON_MODE_QUICK_ACTION && sideMode === 'multi') {
       onSideModeChange('single')
     }
@@ -484,12 +492,16 @@ export function Composer(props: ComposerProps) {
             {selectedQuickActions.length > 0 ? (
               <div className="composer-chip-row" aria-label="已选快捷功能">
                 {selectedQuickActions.map((item) => (
-                  <span key={item} className="composer-chip">
+                  <span
+                    key={item}
+                    className={`composer-chip ${isComparisonModeLocked && item === COMPARISON_MODE_QUICK_ACTION ? 'is-disabled' : ''}`}
+                  >
                     <span className="composer-chip-label">{item}</span>
                     <button
                       type="button"
                       className="composer-chip-remove"
                       aria-label={`移除 ${item}`}
+                      disabled={isComparisonModeLocked && item === COMPARISON_MODE_QUICK_ACTION}
                       onClick={() => removeQuickAction(item)}
                     >
                       ×
@@ -578,9 +590,10 @@ export function Composer(props: ComposerProps) {
                   <button
                     key={item}
                     type="button"
-                    className={`composer-quick-picker-item ${index === quickPickerActiveIndex ? 'is-active' : ''}`}
+                    className={`composer-quick-picker-item ${index === quickPickerActiveIndex ? 'is-active' : ''} ${isSideConfigLocked && item === COMPARISON_MODE_QUICK_ACTION ? 'is-disabled' : ''}`}
                     onMouseEnter={() => setQuickPickerActiveIndex(index)}
                     onMouseDown={(event) => event.preventDefault()}
+                    disabled={isSideConfigLocked && item === COMPARISON_MODE_QUICK_ACTION}
                     onClick={() => applyQuickPickerItem(item)}
                   >
                     {item}

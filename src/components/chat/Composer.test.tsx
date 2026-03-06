@@ -20,6 +20,7 @@ function renderComposer(
   onDynamicPromptEnabledChange = vi.fn(),
   sideMode: SideMode = 'single',
   onSideModeChange = vi.fn(),
+  isSideConfigLocked = false,
 ) {
   return render(
     <Composer
@@ -38,6 +39,7 @@ function renderComposer(
       panelBatchError=""
       panelMismatchRowIds={[]}
       sideMode={sideMode}
+      isSideConfigLocked={isSideConfigLocked}
       onDraftChange={onDraftChange}
       onPanelValueFormatChange={onFormatChange}
       onPanelVariablesChange={onPanelVariablesChange}
@@ -210,6 +212,7 @@ describe('Composer panel value format', () => {
         panelBatchError=""
         panelMismatchRowIds={[]}
         sideMode="single"
+        isSideConfigLocked={false}
         onDraftChange={vi.fn()}
         onPanelValueFormatChange={vi.fn()}
         onPanelVariablesChange={vi.fn()}
@@ -242,6 +245,29 @@ describe('Composer panel value format', () => {
     expect(onSideModeChange).toHaveBeenCalledWith('single')
   })
 
+  it('locks comparison mode chip when side config is locked', () => {
+    const onSideModeChange = vi.fn()
+    renderComposer('json', vi.fn(), vi.fn(), vi.fn(), false, '', vi.fn(), true, vi.fn(), 'multi', onSideModeChange, true)
+
+    const removeButton = screen.getByRole('button', { name: '移除 对照模式' })
+    expect(removeButton).toBeDisabled()
+    fireEvent.click(removeButton)
+    expect(onSideModeChange).not.toHaveBeenCalled()
+  })
+
+  it('disables comparison quick picker item when side config is locked', () => {
+    const onSideModeChange = vi.fn()
+    renderComposer('json', vi.fn(), vi.fn(), vi.fn(), false, '', vi.fn(), true, vi.fn(), 'single', onSideModeChange, true)
+
+    const textarea = screen.getByPlaceholderText('输入模板 prompt，例如：a {{style}} portrait of {{subject}}')
+    fireEvent.change(textarea, { target: { value: '/', selectionStart: 1, selectionEnd: 1 } })
+
+    const comparisonButton = screen.getByRole('button', { name: '对照模式' })
+    expect(comparisonButton).toBeDisabled()
+    fireEvent.click(comparisonButton)
+    expect(onSideModeChange).not.toHaveBeenCalled()
+  })
+
   it('reflects comparison mode chip from external setting state', () => {
     const { rerender } = renderComposer('json', vi.fn(), vi.fn(), vi.fn(), false, '', vi.fn(), true, vi.fn(), 'single')
     expect(screen.queryByText('对照模式')).not.toBeInTheDocument()
@@ -263,6 +289,7 @@ describe('Composer panel value format', () => {
         panelBatchError=""
         panelMismatchRowIds={[]}
         sideMode="multi"
+        isSideConfigLocked={false}
         onDraftChange={vi.fn()}
         onPanelValueFormatChange={vi.fn()}
         onPanelVariablesChange={vi.fn()}

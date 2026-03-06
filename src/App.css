@@ -223,6 +223,12 @@
   padding: 0 8px 0 12px;
 }
 
+.composer-chip.is-disabled {
+  background: #f5f5f5;
+  border-color: #e5e5e5;
+  color: rgba(0, 0, 0, 0.45);
+}
+
 .composer-chip-label {
   font-size: 14px;
   line-height: 1;
@@ -254,6 +260,13 @@
 .composer-chip-remove:hover {
   background: #e6e6e6;
   color: #333;
+}
+
+.composer-chip-remove:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+  background: transparent;
+  color: #8c8c8c;
 }
 
 .composer-textarea .ant-input {
@@ -329,6 +342,13 @@
 .composer-quick-picker-item:hover,
 .composer-quick-picker-item.is-active {
   background: #f5f5f5;
+}
+
+.composer-quick-picker-item.is-disabled,
+.composer-quick-picker-item:disabled {
+  color: #bfbfbf;
+  cursor: not-allowed;
+  background: transparent;
 }
 
 .composer-action-col {
@@ -442,8 +462,10 @@
   flex-direction: column;
   gap: 16px;
   overflow: hidden;
-  width: 248px;
-  min-width: 248px;
+  width: 100%;
+  min-width: 0;
+  padding: 16px 8px;
+  box-sizing: border-box;
 }
 
 .conversation-shell {
@@ -547,13 +569,20 @@
   border-inline-end: 0 !important;
   background: transparent !important;
   transition: none;
+  padding-inline: 0 !important;
+}
+
+.conversation-menu.ant-menu-inline {
+  width: 100%;
 }
 
 .conversation-menu .ant-menu-item {
   height: 56px;
   line-height: 56px;
   margin: 0 0 6px;
+  margin-inline: 0 !important;
   padding: 0 10px !important;
+  width: 100% !important;
   border-radius: 8px;
   display: flex;
   align-items: center;
@@ -624,6 +653,8 @@
   overflow: hidden;
   width: 100%;
   min-width: 0;
+  padding: 16px 8px;
+  box-sizing: border-box;
 }
 
 .conversation-menu-top-collapsed {
@@ -637,7 +668,7 @@
   height: 56px;
   line-height: 56px;
   margin: 0 0 6px;
-  padding: 0 0 0 10px;
+  padding: 0 10px;
   border-radius: 8px;
   display: inline-flex;
   align-items: center;
@@ -648,6 +679,10 @@
   color: rgba(0, 0, 0, 0.88);
   transition: none !important;
   outline: none !important;
+}
+
+.conversation-collapsed-action-btn.ant-btn .ant-btn-icon {
+  margin-inline-end: 0;
 }
 
 .conversation-collapsed-action-btn.ant-btn:hover {
