@@ -1,0 +1,127 @@
+﻿# src 功能与架构总览
+
+> 目标：让 LLM 读取本文件后，快速理解 `src/` 在做什么、核心流程如何跑、关键状态和边界在哪里。
+
+## 1. 项目定位
+
+这是一个 **多渠道图片生成会话应用（React + TypeScript + Ant Design + Vite）**，核心能力：
+- 会话式输入提示词并生成图片。
+- 支持单窗口 / 多窗口并行对照生成。
+- 支持模板变量批量展开（动态提示词），一次触发多轮 run。
+- 支持失败重试（仅重试失败图片）与 replay（同参数新消息再跑）。
+- 支持渠道（Base URL/API Key）管理、模型拉取、模型参数配置。
+- 支持本地下载与浏览器 File System Access 自动保存。
+
+## 2. 启动与根组件
+
+- 入口：`src/main.tsx`
+- 根组件：`src/App.tsx`
+- 应用壳：
+  1. `ConversationControllerProvider` 注入控制器上下文。
+  2. `ConversationWorkspace` 负责三栏 UI（左会话列表 / 中消息区 / 右设置区）与图片预览。
+
+## 3. 分层架构（feature-first）
+
+核心集中在 `src/features/conversation`：
+
+- `domain/`
+  - 纯业务规则与数据规范化。
+  - 典型能力：`planRunBatch`、`buildRetryPlan`、`buildReplayPlan`、模板变量解析与批处理、side/settings 归一化。
+
+- `application/`
+  - 编排器与执行器。
+  - `conversationOrchestrator.ts`：连接 state 与 domain，并协调批量执行。
+  - `runExecutor.ts`：单 run 执行、进度回调、错误分类、可选自动保存。
+
+- `state/`
+  - `conversationState.ts`：状态结构、reducer、selectors、actions。
+
+- `infra/`
+  - `conversationRepository.ts`：持久化接口，实际依赖 `services/conversationStorage.ts`。
+
+- `ui/`
+  - Context Provider + Workspace 绑定控制器。
+
+## 4. 核心数据模型
+
+定义在 `src/types/chat.ts`：
+- `Conversation`：会话根对象，包含 `messages`、`sideMode`、`sideCount`、`settingsBySide`。
+- `Message`：用户/助手消息，助手消息可携带 `runs`。
+- `Run`：一次图片生成任务（含 `batchId`、`templatePrompt/finalPrompt`、`paramsSnapshot`、`images`）。
+- `ImageItem`：单张图片状态（pending/success/failed）与引用（`thumbRef/fullRef/fileRef`）。
+- `SingleSideSettings`：每个 side 的生成参数、模型、渠道、保存设置。
+
+## 5. 主流程（最关键）
+
+### 5.1 Send Draft
+
+1. `useConversations.sendDraft()` 读取当前状态。
+2. `orchestrator.planSendDraft()` 调 `domain.planRunBatch()`：
+   - 校验 draft 是否为空。
+   - 若启用动态提示词：解析 panel 变量并生成批次。
+   - 按 side（single 或 win-1..win-n）展开 run plans。
+   - 生成 pending runs（先写入会话，UI 立即可见）。
+3. 调 `orchestrator.executeRunPlans()` 并发执行：
+   - 通过 `Semaphore` 限制并发（受 `runConcurrency` 控制）。
+   - 每张图完成时触发 `onRunImageProgress`，渐进更新会话中的对应 image。
+4. 全部完成后用最终 run 替换 pending run。
+
+### 5.2 Retry 失败图片
+
+- `retryRun(runId)`：
+  - 用 `buildRetryPlan` 生成重试方案。
+  - 先把失败图片标记回 pending。
+  - 执行新 run（`imageCount = 失败图片数`）。
+  - 把重试结果按失败索引回填到原 run。
+
+### 5.3 Replay 为新消息
+
+- `replayRunAsNewMessage(runId)`：
+  - 用 `buildReplayPlan` 复用原参数。
+  - 先插入一条包含 pending run 的新 assistant 消息。
+  - 执行后替换该 pending run。
+
+## 6. 渠道、模型与请求
+
+- 渠道管理：`components/settings/SettingsPanel.tsx`
+  - CRUD 渠道、拉取模型列表、按渠道约束可选模型。
+- 模型拉取：`services/channelModels.ts`
+  - 请求 `/v1/models`（兼容不同 path，支持分页 cursor）。
+- 模型目录：`services/modelCatalog.ts`
+  - 从渠道模型合并出可用模型 catalog，并过滤“可展示”模型。
+- 图片生成：`services/imageGeneration.ts`
+  - 目标端点规范化到 `/v1/images/generations`（含 fallback path）。
+  - 支持模型别名候选重试。
+  - 识别常见错误（不支持尺寸、敏感内容、不支持模型）。
+
+## 7. 持久化策略
+
+- 存储位置：浏览器 `localStorage`。
+- 关键 key（`services/conversationStorage.ts`）：
+  - `m1:conversation-index`
+  - `m1:active-conversation-id`
+  - `m1:conversation:<id>`
+  - `m3:channels`
+  - `m3:staged-settings`
+- 超大 payload 压缩策略：
+  - 会话过大时，对较早消息仅保留缩略引用，移除 `fullRef` 降低体积。
+- 渐进进度写入：
+  - 运行中图片进度先更新内存态，再通过 debounce 批量落盘，减少频繁 IO。
+
+## 8. 性能与体验要点
+
+- `runtimeMetrics.ts`：DEV 下输出耗时日志。
+- 渐进式图片提交/渲染 + 历史消息分页加载（默认初始 100，增量 50）。
+- Workspace 使用 `ResizeObserver + debounce` 动态计算 header/composer 安全区。
+
+## 9. 给 LLM 的快速理解结论
+
+如果你要改这个项目，优先遵循这条路径：
+1. 改业务规则：先看 `features/conversation/domain/*`。
+2. 改发送/重试/回放执行链：看 `application/*` + `hooks/useConversations.ts`。
+3. 改存储格式：看 `services/conversationStorage.ts` 与 `infra/conversationRepository.ts`。
+4. 改 UI 交互：看 `features/conversation/ui/ConversationWorkspace.tsx` 与 `components/*`。
+
+---
+
+配套索引文档：`docs/src-module-map.md`
