@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
 import { SettingOutlined } from '@ant-design/icons'
-import { Button, Card, Col, Layout, Row, Space, Tag, Typography } from 'antd'
+import { Button, Card, Col, Layout, Row } from 'antd'
 import { Composer } from '../../../components/chat/Composer'
 import { MessageList } from '../../../components/chat/MessageList'
 import { ImagePreviewModal } from '../../../components/preview/ImagePreviewModal'
@@ -14,7 +14,6 @@ import { usePersistentPanelMode } from '../../../hooks/usePersistentPanelMode'
 import { useConversationController } from './useConversationController'
 
 const { Content } = Layout
-const { Text, Title } = Typography
 const LEFT_PANEL_COLLAPSED_STORAGE_KEY = 'm3:left-panel-collapsed'
 const RIGHT_PANEL_COLLAPSED_STORAGE_KEY = 'm3:right-panel-collapsed'
 const SETTINGS_SIDER_EXPANDED_WIDTH = 320
@@ -30,14 +29,9 @@ export function ConversationWorkspace() {
     defaultMode: 'expanded',
   })
   const composerLayerRef = useRef<HTMLDivElement | null>(null)
-  const headerLayerRef = useRef<HTMLDivElement | null>(null)
   const [composerInset, setComposerInset] = useState(170)
-  const [headerInset, setHeaderInset] = useState(96)
   const debouncedSetComposerInset = useDebouncedCallback((nextInset: number) => {
     setComposerInset((prev) => (prev === nextInset ? prev : nextInset))
-  }, 80)
-  const debouncedSetHeaderInset = useDebouncedCallback((nextInset: number) => {
-    setHeaderInset((prev) => (prev === nextInset ? prev : nextInset))
   }, 80)
 
   const {
@@ -128,9 +122,8 @@ export function ConversationWorkspace() {
     () =>
       ({
         '--chat-composer-safe-area': `${composerInset}px`,
-        '--chat-header-safe-area': `${headerInset}px`,
       }) as CSSProperties,
-    [composerInset, headerInset],
+    [composerInset],
   )
 
   useEffect(() => {
@@ -169,43 +162,6 @@ export function ConversationWorkspace() {
       debouncedSetComposerInset.cancel()
     }
   }, [debouncedSetComposerInset])
-
-  useEffect(() => {
-    const node = headerLayerRef.current
-    if (!node) {
-      return undefined
-    }
-
-    const measureInset = () => Math.ceil(node.getBoundingClientRect().height) + 24
-    const updateInsetImmediate = () => {
-      const nextInset = measureInset()
-      setHeaderInset((prev) => (prev === nextInset ? prev : nextInset))
-    }
-    const updateInset = () => {
-      debouncedSetHeaderInset(measureInset())
-    }
-
-    updateInsetImmediate()
-    if (typeof ResizeObserver === 'undefined') {
-      window.addEventListener('resize', updateInset)
-      return () => {
-        window.removeEventListener('resize', updateInset)
-        debouncedSetHeaderInset.cancel()
-      }
-    }
-
-    const observer = new ResizeObserver(() => {
-      updateInset()
-    })
-    observer.observe(node)
-    window.addEventListener('resize', updateInset)
-
-    return () => {
-      observer.disconnect()
-      window.removeEventListener('resize', updateInset)
-      debouncedSetHeaderInset.cancel()
-    }
-  }, [debouncedSetHeaderInset])
 
   const handleTopSettingsClick = () => {
     toggleRightPanelMode()
@@ -249,22 +205,6 @@ export function ConversationWorkspace() {
 
       <Layout className="panel-center">
         <div className="chat-stage" style={chatStageStyle}>
-          <div ref={headerLayerRef} className="chat-header-layer">
-            <div className="chat-header-row chat-header-ant">
-              <Card size="small" className="chat-header-card" bordered={false}>
-                <div className="chat-header-card-content">
-                  <Space size={10} wrap>
-                    <Text type="secondary">当前会话</Text>
-                    <Tag color="blue">{activeConversation ? '已选中' : '未选择'}</Tag>
-                    <Title level={5} className="panel-title">
-                      {activeConversation?.title ?? '未选择会话'}
-                    </Title>
-                  </Space>
-                </div>
-              </Card>
-            </div>
-          </div>
-
           <Content className={`chat-body ${activeSideMode === 'multi' ? 'chat-body-multi' : ''}`}>
             {activeSideMode === 'multi' ? (
               <Row gutter={[12, 12]} wrap={false} className="ab-windows-row">
@@ -288,7 +228,6 @@ export function ConversationWorkspace() {
                         replayingRunIds={replayingRunIds}
                         initialMessageLimit={historyVisibleLimit}
                         messagePageSize={historyPageSize}
-                        initialImagesPerRun={6}
                         autoScrollTrigger={sendScrollTrigger}
                         onLoadOlderMessages={loadOlderMessages}
                       />
@@ -310,7 +249,6 @@ export function ConversationWorkspace() {
                 replayingRunIds={replayingRunIds}
                 initialMessageLimit={historyVisibleLimit}
                 messagePageSize={historyPageSize}
-                initialImagesPerRun={6}
                 autoScrollTrigger={sendScrollTrigger}
                 onLoadOlderMessages={loadOlderMessages}
               />

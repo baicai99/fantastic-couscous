@@ -444,7 +444,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
                   <InputNumber
                     className="full-width"
                     min={1}
-                    max={8}
+                    precision={0}
                     value={settings.imageCount}
                     onChange={(value) => onSettingsChange(side, { imageCount: typeof value === 'number' ? value : 4 })}
                   />

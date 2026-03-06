@@ -669,7 +669,7 @@ function normalizeSettings(
   return {
     resolution: normalizeSizeTier(settings?.resolution),
     aspectRatio: settings?.aspectRatio ?? ASPECT_RATIO_DEFAULT,
-    imageCount: clamp(Math.floor(settings?.imageCount ?? 4), 1, 8),
+    imageCount: Math.max(1, Math.floor(settings?.imageCount ?? 4)),
     gridColumns: clamp(Math.floor(settings?.gridColumns ?? 4), 1, 8),
     sizeMode: settings?.sizeMode === 'custom' ? 'custom' : 'preset',
     customWidth: clamp(Math.floor(settings?.customWidth ?? 1024), CUSTOM_SIZE_MIN, CUSTOM_SIZE_MAX),
@@ -930,7 +930,7 @@ export function planRunBatch(input: {
         size: getEffectiveSize(settings),
       }
       const channel = input.channels.find((item) => item.id === settings.channelId)
-      const imageCount = clamp(Math.floor(settings.imageCount), 1, 8)
+      const imageCount = Math.max(1, Math.floor(settings.imageCount))
       const createdAt = new Date().toISOString()
 
       const pendingRun: Run = {

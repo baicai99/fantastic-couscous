@@ -1,7 +1,7 @@
 import { generateImages } from '../../../services/imageGeneration'
 import { autoSaveImage, isSaveDirectoryReady } from '../../../services/imageSave'
 import type { ApiChannel, Run, SettingPrimitive, Side, SideMode, SingleSideSettings } from '../../../types/chat'
-import { clamp, makeId, toSettingsSnapshot } from '../../../utils/chat'
+import { makeId, toSettingsSnapshot } from '../../../utils/chat'
 import { classifyFailure } from '../domain/conversationDomain'
 
 export interface CreateRunInput {
@@ -132,7 +132,7 @@ export function createRunExecutor(deps: RunExecutorDeps = {}) {
         onImageProgress,
       } = options
 
-      const imageCount = clamp(Math.floor(settings.imageCount), 1, 8)
+      const imageCount = Math.max(1, Math.floor(settings.imageCount))
       const baseRun = {
         id: runId,
         batchId,

@@ -3,7 +3,7 @@ import { DownloadOutlined, ReloadOutlined, RetweetOutlined } from '@ant-design/i
 import { Button, Card, Collapse, Space, Tag, Typography } from 'antd'
 import type { Conversation, FailureCode, ImageItem, Message, Run, Side } from '../../types/chat'
 import { gridColumnCount, sortImagesBySeq } from '../../utils/chat'
-import { ENABLE_MESSAGE_WINDOWING, ENABLE_PROGRESSIVE_IMAGE_RENDER } from '../../features/performance/flags'
+import { ENABLE_MESSAGE_WINDOWING } from '../../features/performance/flags'
 import { startMetric, trackDuration } from '../../features/performance/runtimeMetrics'
 import { useDebouncedCallback } from '../../hooks/useDebouncedCallback'
 
@@ -11,7 +11,6 @@ const { Paragraph, Text } = Typography
 const DEFAULT_ESTIMATED_MESSAGE_HEIGHT = 220
 const PROMPT_SUMMARY_MAX_CHARS = 100
 const DEFAULT_MESSAGE_PAGE_SIZE = 50
-const DEFAULT_IMAGES_PER_RUN = 6
 const PROMPT_TRUNCATION_EPSILON = 1
 
 interface MessageListProps {
@@ -30,7 +29,6 @@ interface MessageListProps {
   onReachBottom?: () => void
   initialMessageLimit?: number
   messagePageSize?: number
-  initialImagesPerRun?: number
   autoScrollTrigger?: number
   onLoadOlderMessages?: () => void
 }
@@ -199,22 +197,18 @@ function renderImages(
   linkedRun: Run | undefined,
   onOpenPreview: (run: Run, imageId: string, linkedRun?: Run) => void,
   onDownloadSingleImage?: (runId: string, imageId: string) => void,
-  visibleCount = rows.length,
-  onExpandRunImages?: () => void,
 ) {
   const preferredColumns = run?.settingsSnapshot?.gridColumns
-  const limitedRows = ENABLE_PROGRESSIVE_IMAGE_RENDER ? rows.slice(0, Math.max(1, visibleCount)) : rows
-  const hiddenCount = Math.max(0, rows.length - limitedRows.length)
 
   return (
     <>
       <div
         className="run-grid"
         style={{
-          gridTemplateColumns: `repeat(${gridColumnCount(Math.max(limitedRows.length, 1), preferredColumns)}, minmax(0, 1fr))`,
+          gridTemplateColumns: `repeat(${gridColumnCount(Math.max(rows.length, 1), preferredColumns)}, minmax(0, 1fr))`,
         }}
       >
-        {limitedRows.map((row) => {
+        {rows.map((row) => {
           const src = row.item?.thumbRef ?? row.item?.fileRef ?? row.item?.fullRef
           return (
             <div key={`${run?.id ?? 'none'}-${row.seq}`} className="run-grid-item">
@@ -247,11 +241,6 @@ function renderImages(
           )
         })}
       </div>
-      {hiddenCount > 0 ? (
-        <Button size="small" type="dashed" onClick={() => onExpandRunImages?.()}>
-          {`Load ${hiddenCount} more`}
-        </Button>
-      ) : null}
     </>
   )
 }
@@ -268,8 +257,6 @@ function renderRunCard(
   showPromptToggle: boolean,
   onTogglePrompt: (runId: string) => void,
   onPromptNodeChange: (runId: string, node: HTMLElement | null) => void,
-  visibleImageCount: number,
-  onExpandRunImages: () => void,
   showBatchDownload: boolean,
   onDownloadBatchRun?: (runId: string) => void,
 ) {
@@ -331,7 +318,7 @@ function renderRunCard(
           ) : null}
         </Space>
       </div>
-      {renderImages(rows, run, linkedRun, onOpenPreview, onDownloadSingleImage, visibleImageCount, onExpandRunImages)}
+      {renderImages(rows, run, linkedRun, onOpenPreview, onDownloadSingleImage)}
     </Fragment>
   )
 }
@@ -353,7 +340,6 @@ function MessageListComponent(props: MessageListProps) {
     onReachBottom,
     initialMessageLimit = 100,
     messagePageSize = DEFAULT_MESSAGE_PAGE_SIZE,
-    initialImagesPerRun = DEFAULT_IMAGES_PER_RUN,
     autoScrollTrigger,
     onLoadOlderMessages,
   } = props
@@ -367,7 +353,6 @@ function MessageListComponent(props: MessageListProps) {
   const [expandedPromptByRunId, setExpandedPromptByRunId] = useState<Record<string, boolean>>({})
   const [truncatedPromptByRunId, setTruncatedPromptByRunId] = useState<Record<string, boolean>>({})
   const [messageLimit, setMessageLimit] = useState(initialMessageLimit)
-  const [expandedImageCountByRunId, setExpandedImageCountByRunId] = useState<Record<string, number>>({})
   const promptNodeByRunIdRef = useRef<Record<string, HTMLElement>>({})
   const debouncedSetViewportHeight = useDebouncedCallback((nextHeight: number) => {
     setViewportHeight((prev) => (prev === nextHeight ? prev : nextHeight))
@@ -486,26 +471,6 @@ function MessageListComponent(props: MessageListProps) {
     }))
   }
 
-  const expandRunImages = useCallback(
-    (runId: string, imageTotal: number) => {
-      setExpandedImageCountByRunId((prev) => ({
-        ...prev,
-        [runId]: Math.min(imageTotal, (prev[runId] ?? initialImagesPerRun) + initialImagesPerRun),
-      }))
-    },
-    [initialImagesPerRun],
-  )
-
-  const resolveVisibleImageCount = useCallback(
-    (run: Run) => {
-      if (!ENABLE_PROGRESSIVE_IMAGE_RENDER) {
-        return run.images.length
-      }
-      return Math.min(run.images.length, expandedImageCountByRunId[run.id] ?? initialImagesPerRun)
-    },
-    [expandedImageCountByRunId, initialImagesPerRun],
-  )
-
   const handleLoadOlderMessages = () => {
     setMessageLimit((prev) => prev + Math.max(1, messagePageSize))
     onLoadOlderMessages?.()
@@ -621,8 +586,6 @@ function MessageListComponent(props: MessageListProps) {
                         showPromptToggle,
                         togglePromptExpanded,
                         setPromptNode,
-                        resolveVisibleImageCount(run),
-                        () => expandRunImages(run.id, rows.length),
                         isDynamicBatch,
                         onDownloadBatchRun,
                       )
@@ -649,8 +612,6 @@ function MessageListComponent(props: MessageListProps) {
                         showPromptToggle,
                         togglePromptExpanded,
                         setPromptNode,
-                        resolveVisibleImageCount(run),
-                        () => expandRunImages(run.id, rows.length),
                         isDynamicBatch,
                         onDownloadBatchRun,
                       )

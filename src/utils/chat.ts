@@ -205,7 +205,7 @@ export function createMockRun(options: CreateMockRunOptions): Run {
   const failOnce = promptLower.includes('failonce')
   const effectiveFailLast = shouldFailLast && !(failOnce && retryAttempt > 0)
 
-  const imageCount = clamp(Math.floor(settings.imageCount), 1, 8)
+  const imageCount = Math.max(1, Math.floor(settings.imageCount))
   const { width, height } = parseResolution(settings.resolution)
   const failure = getFailureFromPrompt(finalPrompt)
 
