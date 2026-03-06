@@ -21,6 +21,7 @@ export interface StagedSettingsState {
   dynamicPromptEnabled?: boolean
   panelValueFormat?: PanelValueFormat
   panelVariables?: PanelVariableRow[]
+  favoriteModelIds?: string[]
 }
 
 interface ConversationContentRecord {
@@ -372,6 +373,7 @@ export function loadStagedSettingsFromStorage(): StagedSettingsState | null {
       dynamicPromptEnabled?: unknown
       panelValueFormat?: unknown
       panelVariables?: unknown
+      favoriteModelIds?: unknown
     }
     const sideMode: SideMode = parsed?.sideMode === 'multi' || parsed?.sideMode === 'ab' ? 'multi' : 'single'
     const sideCount = typeof parsed?.sideCount === 'number' ? Math.max(2, Math.floor(parsed.sideCount)) : undefined
@@ -405,8 +407,20 @@ export function loadStagedSettingsFromStorage(): StagedSettingsState | null {
             selectedValue: item.selectedValue,
           }))
       : undefined
+    const favoriteModelIds = Array.isArray(parsed?.favoriteModelIds)
+      ? parsed.favoriteModelIds.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+      : undefined
 
-    return { sideMode, sideCount, settingsBySide, runConcurrency, dynamicPromptEnabled, panelValueFormat, panelVariables }
+    return {
+      sideMode,
+      sideCount,
+      settingsBySide,
+      runConcurrency,
+      dynamicPromptEnabled,
+      panelValueFormat,
+      panelVariables,
+      favoriteModelIds,
+    }
   } catch {
     return null
   }
@@ -415,5 +429,4 @@ export function loadStagedSettingsFromStorage(): StagedSettingsState | null {
 export function saveStagedSettingsToStorage(state: StagedSettingsState): void {
   localStorage.setItem(STORAGE_STAGED_SETTINGS_KEY, JSON.stringify(state))
 }
-
 

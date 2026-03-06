@@ -1,6 +1,6 @@
 ﻿import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { DownloadOutlined, ReloadOutlined, RetweetOutlined } from '@ant-design/icons'
-import { Button, Card, Collapse, Space, Tag, Typography } from 'antd'
+import { Button, Card, Collapse, Space, Typography } from 'antd'
 import type { Conversation, FailureCode, ImageItem, Message, Run, Side } from '../../types/chat'
 import { gridColumnCount, sortImagesBySeq } from '../../utils/chat'
 import { ENABLE_MESSAGE_WINDOWING } from '../../features/performance/flags'
@@ -121,6 +121,68 @@ function getFailureSummary(run: Run): string | null {
     .join(' | ')
 }
 
+function toEpoch(value: string | null | undefined): number {
+  if (typeof value !== 'string' || !value.trim()) {
+    return 0
+  }
+  const epoch = Date.parse(value)
+  return Number.isFinite(epoch) ? epoch : 0
+}
+
+function resolvePendingAgeMs(run: Run, image: ImageItem): number {
+  const startedAtEpoch = Math.max(
+    toEpoch(image.detachedAt),
+    toEpoch(image.lastResumeAttemptAt),
+    toEpoch(run.createdAt),
+  )
+  if (startedAtEpoch <= 0) {
+    return 0
+  }
+  return Math.max(0, Date.now() - startedAtEpoch)
+}
+
+function getPendingMessage(run: Run, image: ImageItem): string {
+  const pendingAgeMs = resolvePendingAgeMs(run, image)
+  const isDetached = image.threadState === 'detached'
+
+  if (pendingAgeMs < 30_000) {
+    return isDetached ? '后台生成中' : '生成中'
+  }
+  if (pendingAgeMs < 90_000) {
+    return isDetached ? '后台生成较慢' : '生成较慢'
+  }
+  if (pendingAgeMs < 180_000) {
+    return isDetached ? '后台生成较慢，建议等待' : '生成较慢，建议等待'
+  }
+  return isDetached ? '后台等待时间较长，建议稍后回来查看' : '等待时间较长，建议稍后回来查看'
+}
+
+function getRunProgressSummary(run: Run): string | null {
+  const successCount = run.images.filter((item) => item.status === 'success').length
+  const pendingImages = run.images.filter((item) => item.status === 'pending')
+  const pendingCount = pendingImages.length
+  const failedCount = run.images.filter((item) => item.status === 'failed').length
+  const strongestPendingMessage =
+    pendingImages
+      .map((image) => ({ image, age: resolvePendingAgeMs(run, image) }))
+      .sort((left, right) => right.age - left.age)[0]?.image
+  const pendingMessage = strongestPendingMessage ? getPendingMessage(run, strongestPendingMessage) : ''
+
+  if (pendingCount > 0 && successCount > 0) {
+    return `已完成 ${successCount} 张，剩余 ${pendingCount} 张${pendingMessage ? `，${pendingMessage}` : ''}`
+  }
+  if (pendingCount > 0) {
+    return `${pendingCount} 张图片仍在生成${pendingMessage ? `，${pendingMessage}` : ''}`
+  }
+  if (failedCount > 0 && successCount > 0) {
+    return `已完成 ${successCount} 张，${failedCount} 张生成失败`
+  }
+  if (failedCount > 0) {
+    return `${failedCount} 张生成失败，可重试`
+  }
+  return null
+}
+
 function getFailureDetails(run: Run): string[] {
   const details = run.images
     .filter((item) => item.status === 'failed')
@@ -128,6 +190,18 @@ function getFailureDetails(run: Run): string[] {
     .filter((detail): detail is string => Boolean(detail))
 
   return Array.from(new Set(details))
+}
+
+function getPendingStatusLabel(run: Run, image: ImageItem): string {
+  return getPendingMessage(run, image)
+}
+
+function getFailureCellLabel(image: ImageItem): string {
+  const failureMessage = image.error?.trim()
+  if (failureMessage && /(timeout|超时)/i.test(failureMessage)) {
+    return '生成超时，可重试'
+  }
+  return '生成失败'
 }
 
 function renderRunMetaTitle(input: {
@@ -219,15 +293,16 @@ function renderImages(
       >
         {rows.map((row) => {
           const src = row.item?.thumbRef ?? row.item?.fileRef ?? row.item?.fullRef ?? row.item?.refKey
-          const failureMessage = row.item?.error?.trim()
-          const shouldShowFailureDetailInCell = Boolean(failureMessage && /(timeout|超时)/i.test(failureMessage))
+          const pendingLabel = row.item && run ? getPendingStatusLabel(run, row.item) : '生成中'
           return (
             <div key={`${run?.id ?? 'none'}-${row.seq}`} className={`run-grid-item ${compact ? 'run-grid-item-compact' : ''}`}>
               {!compact ? <div className="run-image-seq-overlay">#{row.seq}</div> : null}
               {row.item?.status === 'pending' ? (
-                <div className="run-image-skeleton" />
+                <div className="run-image-skeleton">
+                  <span className="run-image-skeleton-label">{pendingLabel}</span>
+                </div>
               ) : row.item?.status === 'failed' ? (
-                <div className="run-image-fallback">{shouldShowFailureDetailInCell ? failureMessage : '生成失败'}</div>
+                <div className="run-image-fallback">{getFailureCellLabel(row.item)}</div>
               ) : row.item?.status === 'success' && src && run ? (
                 <div className={`run-image-frame ${compact ? 'compact' : ''}`}>
                   <button className="image-button" type="button" onClick={() => onOpenPreview(run, row.item!.id, linkedRun)}>
@@ -303,6 +378,7 @@ function renderRunCard(
   compact = false,
 ) {
   const failureSummary = getFailureSummary(run)
+  const progressSummary = getRunProgressSummary(run)
   const failureDetails = getFailureDetails(run)
   const hasFailed = run.images.some((item) => item.status === 'failed')
   const promptText = run.finalPrompt.trim()
@@ -383,7 +459,8 @@ function renderRunCard(
               ]}
             />
           )}
-          {failureSummary ? <Text type="warning">失败摘要: {failureSummary}</Text> : null}
+          {progressSummary ? <Text type={hasFailed ? 'warning' : 'secondary'}>{progressSummary}</Text> : null}
+          {failureSummary && !progressSummary ? <Text type="warning">失败摘要: {failureSummary}</Text> : null}
           {!compact && failureDetails.length > 0 ? (
             <Space orientation="vertical" size={2} className="full-width">
               {failureDetails.map((detail, index) => (
@@ -404,7 +481,7 @@ function renderRunCard(
                   onAssistantActionTrigger?.(`run-${run.id}-retry-failed`, event, () => onRetryRun(run.id))
                 }}
               >
-                重试失败项
+                仅重试失败项
               </Button>
             </Space>
           ) : null}
@@ -467,7 +544,7 @@ function MessageListComponent(props: MessageListProps) {
   const isMultiSideView = sideView !== 'single'
 
   useLayoutEffect(() => {
-    bottomRef.current?.scrollIntoView({ block: 'end' })
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
   }, [autoScrollTrigger])
 
   useEffect(() => {
@@ -723,161 +800,159 @@ function MessageListComponent(props: MessageListProps) {
               batchLoopCountByKey.set(key, (batchLoopCountByKey.get(key) ?? 0) + 1)
             })
 
-            return (
-              <Card key={message.id} size="small" className={`message-card ${message.role}`}>
-                <Space orientation="vertical" size={8} className="full-width">
-                  <div className="message-head-row">
-                    <Space>
-                      <Tag color={message.role === 'user' ? 'blue' : 'green'}>{message.role === 'user' ? 'User' : 'Assistant'}</Tag>
-                      <Text type="secondary">{message.displayCreatedAt ?? new Date(message.createdAt).toLocaleString()}</Text>
-                    </Space>
-                    {message.role === 'assistant' && primaryRun
-                      ? (() => {
-                          const isReplaying = replayingRunIds.includes(primaryRun.id)
-                          const isRetryingAllFailed = retryingMessageIds.includes(message.id)
-                          const isDownloadingAllImages = downloadingMessageIds.includes(message.id)
-                          const imagesInMessage = runsForMessage.flatMap((run) => run.images)
-                          const isAllImagesCompleted = imagesInMessage.length > 0 && imagesInMessage.every(
-                            (item) => item.status !== 'pending',
-                          )
-                          const hasDownloadableImages = runsForMessage.some((run) =>
-                            run.images.some(
-                              (item) =>
-                                item.status === 'success' &&
-                                Boolean(item.fullRef ?? item.fileRef ?? item.thumbRef ?? item.refKey),
-                            ),
-                          )
-                          const hasFailedImages = runsForMessage.some((run) =>
-                            run.images.some((item) => item.status === 'failed'),
-                          )
+            const assistantActions = message.role === 'assistant' && primaryRun
+              ? (() => {
+                  const isReplaying = replayingRunIds.includes(primaryRun.id)
+                  const isRetryingAllFailed = retryingMessageIds.includes(message.id)
+                  const isDownloadingAllImages = downloadingMessageIds.includes(message.id)
+                  const imagesInMessage = runsForMessage.flatMap((run) => run.images)
+                  const isAllImagesCompleted = imagesInMessage.length > 0 && imagesInMessage.every(
+                    (item) => item.status !== 'pending',
+                  )
+                  const hasDownloadableImages = runsForMessage.some((run) =>
+                    run.images.some(
+                      (item) =>
+                        item.status === 'success' &&
+                        Boolean(item.fullRef ?? item.fileRef ?? item.thumbRef ?? item.refKey),
+                    ),
+                  )
+                  const hasFailedImages = runsForMessage.some((run) =>
+                    run.images.some((item) => item.status === 'failed'),
+                  )
 
-                          return (
-                            <Space size={4} className="run-head-actions">
-                              <Button
-                                size="small"
-                                type="default"
-                                className="assistant-action-btn"
-                                disabled={!hasFailedImages || isRetryingAllFailed}
-                                loading={isRetryingAllFailed}
-                                onClick={(event) => {
-                                  triggerAssistantAction(`message-${message.id}-retry-all-failed`, event, () => {
-                                    void handleRetryAllFailed(message.id, runsForMessage)
-                                  })
-                                }}
-                              >
-                                重试所有失败项
-                              </Button>
-                              <Button
-                                size="small"
-                                type="default"
-                                className="assistant-action-btn"
-                                icon={<DownloadOutlined />}
-                                disabled={!isAllImagesCompleted || !hasDownloadableImages || isDownloadingAllImages}
-                                loading={isDownloadingAllImages}
-                                onClick={(event) => {
-                                  triggerAssistantAction(`message-${message.id}-download-all`, event, () => {
-                                    void handleDownloadAllForMessage(
-                                      message.id,
-                                      runsForMessage.map((run) => run.id),
-                                      primaryRun.id,
-                                    )
-                                  })
-                                }}
-                              >
-                                下载全部
-                              </Button>
-                              <Button
-                                size="small"
-                                type="primary"
-                                className="assistant-action-btn"
-                                icon={<ReloadOutlined />}
-                                onClick={(event) => {
-                                  triggerAssistantAction(`message-${message.id}-replay-primary`, event, () => onReplayRun(primaryRun.id))
-                                }}
-                                loading={isReplaying}
-                                disabled={isReplaying}
-                              >
-                                再来一次
-                              </Button>
-                            </Space>
-                          )
-                        })()
-                      : message.role === 'user'
-                        ? (
-            <Space size={4} className="message-head-actions">
-                            <Button
-                              size="small"
-                              type="default"
-                              className="message-use-prompt-btn"
-                              onClick={() => onUseUserPrompt?.(normalizePromptForReuse(message.content))}
-                              disabled={!message.content.trim()}
-                            >
-                              发送到输入框
-                            </Button>
-                          </Space>
-                        )
-                        : null}
-                  </div>
-
-                  <Paragraph style={{ marginBottom: 0 }}>{message.content}</Paragraph>
-
-                  {message.role === 'assistant'
-                    ? visibleRuns.map((run, index) => {
-                        const batchKey = `${run.batchId}::${run.side}`
-                        const batchLoopCount = batchLoopCountByKey.get(batchKey) ?? 0
-                        const isDynamicBatch = Object.keys(run.variablesSnapshot ?? {}).length > 0 && batchLoopCount > 1
-                        const orderedImages = run.images.length > 1 ? sortImagesBySeq(run.images) : run.images
-                        const allRows = orderedImages.map((item) => ({ seq: item.seq, item }))
-                        const visibleImageLimit = isMultiSideView
-                          ? (visibleImageLimitByRunId[run.id] ?? normalizedMultiImageInitialLimit)
-                          : allRows.length
-                        const visibleRows = isMultiSideView ? allRows.slice(0, visibleImageLimit) : allRows
-                        const hasMoreImages = isMultiSideView && allRows.length > visibleRows.length
-                        const isPromptExpanded = Boolean(expandedPromptByRunId[run.id])
-                        const showPromptToggle = isPromptExpanded || run.finalPrompt.trim().length > PROMPT_SUMMARY_MAX_CHARS
-                        const imagePagination = hasMoreImages
-                          ? {
-                              label: '加载更多图片',
-                              current: visibleRows.length,
-                              total: allRows.length,
-                              onLoadMore: () => handleLoadMoreImages(run.id),
-                            }
-                          : undefined
-                        return renderRunCard(
-                          run,
-                          index + 1,
-                          visibleRows,
-                          undefined,
-                          onOpenPreview,
-                          onRetryRun,
-                          onDownloadSingleImage,
-                          isPromptExpanded,
-                          showPromptToggle,
-                          togglePromptExpanded,
-                          isDynamicBatch,
-                          onDownloadBatchRun,
-                          imagePagination,
-                          triggerAssistantAction,
-                          isMultiSideView,
-                        )
-                      })
-                    : null}
-
-                  {message.role === 'assistant' && hasMoreRuns ? (
-                    <div className="message-history-more">
+                  return (
+                    <Space size={4} className="message-bottom-actions">
                       <Button
                         size="small"
+                        type="default"
                         className="assistant-action-btn"
+                        disabled={!hasFailedImages || isRetryingAllFailed}
+                        loading={isRetryingAllFailed}
                         onClick={(event) => {
-                          triggerAssistantAction(`message-${message.id}-load-more-runs`, event, () => handleLoadMoreRuns(message.id))
+                          triggerAssistantAction(`message-${message.id}-retry-all-failed`, event, () => {
+                            void handleRetryAllFailed(message.id, runsForMessage)
+                          })
                         }}
                       >
-                        {`加载更多 Run (${visibleRuns.length}/${totalRunCount})`}
+                        重试所有失败项
                       </Button>
-                    </div>
-                  ) : null}
-                </Space>
-              </Card>
+                      <Button
+                        size="small"
+                        type="default"
+                        className="assistant-action-btn"
+                        icon={<DownloadOutlined />}
+                        disabled={!isAllImagesCompleted || !hasDownloadableImages || isDownloadingAllImages}
+                        loading={isDownloadingAllImages}
+                        onClick={(event) => {
+                          triggerAssistantAction(`message-${message.id}-download-all`, event, () => {
+                            void handleDownloadAllForMessage(
+                              message.id,
+                              runsForMessage.map((run) => run.id),
+                              primaryRun.id,
+                            )
+                          })
+                        }}
+                      >
+                        下载全部
+                      </Button>
+                      <Button
+                        size="small"
+                        type="primary"
+                        className="assistant-action-btn"
+                        icon={<ReloadOutlined />}
+                        onClick={(event) => {
+                          triggerAssistantAction(`message-${message.id}-replay-primary`, event, () => onReplayRun(primaryRun.id))
+                        }}
+                        loading={isReplaying}
+                        disabled={isReplaying}
+                      >
+                        再来一次
+                      </Button>
+                    </Space>
+                  )
+                })()
+              : null
+            const userActions = message.role === 'user'
+              ? (
+                  <Space size={4} className="message-bottom-actions">
+                    <Button
+                      size="small"
+                      type="default"
+                      className="message-use-prompt-btn"
+                      onClick={() => onUseUserPrompt?.(normalizePromptForReuse(message.content))}
+                      disabled={!message.content.trim()}
+                    >
+                      发送到输入框
+                    </Button>
+                  </Space>
+                )
+              : null
+
+            return (
+              <div key={message.id} className={`message-card-shell ${message.role}`}>
+                <Card size="small" className={`message-card ${message.role}`}>
+                  <Space orientation="vertical" size={8} className="full-width">
+                    <Paragraph style={{ marginBottom: 0 }}>{message.content}</Paragraph>
+
+                    {message.role === 'assistant'
+                      ? visibleRuns.map((run, index) => {
+                          const batchKey = `${run.batchId}::${run.side}`
+                          const batchLoopCount = batchLoopCountByKey.get(batchKey) ?? 0
+                          const isDynamicBatch = Object.keys(run.variablesSnapshot ?? {}).length > 0 && batchLoopCount > 1
+                          const orderedImages = run.images.length > 1 ? sortImagesBySeq(run.images) : run.images
+                          const allRows = orderedImages.map((item) => ({ seq: item.seq, item }))
+                          const visibleImageLimit = isMultiSideView
+                            ? (visibleImageLimitByRunId[run.id] ?? normalizedMultiImageInitialLimit)
+                            : allRows.length
+                          const visibleRows = isMultiSideView ? allRows.slice(0, visibleImageLimit) : allRows
+                          const hasMoreImages = isMultiSideView && allRows.length > visibleRows.length
+                          const isPromptExpanded = Boolean(expandedPromptByRunId[run.id])
+                          const showPromptToggle = isPromptExpanded || run.finalPrompt.trim().length > PROMPT_SUMMARY_MAX_CHARS
+                          const imagePagination = hasMoreImages
+                            ? {
+                                label: '加载更多图片',
+                                current: visibleRows.length,
+                                total: allRows.length,
+                                onLoadMore: () => handleLoadMoreImages(run.id),
+                              }
+                            : undefined
+                          return renderRunCard(
+                            run,
+                            index + 1,
+                            visibleRows,
+                            undefined,
+                            onOpenPreview,
+                            onRetryRun,
+                            onDownloadSingleImage,
+                            isPromptExpanded,
+                            showPromptToggle,
+                            togglePromptExpanded,
+                            isDynamicBatch,
+                            onDownloadBatchRun,
+                            imagePagination,
+                            triggerAssistantAction,
+                            isMultiSideView,
+                          )
+                        })
+                      : null}
+
+                    {message.role === 'assistant' && hasMoreRuns ? (
+                      <div className="message-history-more">
+                        <Button
+                          size="small"
+                          className="assistant-action-btn"
+                          onClick={(event) => {
+                            triggerAssistantAction(`message-${message.id}-load-more-runs`, event, () => handleLoadMoreRuns(message.id))
+                          }}
+                        >
+                          {`加载更多 Run (${visibleRuns.length}/${totalRunCount})`}
+                        </Button>
+                      </div>
+                    ) : null}
+                  </Space>
+                </Card>
+                {assistantActions ?? userActions}
+              </div>
             )
           })}
 

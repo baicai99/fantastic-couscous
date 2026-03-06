@@ -1,9 +1,10 @@
+import { useState } from 'react'
 import { fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { Modal } from 'antd'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { PanelValueFormat, PanelVariableRow } from '../../features/conversation/domain/types'
-import type { SideMode } from '../../types/chat'
+import type { ModelSpec, SideMode } from '../../types/chat'
 import { Composer } from './Composer'
 
 afterEach(() => {
@@ -12,6 +13,13 @@ afterEach(() => {
 
 function makeRows(): PanelVariableRow[] {
   return [{ id: 'row-1', key: 'subject', valuesText: '', selectedValue: '' }]
+}
+
+function makeModels(): ModelSpec[] {
+  return [
+    { id: 'gemini-2.5-flash-image', name: 'Gemini 2.5 Flash Image', tags: ['google'], params: [] },
+    { id: 'gpt-image-1', name: 'GPT Image 1', tags: ['openai'], params: [] },
+  ]
 }
 
 function renderComposer(
@@ -28,11 +36,13 @@ function renderComposer(
   onSideModeChange = vi.fn(),
   isSideConfigLocked = false,
   panelVariables: PanelVariableRow[] = makeRows(),
+  models: ModelSpec[] = makeModels(),
 ) {
   return render(
     <Composer
       draft={draft}
       sendError=""
+      models={models}
       showAdvancedVariables
       dynamicPromptEnabled={dynamicPromptEnabled}
       panelValueFormat={format}
@@ -55,6 +65,46 @@ function renderComposer(
       onSend={onSend}
     />,
   )
+}
+
+function renderControlledComposer(initialDraft = '') {
+  const onSend = vi.fn()
+
+  function Harness() {
+    const [draft, setDraft] = useState(initialDraft)
+    return (
+      <Composer
+        draft={draft}
+        sendError=""
+        models={makeModels()}
+        showAdvancedVariables
+        dynamicPromptEnabled
+        panelValueFormat="json"
+        panelVariables={makeRows()}
+        resolvedVariables={{}}
+        finalPromptPreview=""
+        missingKeys={[]}
+        unusedVariableKeys={[]}
+        isSending={false}
+        isSendBlocked={false}
+        panelBatchError=""
+        panelMismatchRowIds={[]}
+        sideMode="single"
+        isSideConfigLocked={false}
+        onDraftChange={setDraft}
+        onPanelValueFormatChange={vi.fn()}
+        onPanelVariablesChange={vi.fn()}
+        onDynamicPromptEnabledChange={vi.fn()}
+        onSideModeChange={vi.fn()}
+        onSend={onSend}
+      />
+    )
+  }
+
+  return {
+    onSend,
+    ...render(<Harness />),
+  }
 }
 
 function openAdvancedPanel() {
@@ -188,6 +238,79 @@ describe('Composer panel value format', () => {
     expect(screen.queryByRole('listbox', { name: '快捷功能选择' })).not.toBeInTheDocument()
   })
 
+  it('supports fuzzy model query and applies selected match', () => {
+    const onDraftChange = vi.fn()
+    renderComposer('json', vi.fn(), vi.fn(), vi.fn(), false, '', onDraftChange)
+
+    const textarea = screen.getByPlaceholderText('输入模板 prompt，例如：a {{style}} portrait of {{subject}}')
+    fireEvent.change(textarea, {
+      target: { value: '@gemi', selectionStart: 5, selectionEnd: 5 },
+    })
+
+    expect(screen.getByRole('button', { name: /Gemini 2.5 Flash Image/ })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /Gemini 2.5 Flash Image/ }))
+
+    expect(onDraftChange).toHaveBeenLastCalledWith('@gemini-2.5-flash-image ')
+  })
+
+  it('applies highlighted model shortcut on Enter when model picker is open instead of sending', () => {
+    const onSend = vi.fn()
+    const onDraftChange = vi.fn()
+    renderComposer(
+      'json',
+      vi.fn(),
+      vi.fn(),
+      onSend,
+      false,
+      '',
+      onDraftChange,
+      true,
+      vi.fn(),
+      'single',
+      vi.fn(),
+      false,
+      makeRows(),
+    )
+
+    const textarea = screen.getByPlaceholderText('输入模板 prompt，例如：a {{style}} portrait of {{subject}}')
+    fireEvent.change(textarea, {
+      target: { value: '@gemini-2.5-flash-image', selectionStart: 23, selectionEnd: 23 },
+    })
+    fireEvent.keyDown(textarea, { key: 'Enter', code: 'Enter' })
+
+    expect(onDraftChange).toHaveBeenLastCalledWith('@gemini-2.5-flash-image ')
+    expect(onSend).not.toHaveBeenCalled()
+  })
+
+  it('keeps selected model token in the input as plain text', () => {
+    const { onSend, container } = renderControlledComposer()
+
+    const textarea = screen.getByPlaceholderText('输入模板 prompt，例如：a {{style}} portrait of {{subject}}') as HTMLTextAreaElement
+    fireEvent.change(textarea, {
+      target: { value: '@gemi', selectionStart: 5, selectionEnd: 5 },
+    })
+    fireEvent.keyDown(textarea, { key: 'Enter', code: 'Enter' })
+
+    expect(onSend).not.toHaveBeenCalled()
+    expect(textarea.value).toBe('@gemini-2.5-flash-image ')
+    expect(container.querySelector('.composer-model-token')).toBeNull()
+  })
+
+  it('preserves the selected model token when continuing to type prompt text', () => {
+    renderControlledComposer()
+
+    const textarea = screen.getByPlaceholderText('输入模板 prompt，例如：a {{style}} portrait of {{subject}}') as HTMLTextAreaElement
+    fireEvent.change(textarea, {
+      target: { value: '@gemi', selectionStart: 5, selectionEnd: 5 },
+    })
+    fireEvent.keyDown(textarea, { key: 'Enter', code: 'Enter' })
+    fireEvent.change(textarea, {
+      target: { value: '@gemini-2.5-flash-image portrait', selectionStart: 33, selectionEnd: 33 },
+    })
+
+    expect(textarea.value).toBe('@gemini-2.5-flash-image portrait')
+  })
+
   it('deleting dynamic prompt chip disables dynamic prompt', () => {
     const onDynamicPromptEnabledChange = vi.fn()
     renderComposer('json', vi.fn(), vi.fn(), vi.fn(), false, '', vi.fn(), true, onDynamicPromptEnabledChange)
@@ -206,6 +329,7 @@ describe('Composer panel value format', () => {
       <Composer
         draft=""
         sendError=""
+        models={makeModels()}
         showAdvancedVariables
         dynamicPromptEnabled
         panelValueFormat="json"
@@ -283,6 +407,7 @@ describe('Composer panel value format', () => {
       <Composer
         draft=""
         sendError=""
+        models={makeModels()}
         showAdvancedVariables
         dynamicPromptEnabled
         panelValueFormat="json"

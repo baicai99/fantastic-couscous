@@ -179,52 +179,7 @@ describe('imageGeneration request body', () => {
     expect(result.items[0]?.src).toBe('data:image/png;base64,aGVsbG8=')
   })
 
-  it('retries timeout in 3 rounds and marks final failure after third 60s timeout', async () => {
-    vi.useFakeTimers()
-    const onImageCompleted = vi.fn()
-    const fetchMock = vi.fn().mockImplementation((_url: string, init?: RequestInit) =>
-      new Promise((_resolve, reject) => {
-        const signal = init?.signal
-        const rejectAbort = () => {
-          const abortError = Object.assign(new Error('aborted'), { name: 'AbortError' })
-          reject(abortError)
-        }
-        if (signal?.aborted) {
-          rejectAbort()
-          return
-        }
-        signal?.addEventListener('abort', rejectAbort, { once: true })
-      }),
-    )
-    vi.stubGlobal('fetch', fetchMock)
-
-    const task = generateImages({
-      channel: {
-        id: 'ch',
-        name: 'c',
-        baseUrl: 'https://api.example.com/v1',
-        apiKey: 'k',
-      },
-      modelId: 'gemini-3-pro-image-preview',
-      prompt: 'x',
-      imageCount: 1,
-      paramValues: { responseFormat: 'url' },
-      onImageCompleted,
-    })
-
-    await vi.advanceTimersByTimeAsync(180_000)
-    const result = await task
-
-    expect(result.items).toHaveLength(1)
-    expect(result.items[0]?.error).toContain('第3轮超时')
-    expect(fetchMock).toHaveBeenCalledTimes(3)
-    expect(onImageCompleted).toHaveBeenCalledTimes(3)
-    expect(onImageCompleted.mock.calls[0]?.[0]?.error).toContain('正在等待第2轮')
-    expect(onImageCompleted.mock.calls[1]?.[0]?.error).toContain('正在等待第3轮')
-  })
-
   it('stops retrying when aborted by an external signal', async () => {
-    vi.useFakeTimers()
     const controller = new AbortController()
     const fetchMock = vi.fn().mockImplementation((_url: string, init?: RequestInit) =>
       new Promise((_resolve, reject) => {
@@ -306,7 +261,43 @@ describe('imageGeneration request body', () => {
       taskMeta: { resumeUrl: 'https://api.example.com/tasks/task-1' },
     })
 
-    expect(resumed).toEqual({ ok: true, src: 'https://img.example/resumed.png' })
+    expect(resumed).toEqual({
+      state: 'success',
+      src: 'https://img.example/resumed.png',
+      serverTaskId: 'task-1',
+      serverTaskMeta: { resumeUrl: 'https://api.example.com/tasks/task-1' },
+    })
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://api.example.com/tasks/task-1',
+      expect.objectContaining({ method: 'GET' }),
+    )
+  })
+
+  it('keeps a stored server task pending when the resume endpoint is still processing', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 202,
+      headers: new Headers({ location: 'https://api.example.com/tasks/task-1' }),
+      json: async () => ({ task_id: 'task-1', status: 'processing' }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const resumed = await resumeImageTaskOnce({
+      channel: {
+        id: 'ch',
+        name: 'c',
+        baseUrl: 'https://api.example.com/v1',
+        apiKey: 'k',
+      },
+      taskId: 'task-1',
+      taskMeta: { resumeUrl: 'https://api.example.com/tasks/task-1' },
+    })
+
+    expect(resumed).toEqual({
+      state: 'pending',
+      serverTaskId: 'task-1',
+      serverTaskMeta: { resumeUrl: 'https://api.example.com/tasks/task-1', location: 'https://api.example.com/tasks/task-1' },
+    })
     expect(fetchMock).toHaveBeenCalledWith(
       'https://api.example.com/tasks/task-1',
       expect.objectContaining({ method: 'GET' }),

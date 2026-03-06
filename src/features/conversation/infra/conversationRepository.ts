@@ -31,6 +31,7 @@ export interface ConversationRepository {
     dynamicPromptEnabled?: boolean
     panelValueFormat?: PanelValueFormat
     panelVariables?: PanelVariableRow[]
+    favoriteModelIds?: string[]
   } | null
   saveIndex: (summaries: ConversationSummary[]) => void
   saveConversation: (conversation: Conversation) => Promise<void>
@@ -46,6 +47,7 @@ export interface ConversationRepository {
     dynamicPromptEnabled: boolean
     panelValueFormat: PanelValueFormat
     panelVariables: PanelVariableRow[]
+    favoriteModelIds: string[]
   }) => void
 }
 
@@ -70,6 +72,7 @@ export function createConversationRepository(): ConversationRepository {
       dynamicPromptEnabled,
       panelValueFormat,
       panelVariables,
+      favoriteModelIds,
     }) => {
       saveStagedSettingsToStorage({
         sideMode,
@@ -79,6 +82,7 @@ export function createConversationRepository(): ConversationRepository {
         dynamicPromptEnabled,
         panelValueFormat,
         panelVariables,
+        favoriteModelIds,
       })
     },
   }

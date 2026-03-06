@@ -22,6 +22,7 @@ export interface ConversationState {
   dynamicPromptEnabled: boolean
   panelValueFormat: PanelValueFormat
   panelVariables: PanelVariableRow[]
+  favoriteModelIds: string[]
   runConcurrency: number
   stagedSideMode: SideMode
   stagedSideCount: number
@@ -37,6 +38,7 @@ export type ConversationAction =
   | { type: 'send/clearError' }
   | { type: 'variables/setPanelRows'; payload: PanelVariableRow[] }
   | { type: 'variables/setPanelValueFormat'; payload: PanelValueFormat }
+  | { type: 'settings/setFavoriteModels'; payload: string[] }
   | { type: 'settings/setRunConcurrency'; payload: number }
   | { type: 'conversation/sync'; payload: { summaries: ConversationSummary[]; contents: Record<string, Conversation> } }
   | { type: 'conversation/switch'; payload: string | null }
@@ -73,6 +75,7 @@ export function createInitialConversationState(input: {
     dynamicPromptEnabled?: boolean
     panelValueFormat?: PanelValueFormat
     panelVariables?: PanelVariableRow[]
+    favoriteModelIds?: string[]
   } | null
 }): ConversationState {
   const { channels, modelCatalog, initialLoad, initialStaged } = input
@@ -97,6 +100,7 @@ export function createInitialConversationState(input: {
       Array.isArray(initialStaged?.panelVariables) && initialStaged.panelVariables.length > 0
         ? initialStaged.panelVariables
         : defaultPanelRows(),
+    favoriteModelIds: Array.isArray(initialStaged?.favoriteModelIds) ? initialStaged.favoriteModelIds : [],
     runConcurrency: Math.max(1, Math.floor(initialStaged?.runConcurrency ?? 4)),
     stagedSideMode: initialStaged?.sideMode ?? 'single',
     stagedSideCount,
@@ -121,6 +125,8 @@ export function conversationReducer(state: ConversationState, action: Conversati
       return { ...state, panelVariables: action.payload, sendError: '' }
     case 'variables/setPanelValueFormat':
       return { ...state, panelValueFormat: action.payload, sendError: '' }
+    case 'settings/setFavoriteModels':
+      return { ...state, favoriteModelIds: action.payload, sendError: '' }
     case 'settings/setRunConcurrency':
       return { ...state, runConcurrency: Math.max(1, Math.floor(action.payload)), sendError: '' }
     case 'conversation/sync':

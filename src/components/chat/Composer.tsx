@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { SendOutlined, SettingOutlined } from '@ant-design/icons'
 import { Alert, Button, Card, Drawer, Input, Modal, Segmented, Select, Space, Table, Tabs, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
-import type { SideMode } from '../../types/chat'
+import type { ModelSpec, SideMode } from '../../types/chat'
 import {
   buildSyncPreview,
   parseBulkVariables,
@@ -19,6 +19,7 @@ const { Text } = Typography
 type AdvancedTabKey = 'table' | 'bulk'
 type SyncDirection = 'bulk-to-table' | 'table-to-bulk'
 type QuickPickerRange = { start: number; end: number }
+type PickerMode = 'quick-actions' | 'models'
 
 interface SyncPreviewState {
   direction: SyncDirection
@@ -32,6 +33,7 @@ interface SyncPreviewState {
 interface ComposerProps {
   draft: string
   sendError: string
+  models: ModelSpec[]
   showAdvancedVariables: boolean
   dynamicPromptEnabled: boolean
   panelValueFormat: PanelValueFormat
@@ -51,6 +53,7 @@ interface ComposerProps {
   onPanelVariablesChange: (rows: PanelVariableRow[]) => void
   onDynamicPromptEnabledChange: (value: boolean) => void
   onSideModeChange: (mode: SideMode) => void
+  onPreferredWidthChange?: (width: number) => void
   onSend: () => void
 }
 
@@ -106,10 +109,61 @@ function buildRowsFromTemplateKeys(keys: string[]): PanelVariableRow[] {
   }))
 }
 
+function inferModelShortcutTokens(model: ModelSpec): string[] {
+  const value = `${model.id} ${model.name}`.toLowerCase()
+  const tokens = new Set<string>([model.id.toLowerCase(), model.name.toLowerCase()])
+
+  if (Array.isArray(model.tags)) {
+    for (const tag of model.tags) {
+      if (typeof tag === 'string' && tag.trim()) {
+        tokens.add(tag.trim().toLowerCase())
+      }
+    }
+  }
+
+  if (value.includes('gemini')) tokens.add('google')
+  if (value.includes('google')) tokens.add('gemini')
+  if (value.includes('doubao')) tokens.add('豆包')
+  if (value.includes('midjourney')) tokens.add('mj')
+  if (value.includes('mj')) tokens.add('midjourney')
+
+  return Array.from(tokens)
+}
+
+function normalizeModelShortcutQuery(value: string): string {
+  return value.trim().toLowerCase()
+}
+
+function findModelShortcutAtLineStart(value: string, cursor: number): (QuickPickerRange & { query: string }) | null {
+  if (cursor <= 0) {
+    return null
+  }
+
+  const lineStart = value.lastIndexOf('\n', cursor - 1) + 1
+  const lineSlice = value.slice(lineStart, cursor)
+  const match = lineSlice.match(/^(\s*)@([^\s]*)$/)
+  if (!match) {
+    return null
+  }
+
+  const start = lineStart + (match[1]?.length ?? 0)
+  return {
+    start,
+    end: cursor,
+    query: match[2] ?? '',
+  }
+}
+
+function getLongestDraftLine(draft: string): string {
+  const lines = draft.split('\n')
+  return lines.reduce((longest, line) => (line.length > longest.length ? line : longest), '')
+}
+
 export function Composer(props: ComposerProps) {
   const {
     draft,
     sendError,
+    models,
     showAdvancedVariables,
     dynamicPromptEnabled,
     panelValueFormat,
@@ -128,6 +182,7 @@ export function Composer(props: ComposerProps) {
     onPanelVariablesChange,
     onDynamicPromptEnabledChange,
     onSideModeChange,
+    onPreferredWidthChange,
     onSend,
   } = props
 
@@ -144,14 +199,46 @@ export function Composer(props: ComposerProps) {
   const [isQuickPickerOpen, setIsQuickPickerOpen] = useState(false)
   const [quickPickerRange, setQuickPickerRange] = useState<QuickPickerRange | null>(null)
   const [quickPickerActiveIndex, setQuickPickerActiveIndex] = useState(0)
+  const [pickerMode, setPickerMode] = useState<PickerMode>('quick-actions')
+  const [modelShortcutQuery, setModelShortcutQuery] = useState('')
   const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null)
   const quickPickerRootRef = useRef<HTMLDivElement | null>(null)
+  const preferredWidthMeasureRef = useRef<HTMLSpanElement | null>(null)
+  const actionColRef = useRef<HTMLDivElement | null>(null)
   const selectedQuickActions = [
     ...(dynamicPromptEnabled ? [DYNAMIC_PROMPT_QUICK_ACTION] : []),
     ...(sideMode === 'multi' ? [COMPARISON_MODE_QUICK_ACTION] : []),
   ]
   const isComparisonModeLocked = isSideConfigLocked && sideMode === 'multi'
+  const normalizedModelShortcutQuery = normalizeModelShortcutQuery(modelShortcutQuery)
+  const longestDraftLine = useMemo(() => getLongestDraftLine(draft), [draft])
+  const matchedModels = useMemo(() => {
+    if (normalizedModelShortcutQuery.length === 0) {
+      return models
+    }
 
+    return models
+      .map((model) => ({
+        model,
+        tokens: inferModelShortcutTokens(model),
+      }))
+      .filter(({ model, tokens }) => {
+        const haystack = `${model.id} ${model.name} ${tokens.join(' ')}`.toLowerCase()
+        return haystack.includes(normalizedModelShortcutQuery)
+      })
+      .map(({ model }) => model)
+  }, [models, normalizedModelShortcutQuery])
+
+  useLayoutEffect(() => {
+    if (!onPreferredWidthChange) {
+      return
+    }
+
+    const measuredTextWidth = Math.ceil(preferredWidthMeasureRef.current?.getBoundingClientRect().width ?? 0)
+    const measuredActionWidth = Math.ceil(actionColRef.current?.getBoundingClientRect().width ?? 0)
+    const preferredWidth = measuredTextWidth + measuredActionWidth + 24
+    onPreferredWidthChange(preferredWidth)
+  }, [draft, longestDraftLine, onPreferredWidthChange, selectedQuickActions.length, showAdvancedVariables])
   useEffect(() => {
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
       return undefined
@@ -452,6 +539,37 @@ export function Composer(props: ComposerProps) {
     setIsQuickPickerOpen(false)
     setQuickPickerRange(null)
     setQuickPickerActiveIndex(0)
+    setPickerMode('quick-actions')
+    setModelShortcutQuery('')
+  }
+
+  const applyModelShortcutWithRange = (model: ModelSpec, range: QuickPickerRange, baseDraft: string) => {
+    const prefix = baseDraft.slice(0, range.start)
+    const suffix = baseDraft.slice(range.end)
+    const insertedToken = `@${model.id}`
+    const separator = suffix.length === 0 || /^\s/.test(suffix) ? '' : ' '
+    const appendTrailingSpace = suffix.length === 0 ? ' ' : ''
+    const nextDraft = `${prefix}${insertedToken}${separator}${appendTrailingSpace}${suffix}`
+    const nextCursor = prefix.length + insertedToken.length + separator.length + appendTrailingSpace.length
+    onDraftChange(nextDraft)
+    closeQuickPicker()
+
+    window.requestAnimationFrame(() => {
+      const input = composerTextareaRef.current
+      if (!input) {
+        return
+      }
+      input.focus()
+      input.setSelectionRange(nextCursor, nextCursor)
+    })
+  }
+
+  const applyModelShortcutItem = (model: ModelSpec) => {
+    if (!quickPickerRange) {
+      return
+    }
+    const baseDraft = composerTextareaRef.current?.value ?? draft
+    applyModelShortcutWithRange(model, quickPickerRange, baseDraft)
   }
 
   const openConfirm = (input: { title: string; content: string; okText: string }): Promise<boolean> =>
@@ -559,150 +677,195 @@ export function Composer(props: ComposerProps) {
 
   return (
     <div className="chat-input">
-      <Card variant="borderless" className="composer-card">
-        <div className="composer-main-row">
-          <div
-            className={`composer-textarea-wrap ${selectedQuickActions.length > 0 ? 'has-chip-row' : ''}`}
-            ref={quickPickerRootRef}
-          >
-            {selectedQuickActions.length > 0 ? (
-              <div className="composer-chip-row" aria-label="已选快捷功能">
-                {selectedQuickActions.map((item) => (
-                  <span
-                    key={item}
-                    className={`composer-chip ${isComparisonModeLocked && item === COMPARISON_MODE_QUICK_ACTION ? 'is-disabled' : ''}`}
-                  >
-                    <span className="composer-chip-label">{item}</span>
-                    <button
-                      type="button"
-                      className="composer-chip-remove"
-                      aria-label={`移除 ${item}`}
-                      disabled={isComparisonModeLocked && item === COMPARISON_MODE_QUICK_ACTION}
-                      onClick={() => removeQuickAction(item)}
-                    >
-                      ×
-                    </button>
-                  </span>
-                ))}
-              </div>
-            ) : null}
-            <Input.TextArea
-              value={draft}
-              onChange={(event) => {
-                const nextText = event.target.value
-                const cursor = event.target.selectionStart ?? nextText.length
-                composerTextareaRef.current = event.target
-                onDraftChange(nextText)
+      <div className="composer-shell">
+        {selectedQuickActions.length > 0 ? (
+          <div className="composer-chip-row" aria-label="已选快捷功能">
+            {selectedQuickActions.map((item) => (
+              <span
+                key={item}
+                className={`composer-chip ${isComparisonModeLocked && item === COMPARISON_MODE_QUICK_ACTION ? 'is-disabled' : ''}`}
+              >
+                <span className="composer-chip-label">{item}</span>
+                <button
+                  type="button"
+                  className="composer-chip-remove"
+                  aria-label={`移除 ${item}`}
+                  disabled={isComparisonModeLocked && item === COMPARISON_MODE_QUICK_ACTION}
+                  onClick={() => removeQuickAction(item)}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        ) : null}
+        <Card variant="borderless" className="composer-card">
+          <div className="composer-main-row">
+            <div
+              className={`composer-textarea-wrap ${selectedQuickActions.length > 0 ? 'has-chip-row' : ''}`}
+              ref={quickPickerRootRef}
+            >
+              <span className="composer-width-measure" ref={preferredWidthMeasureRef} aria-hidden="true">
+                {longestDraftLine || draftPlaceholder}
+              </span>
+              <Input.TextArea
+                value={draft}
+                onChange={(event) => {
+                  const nextText = event.target.value
+                  const cursor = event.target.selectionStart ?? nextText.length
+                  composerTextareaRef.current = event.target
+                  onDraftChange(nextText)
 
-                const triggerIndex = cursor - 1
-                if (isQuickPickerTriggerAtLineStart(nextText, triggerIndex)) {
-                  setQuickPickerRange({ start: triggerIndex, end: triggerIndex + 1 })
-                  setQuickPickerActiveIndex(0)
-                  setIsQuickPickerOpen(true)
-                  return
-                }
-
-                if (quickPickerRange) {
-                  const trigger = nextText[quickPickerRange.start]
-                  if ((trigger === '/' || trigger === '、') && isQuickPickerTriggerAtLineStart(nextText, quickPickerRange.start)) {
+                  const modelShortcut = findModelShortcutAtLineStart(nextText, cursor)
+                  if (modelShortcut) {
+                    setQuickPickerRange({ start: modelShortcut.start, end: modelShortcut.end })
+                    setQuickPickerActiveIndex(0)
+                    setPickerMode('models')
+                    setModelShortcutQuery(modelShortcut.query)
+                    setIsQuickPickerOpen(true)
                     return
                   }
-                }
 
-                closeQuickPicker()
-              }}
-              onFocus={(event) => {
-                composerTextareaRef.current = event.target
-              }}
-              onSelect={(event) => {
-                composerTextareaRef.current = event.currentTarget
-                if (!isQuickPickerOpen || !quickPickerRange) {
-                  return
-                }
-                const cursor = event.currentTarget.selectionStart ?? 0
-                if (cursor < quickPickerRange.start + 1) {
-                  closeQuickPicker()
-                }
-              }}
-              onKeyDown={(event) => {
-                if (!isQuickPickerOpen) {
-                  return
-                }
-                if (event.key === 'Escape') {
-                  event.preventDefault()
-                  closeQuickPicker()
-                  return
-                }
-                if (event.key === 'ArrowDown') {
-                  event.preventDefault()
-                  setQuickPickerActiveIndex((prev) => (prev + 1) % QUICK_PICKER_ITEMS.length)
-                  return
-                }
-                if (event.key === 'ArrowUp') {
-                  event.preventDefault()
-                  setQuickPickerActiveIndex((prev) => (prev - 1 + QUICK_PICKER_ITEMS.length) % QUICK_PICKER_ITEMS.length)
-                }
-              }}
-              placeholder={draftPlaceholder}
-              autoSize={{ minRows: 1, maxRows: 6 }}
-              className="composer-textarea"
-              onPressEnter={(event) => {
-                if (isQuickPickerOpen) {
-                  event.preventDefault()
-                  const selected = QUICK_PICKER_ITEMS[quickPickerActiveIndex] ?? QUICK_PICKER_ITEMS[0]
-                  applyQuickPickerItem(selected)
-                  return
-                }
+                  const triggerIndex = cursor - 1
+                  if (isQuickPickerTriggerAtLineStart(nextText, triggerIndex)) {
+                    setQuickPickerRange({ start: triggerIndex, end: triggerIndex + 1 })
+                    setQuickPickerActiveIndex(0)
+                    setPickerMode('quick-actions')
+                    setIsQuickPickerOpen(true)
+                    return
+                  }
 
-                if (!event.shiftKey && !isSendBlocked) {
-                  event.preventDefault()
-                  void handleSendAttempt()
-                }
-              }}
-            />
-            {isQuickPickerOpen ? (
-              <div className="composer-quick-picker" role="listbox" aria-label="快捷功能选择">
-                {QUICK_PICKER_ITEMS.map((item, index) => (
-                  <button
-                    key={item}
-                    type="button"
-                    className={`composer-quick-picker-item ${index === quickPickerActiveIndex ? 'is-active' : ''} ${isSideConfigLocked && item === COMPARISON_MODE_QUICK_ACTION ? 'is-disabled' : ''}`}
-                    onMouseEnter={() => setQuickPickerActiveIndex(index)}
-                    onMouseDown={(event) => event.preventDefault()}
-                    disabled={isSideConfigLocked && item === COMPARISON_MODE_QUICK_ACTION}
-                    onClick={() => applyQuickPickerItem(item)}
-                  >
-                    {item}
-                  </button>
-                ))}
-              </div>
-            ) : null}
-          </div>
-          <div className="composer-action-col">
-            {showAdvancedVariables ? (
+                  if (quickPickerRange) {
+                    const trigger = nextText[quickPickerRange.start]
+                    if ((trigger === '/' || trigger === '、') && isQuickPickerTriggerAtLineStart(nextText, quickPickerRange.start)) {
+                      return
+                    }
+                  }
+
+                  closeQuickPicker()
+                }}
+                onFocus={(event) => {
+                  composerTextareaRef.current = event.target
+                }}
+                onSelect={(event) => {
+                  composerTextareaRef.current = event.currentTarget
+                  if (!isQuickPickerOpen || !quickPickerRange) {
+                    return
+                  }
+                  const cursor = event.currentTarget.selectionStart ?? 0
+                  if (cursor < quickPickerRange.start + 1) {
+                    closeQuickPicker()
+                  }
+                }}
+                onKeyDown={(event) => {
+                  if (!isQuickPickerOpen) {
+                    return
+                  }
+                  if (event.key === 'Escape') {
+                    event.preventDefault()
+                    closeQuickPicker()
+                    return
+                  }
+                  if (event.key === 'ArrowDown') {
+                    event.preventDefault()
+                    const length = pickerMode === 'models' ? matchedModels.length : QUICK_PICKER_ITEMS.length
+                    if (length > 0) {
+                      setQuickPickerActiveIndex((prev) => (prev + 1) % length)
+                    }
+                    return
+                  }
+                  if (event.key === 'ArrowUp') {
+                    event.preventDefault()
+                    const length = pickerMode === 'models' ? matchedModels.length : QUICK_PICKER_ITEMS.length
+                    if (length > 0) {
+                      setQuickPickerActiveIndex((prev) => (prev - 1 + length) % length)
+                    }
+                  }
+                }}
+                placeholder={draftPlaceholder}
+                autoSize={{ minRows: 1, maxRows: 6 }}
+                className="composer-textarea"
+                onPressEnter={(event) => {
+                  if (isQuickPickerOpen && pickerMode === 'quick-actions') {
+                    event.preventDefault()
+                    const selected = QUICK_PICKER_ITEMS[quickPickerActiveIndex] ?? QUICK_PICKER_ITEMS[0]
+                    applyQuickPickerItem(selected)
+                    return
+                  }
+                  if (isQuickPickerOpen && pickerMode === 'models') {
+                    event.preventDefault()
+                    const selected = matchedModels[quickPickerActiveIndex] ?? matchedModels[0]
+                    if (selected) {
+                      applyModelShortcutItem(selected)
+                    }
+                    return
+                  }
+
+                  if (!event.shiftKey && !isSendBlocked) {
+                    event.preventDefault()
+                    void handleSendAttempt()
+                  }
+                }}
+              />
+              {isQuickPickerOpen ? (
+                <div className="composer-quick-picker" role="listbox" aria-label="快捷功能选择">
+                  {pickerMode === 'models'
+                    ? matchedModels.length > 0
+                      ? matchedModels.map((model, index) => (
+                        <button
+                          key={model.id}
+                          type="button"
+                          className={`composer-quick-picker-item ${index === quickPickerActiveIndex ? 'is-active' : ''}`}
+                          onMouseEnter={() => setQuickPickerActiveIndex(index)}
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={() => applyModelShortcutItem(model)}
+                        >
+                          {model.name}
+                        </button>
+                      ))
+                      : <div className="composer-quick-picker-empty">未找到匹配模型</div>
+                    : QUICK_PICKER_ITEMS.map((item, index) => (
+                      <button
+                        key={item}
+                        type="button"
+                        className={`composer-quick-picker-item ${index === quickPickerActiveIndex ? 'is-active' : ''} ${isSideConfigLocked && item === COMPARISON_MODE_QUICK_ACTION ? 'is-disabled' : ''}`}
+                        onMouseEnter={() => setQuickPickerActiveIndex(index)}
+                        onMouseDown={(event) => event.preventDefault()}
+                        disabled={isSideConfigLocked && item === COMPARISON_MODE_QUICK_ACTION}
+                        onClick={() => applyQuickPickerItem(item)}
+                      >
+                        {item}
+                      </button>
+                    ))}
+                </div>
+              ) : null}
+            </div>
+            <div className="composer-action-col" ref={actionColRef}>
+              {showAdvancedVariables ? (
+                <Button
+                  type="default"
+                  icon={<SettingOutlined />}
+                  onClick={() => setIsAdvancedPanelOpen(true)}
+                  className="composer-advanced-btn"
+                >
+                  高级变量
+                </Button>
+              ) : null}
               <Button
-                type="default"
-                icon={<SettingOutlined />}
-                onClick={() => setIsAdvancedPanelOpen(true)}
-                className="composer-advanced-btn"
+                type="primary"
+                icon={<SendOutlined />}
+                onClick={() => {
+                  void handleSendAttempt()
+                }}
+                disabled={isSendBlocked}
+                className="composer-send-btn"
+                aria-label="发送"
               >
-                高级变量
               </Button>
-            ) : null}
-            <Button
-              type="primary"
-              icon={<SendOutlined />}
-              onClick={() => {
-                void handleSendAttempt()
-              }}
-              disabled={isSendBlocked}
-              className="composer-send-btn"
-              aria-label="发送"
-            >
-            </Button>
+            </div>
           </div>
-        </div>
-      </Card>
+        </Card>
+      </div>
 
       {sendError ? <Alert type="error" message={sendError} className="composer-send-error" /> : null}
 

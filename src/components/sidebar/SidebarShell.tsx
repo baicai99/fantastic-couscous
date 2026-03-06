@@ -48,7 +48,9 @@ export function SidebarShell(props: SidebarShellProps) {
       onBreakpoint={
         autoModeByBreakpoint
           ? (broken) => {
-              onModeChange(broken ? 'collapsed' : 'expanded')
+              if (broken) {
+                onModeChange('collapsed')
+              }
             }
           : undefined
       }

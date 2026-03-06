@@ -1,5 +1,5 @@
 ﻿import { DeleteOutlined, HistoryOutlined, MessageOutlined, PlusOutlined } from '@ant-design/icons'
-import { Button, Menu, Popconfirm, Tooltip } from 'antd'
+import { Button, Menu, Popconfirm, Tooltip, message } from 'antd'
 import type { MenuProps } from 'antd'
 import type { ReactNode } from 'react'
 import type { PanelMode } from '../../hooks/usePersistentPanelMode'
@@ -94,11 +94,13 @@ export function ConversationList(props: ConversationListProps) {
       title: '新建对话',
       ariaLabel: 'create-conversation',
       icon: <PlusOutlined />,
-      onClick: onCreateConversation,
-      withConfirm: shouldConfirmCreateConversation,
-      confirmTitle: '关闭当前旧对话线程并新建对话？',
-      confirmDescription: '当前会话仍有图片在后台生成，继续后将停止等待旧会话并新建对话。',
-      confirmOkText: '关闭并新建',
+      onClick: () => {
+        onCreateConversation()
+        if (shouldConfirmCreateConversation) {
+          void message.info('旧会话仍在后台生成，可稍后返回查看结果。')
+        }
+      },
+      withConfirm: false,
     },
     {
       key: 'clear',

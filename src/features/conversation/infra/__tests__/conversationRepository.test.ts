@@ -93,6 +93,7 @@ describe('conversationRepository', () => {
       dynamicPromptEnabled: true,
       panelValueFormat: 'json',
       panelVariables,
+      favoriteModelIds: [],
     })
 
     const staged = repo.loadStagedSettings()

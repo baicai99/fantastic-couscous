@@ -2,6 +2,7 @@ import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { ConversationList } from './ConversationList'
+import { message } from 'antd'
 
 const baseProps = {
   summaries: [
@@ -51,9 +52,13 @@ describe('ConversationList', () => {
     expect(onCreateConversation).toHaveBeenCalledTimes(1)
   })
 
-  it('asks for confirmation before closing the old conversation thread', async () => {
+  it('creates immediately and shows a background-generation toast when the old conversation is still active', async () => {
     const user = userEvent.setup()
     const onCreateConversation = vi.fn()
+    const messageInfoSpy = vi.spyOn(message, 'info').mockImplementation(() => {
+      const close = () => {}
+      return close as unknown as ReturnType<typeof message.info>
+    })
 
     render(
       <ConversationList
@@ -65,7 +70,7 @@ describe('ConversationList', () => {
     )
 
     await user.click(screen.getByLabelText('create-conversation'))
-    expect(await screen.findByText('关闭当前旧对话线程并新建对话？')).toBeInTheDocument()
-    expect(onCreateConversation).not.toHaveBeenCalled()
+    expect(onCreateConversation).toHaveBeenCalledTimes(1)
+    expect(messageInfoSpy).toHaveBeenCalledWith('旧会话仍在后台生成，可稍后返回查看结果。')
   })
 })

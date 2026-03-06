@@ -1,6 +1,6 @@
 ﻿import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { vi } from 'vitest'
+import { afterEach, vi } from 'vitest'
 import { MessageList } from './MessageList'
 import type { Conversation } from '../../types/chat'
 
@@ -289,6 +289,123 @@ function makeMultiConversationWithManyRunsAndImages(input: {
 }
 
 describe('MessageList', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('renders pending image hints for server generation and resume states', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-01-01T00:00:40.000Z'))
+    const conversation = makeConversation()
+    conversation.messages[0].runs = [
+      {
+        ...conversation.messages[0].runs![0],
+        images: [{ id: 'p1', seq: 1, status: 'pending', threadState: 'active', serverTaskId: 'task-1' }],
+      },
+      {
+        ...conversation.messages[0].runs![0],
+        id: 'r2',
+        images: [{ id: 'p2', seq: 1, status: 'pending', threadState: 'detached', serverTaskId: 'task-2', detachedAt: '2026-01-01T00:00:00.000Z' }],
+      },
+    ]
+
+    render(
+      <div style={{ height: 600 }}>
+        <MessageList
+          activeConversation={conversation}
+          sideView="single"
+          onOpenPreview={() => {}}
+          onRetryRun={() => {}}
+          onReplayRun={() => {}}
+        />
+      </div>,
+    )
+
+    expect(screen.getByText('生成较慢')).toBeInTheDocument()
+    expect(screen.getByText('后台生成较慢')).toBeInTheDocument()
+  })
+
+  it('renders retry-oriented timeout hint for failed images', () => {
+    const conversation = makeConversation()
+    conversation.messages[0].runs = [
+      {
+        ...conversation.messages[0].runs![0],
+        images: [{ id: 'f1', seq: 1, status: 'failed', errorCode: 'timeout', error: '图片生成超时，请重试' }],
+      },
+    ]
+
+    render(
+      <div style={{ height: 600 }}>
+        <MessageList
+          activeConversation={conversation}
+          sideView="single"
+          onOpenPreview={() => {}}
+          onRetryRun={() => {}}
+          onReplayRun={() => {}}
+        />
+      </div>,
+    )
+
+    expect(screen.getByText('生成超时，可重试')).toBeInTheDocument()
+  })
+
+  it('shows product-style partial completion summary', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-01-01T00:02:20.000Z'))
+    const conversation = makeConversation()
+    conversation.messages[0].runs = [
+      {
+        ...conversation.messages[0].runs![0],
+        createdAt: '2026-01-01T00:00:00.000Z',
+        images: [
+          { id: 'ok-1', seq: 1, status: 'success', fileRef: 'data:image/png;base64,AA==' },
+          { id: 'pending-2', seq: 2, status: 'pending', threadState: 'active', serverTaskId: 'task-2' },
+        ],
+      },
+    ]
+
+    render(
+      <div style={{ height: 600 }}>
+        <MessageList
+          activeConversation={conversation}
+          sideView="single"
+          onOpenPreview={() => {}}
+          onRetryRun={() => {}}
+          onReplayRun={() => {}}
+        />
+      </div>,
+    )
+
+    expect(screen.getByText('已完成 1 张，剩余 1 张，生成较慢，建议等待')).toBeInTheDocument()
+  })
+
+  it('escalates pending copy when waiting becomes very long', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-01-01T00:04:10.000Z'))
+    const conversation = makeConversation()
+    conversation.messages[0].runs = [
+      {
+        ...conversation.messages[0].runs![0],
+        createdAt: '2026-01-01T00:00:00.000Z',
+        images: [{ id: 'pending-1', seq: 1, status: 'pending', threadState: 'active', serverTaskId: 'task-1' }],
+      },
+    ]
+
+    render(
+      <div style={{ height: 600 }}>
+        <MessageList
+          activeConversation={conversation}
+          sideView="single"
+          onOpenPreview={() => {}}
+          onRetryRun={() => {}}
+          onReplayRun={() => {}}
+        />
+      </div>,
+    )
+
+    expect(screen.getByText('等待时间较长，建议稍后回来查看')).toBeInTheDocument()
+  })
+
   it('triggers replay/retry callbacks for run actions', async () => {
     const user = userEvent.setup()
     const onReplayRun = vi.fn()
@@ -481,7 +598,7 @@ describe('MessageList', () => {
     expect(runGrid).not.toHaveTextContent('test failure reason')
   })
 
-  it('shows timeout progress text inside failed image placeholder', () => {
+  it('shows retry-oriented timeout text inside failed image placeholder', () => {
     const conversation = makeConversation()
     conversation.messages[0].runs = [
       {
@@ -512,7 +629,7 @@ describe('MessageList', () => {
 
     const runGrid = container.querySelector('.run-grid')
     expect(runGrid).not.toBeNull()
-    expect(runGrid).toHaveTextContent('正在等待第2轮')
+    expect(runGrid).toHaveTextContent('生成超时，可重试')
   })
 
   it('shows final prompt summary in run title', () => {
@@ -728,6 +845,44 @@ describe('MessageList', () => {
     rafSpy.mockRestore()
   })
 
+  it('smoothly scrolls to bottom when auto scroll is triggered', () => {
+    const scrollIntoView = vi.fn()
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: scrollIntoView,
+    })
+
+    const { rerender } = render(
+      <div style={{ height: 600 }}>
+        <MessageList
+          activeConversation={makeConversation()}
+          sideView="single"
+          autoScrollTrigger={0}
+          onOpenPreview={() => {}}
+          onRetryRun={() => {}}
+          onReplayRun={() => {}}
+        />
+      </div>,
+    )
+
+    scrollIntoView.mockClear()
+
+    rerender(
+      <div style={{ height: 600 }}>
+        <MessageList
+          activeConversation={makeConversation()}
+          sideView="single"
+          autoScrollTrigger={1}
+          onOpenPreview={() => {}}
+          onRetryRun={() => {}}
+          onReplayRun={() => {}}
+        />
+      </div>,
+    )
+
+    expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'end' })
+  })
+
   it('paginates images per run in multi view and can load more', async () => {
     const user = userEvent.setup()
     const conversation = makeMultiConversationWithManyRunsAndImages({
@@ -806,5 +961,3 @@ describe('MessageList', () => {
     expect(screen.queryByRole('button', { name: /下载这张/ })).not.toBeInTheDocument()
   })
 })
-
-

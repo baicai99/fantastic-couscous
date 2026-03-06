@@ -3,6 +3,7 @@ import type { CSSProperties } from 'react'
 import { SettingOutlined } from '@ant-design/icons'
 import { Button, Card, Col, Layout, Row } from 'antd'
 import { Composer } from '../../../components/chat/Composer'
+import { FavoriteModelPill } from '../../../components/chat/FavoriteModelPill'
 import { MessageList } from '../../../components/chat/MessageList'
 import { ImagePreviewModal } from '../../../components/preview/ImagePreviewModal'
 import { SettingsPanel } from '../../../components/settings/SettingsPanel'
@@ -27,6 +28,9 @@ interface MultiRenderProfile {
   messageWindowSize: number
   messageOverscan: number
 }
+
+const COMPOSER_MAX_WIDTH_PX = 920
+const COMPOSER_MIN_WIDTH_PX = COMPOSER_MAX_WIDTH_PX / 2
 
 function resolveMultiRenderProfile(sideCount: number): MultiRenderProfile {
   if (sideCount >= 4) {
@@ -72,6 +76,7 @@ export function ConversationWorkspace() {
   })
   const composerLayerRef = useRef<HTMLDivElement | null>(null)
   const [composerInset, setComposerInset] = useState(170)
+  const [composerPreferredWidth, setComposerPreferredWidth] = useState(COMPOSER_MIN_WIDTH_PX)
   const debouncedSetComposerInset = useDebouncedCallback((nextInset: number) => {
     setComposerInset((prev) => (prev === nextInset ? prev : nextInset))
   }, 80)
@@ -88,6 +93,7 @@ export function ConversationWorkspace() {
     dynamicPromptEnabled,
     panelValueFormat,
     panelVariables,
+    favoriteModelIds,
     runConcurrency,
     historyVisibleLimit,
     historyPageSize,
@@ -107,6 +113,7 @@ export function ConversationWorkspace() {
     setDynamicPromptEnabled,
     setPanelValueFormat,
     setPanelVariables,
+    setFavoriteModelIds,
     setRunConcurrency,
     createNewConversation,
     clearAllConversations,
@@ -116,6 +123,7 @@ export function ConversationWorkspace() {
     updateSideCount,
     updateSideSettings,
     setSideModel,
+    applyModelShortcut,
     setSideModelParam,
     setChannels,
     sendDraft,
@@ -163,12 +171,19 @@ export function ConversationWorkspace() {
     return new Map(modelCatalog.models.map((model) => [model.id, model.name]))
   }, [modelCatalog.models])
   const multiRenderProfile = useMemo(() => resolveMultiRenderProfile(activeSideCount), [activeSideCount])
+  const currentFavoriteModelId = useMemo(() => {
+    const primarySide = activeSideMode === 'single' ? 'single' : activeSides[0]
+    return primarySide ? activeSettingsBySide[primarySide]?.modelId ?? '' : ''
+  }, [activeSettingsBySide, activeSideMode, activeSides])
   const chatStageStyle = useMemo(
     () =>
       ({
         '--chat-composer-safe-area': `${composerInset}px`,
+        '--chat-composer-target-width': `${composerPreferredWidth}px`,
+        '--chat-composer-min-width': `${COMPOSER_MIN_WIDTH_PX}px`,
+        '--chat-composer-max-width': `${COMPOSER_MAX_WIDTH_PX}px`,
       }) as CSSProperties,
-    [composerInset],
+    [composerInset, composerPreferredWidth],
   )
 
   useEffect(() => {
@@ -252,6 +267,15 @@ export function ConversationWorkspace() {
 
       <Layout className="panel-center">
         <div className="chat-stage" style={chatStageStyle}>
+          <div className="chat-favorite-model-layer">
+            <FavoriteModelPill
+              currentModelId={currentFavoriteModelId}
+              models={modelCatalog.models}
+              favoriteModelIds={favoriteModelIds}
+              onSelectModel={applyModelShortcut}
+              onFavoriteModelIdsChange={setFavoriteModelIds}
+            />
+          </div>
           <Content className={`chat-body ${activeSideMode === 'multi' ? 'chat-body-multi' : ''}`}>
             {activeSideMode === 'multi' ? (
               <Row gutter={[12, 12]} wrap={false} className="ab-windows-row">
@@ -314,6 +338,7 @@ export function ConversationWorkspace() {
             <Composer
               draft={draft}
               sendError={sendError}
+              models={modelCatalog.models}
               isSending={isSending}
               isSendBlocked={isSendBlocked}
               panelBatchError={panelBatchError}
@@ -333,6 +358,10 @@ export function ConversationWorkspace() {
               onPanelVariablesChange={setPanelVariables}
               onDynamicPromptEnabledChange={setDynamicPromptEnabled}
               onSideModeChange={updateSideMode}
+              onPreferredWidthChange={(nextWidth) => {
+                const clampedWidth = Math.max(COMPOSER_MIN_WIDTH_PX, Math.min(COMPOSER_MAX_WIDTH_PX, nextWidth))
+                setComposerPreferredWidth((prev) => (prev === clampedWidth ? prev : clampedWidth))
+              }}
               onSend={sendDraft}
             />
           </div>

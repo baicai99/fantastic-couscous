@@ -50,17 +50,6 @@ interface RawImageItem {
   resultUrl?: unknown
 }
 
-const PER_IMAGE_TIMEOUT_MS = 60_000
-const PER_IMAGE_MAX_TIMEOUT_ROUNDS = 3
-
-function buildTimeoutProgressMessage(round: number, nextRound: number): string {
-  return `第${round}轮超时，图片已标记超时，正在等待第${nextRound}轮（60s）`
-}
-
-function buildTimeoutFinalMessage(round: number): string {
-  return `第${round}轮超时，单张图片生成失败（timeout）`
-}
-
 function normalizeBaseUrl(value: string): string {
   return value.replace(/\/+$/, '')
 }
@@ -326,26 +315,6 @@ function isPendingTaskPayload(input: {
   return false
 }
 
-function mergeSignals(external?: AbortSignal, internal?: AbortSignal): AbortSignal | undefined {
-  if (!external) {
-    return internal
-  }
-  if (!internal) {
-    return external
-  }
-  if (external.aborted) {
-    return external
-  }
-  if (internal.aborted) {
-    return internal
-  }
-  const controller = new AbortController()
-  const abort = () => controller.abort()
-  external.addEventListener('abort', abort, { once: true })
-  internal.addEventListener('abort', abort, { once: true })
-  return controller.signal
-}
-
 function resolveResumeUrl(channelBaseUrl: string, taskId?: string, taskMeta?: Record<string, string>): string | null {
   const explicit = taskMeta?.resumeUrl ?? taskMeta?.location
   if (explicit) {
@@ -492,21 +461,42 @@ export async function generateImages(input: GenerateImagesInput): Promise<Genera
 
   const requests = Array.from({ length: imageCount }, (_, index) => (async (): Promise<GeneratedImageItem> => {
     const seq = index + 1
+    let lastError: unknown = null
 
-    for (let round = 1; round <= PER_IMAGE_MAX_TIMEOUT_ROUNDS; round += 1) {
-      let lastError: unknown = null
-      let timedOut = false
-      const requestController = new AbortController()
-      const mergedSignal = mergeSignals(signal, requestController.signal)
-      const timeoutId = setTimeout(() => {
-        timedOut = true
-        requestController.abort()
-      }, PER_IMAGE_TIMEOUT_MS)
-
+    for (const candidate of modelCandidates) {
       try {
-        for (const candidate of modelCandidates) {
+        const result = await doRequest(primaryUrl, candidate, signal)
+        if (result.serverTaskId || result.serverTaskMeta) {
+          onTaskRegistered?.({
+            seq,
+            serverTaskId: result.serverTaskId,
+            serverTaskMeta: result.serverTaskMeta,
+          })
+        }
+        if (result.src) {
+          const successItem: GeneratedImageItem = {
+            seq,
+            src: result.src,
+            serverTaskId: result.serverTaskId,
+            serverTaskMeta: result.serverTaskMeta,
+          }
+          onImageCompleted?.(successItem)
+          return successItem
+        }
+        return { seq, serverTaskId: result.serverTaskId, serverTaskMeta: result.serverTaskMeta }
+      } catch (error) {
+        lastError = error
+        if (signal?.aborted || isAbortError(error)) {
+          break
+        }
+
+        const message = error instanceof Error ? error.message : ''
+        const shouldTryPathFallback =
+          Boolean(fallbackUrl) && (message.includes('HTTP 404') || message.includes('HTTP 405'))
+
+        if (shouldTryPathFallback && fallbackUrl) {
           try {
-            const result = await doRequest(primaryUrl, candidate, mergedSignal)
+            const result = await doRequest(fallbackUrl, candidate, signal)
             if (result.serverTaskId || result.serverTaskMeta) {
               onTaskRegistered?.({
                 seq,
@@ -515,99 +505,49 @@ export async function generateImages(input: GenerateImagesInput): Promise<Genera
               })
             }
             if (result.src) {
-              const successItem: GeneratedImageItem = { seq, src: result.src, serverTaskId: result.serverTaskId, serverTaskMeta: result.serverTaskMeta }
+              const successItem: GeneratedImageItem = {
+                seq,
+                src: result.src,
+                serverTaskId: result.serverTaskId,
+                serverTaskMeta: result.serverTaskMeta,
+              }
               onImageCompleted?.(successItem)
               return successItem
             }
-            const pendingItem: GeneratedImageItem = { seq, serverTaskId: result.serverTaskId, serverTaskMeta: result.serverTaskMeta }
-            return pendingItem
-          } catch (error) {
-            lastError = error
-            if (signal?.aborted || timedOut || isAbortError(error)) {
+            return { seq, serverTaskId: result.serverTaskId, serverTaskMeta: result.serverTaskMeta }
+          } catch (fallbackError) {
+            lastError = fallbackError
+            if (signal?.aborted || isAbortError(fallbackError)) {
               break
             }
-
-            const message = error instanceof Error ? error.message : ''
-            const shouldTryPathFallback =
-              Boolean(fallbackUrl) && (message.includes('HTTP 404') || message.includes('HTTP 405'))
-
-            if (shouldTryPathFallback && fallbackUrl) {
-              try {
-                const result = await doRequest(fallbackUrl, candidate, mergedSignal)
-                if (result.serverTaskId || result.serverTaskMeta) {
-                  onTaskRegistered?.({
-                    seq,
-                    serverTaskId: result.serverTaskId,
-                    serverTaskMeta: result.serverTaskMeta,
-                  })
-                }
-                if (result.src) {
-                  const successItem: GeneratedImageItem = { seq, src: result.src, serverTaskId: result.serverTaskId, serverTaskMeta: result.serverTaskMeta }
-                  onImageCompleted?.(successItem)
-                  return successItem
-                }
-                return { seq, serverTaskId: result.serverTaskId, serverTaskMeta: result.serverTaskMeta }
-              } catch (fallbackError) {
-                lastError = fallbackError
-                if (signal?.aborted || timedOut || isAbortError(fallbackError)) {
-                  break
-                }
-              }
-            }
-
-            if (!isUnsupportedModelError(lastError)) {
-              const failedMessage = lastError instanceof Error ? lastError.message : 'Image generation failed.'
-              const failedItem: GeneratedImageItem = { seq, error: failedMessage }
-              onImageCompleted?.(failedItem)
-              return failedItem
-            }
           }
         }
 
-        if (signal?.aborted || (!timedOut && isAbortError(lastError))) {
-          throw Object.assign(new Error('aborted'), { name: 'AbortError' })
-        }
-
-        if (timedOut) {
-          if (round < PER_IMAGE_MAX_TIMEOUT_ROUNDS) {
-            const progressItem: GeneratedImageItem = {
-              seq,
-              error: buildTimeoutProgressMessage(round, round + 1),
-            }
-            onImageCompleted?.(progressItem)
-            continue
-          }
-          const failedItem: GeneratedImageItem = {
-            seq,
-            error: buildTimeoutFinalMessage(round),
-          }
+        if (!isUnsupportedModelError(lastError)) {
+          const failedMessage = lastError instanceof Error ? lastError.message : 'Image generation failed.'
+          const failedItem: GeneratedImageItem = { seq, error: failedMessage }
           onImageCompleted?.(failedItem)
           return failedItem
         }
-
-        if (isUnsupportedModelError(lastError)) {
-          const failedItem: GeneratedImageItem = {
-            seq,
-            error: buildUnsupportedModelMessage(channel.baseUrl, modelId, modelCandidates, lastError),
-          }
-          onImageCompleted?.(failedItem)
-          return failedItem
-        }
-
-        const failedItem: GeneratedImageItem = {
-          seq,
-          error: lastError instanceof Error ? lastError.message : 'Image generation failed.',
-        }
-        onImageCompleted?.(failedItem)
-        return failedItem
-      } finally {
-        clearTimeout(timeoutId)
       }
+    }
+
+    if (signal?.aborted || isAbortError(lastError)) {
+      throw Object.assign(new Error('aborted'), { name: 'AbortError' })
+    }
+
+    if (isUnsupportedModelError(lastError)) {
+      const failedItem: GeneratedImageItem = {
+        seq,
+        error: buildUnsupportedModelMessage(channel.baseUrl, modelId, modelCandidates, lastError),
+      }
+      onImageCompleted?.(failedItem)
+      return failedItem
     }
 
     const failedItem: GeneratedImageItem = {
       seq,
-      error: buildTimeoutFinalMessage(PER_IMAGE_MAX_TIMEOUT_ROUNDS),
+      error: lastError instanceof Error ? lastError.message : 'Image generation failed.',
     }
     onImageCompleted?.(failedItem)
     return failedItem
@@ -621,10 +561,14 @@ export async function resumeImageTaskOnce(input: {
   taskId?: string
   taskMeta?: Record<string, string>
   signal?: AbortSignal
-}): Promise<{ ok: true; src: string } | { ok: false }> {
+}): Promise<
+  | { state: 'success'; src: string; serverTaskId?: string; serverTaskMeta?: Record<string, string> }
+  | { state: 'pending'; serverTaskId?: string; serverTaskMeta?: Record<string, string> }
+  | { state: 'failed'; error?: string; serverTaskId?: string; serverTaskMeta?: Record<string, string> }
+> {
   const resumeUrl = resolveResumeUrl(input.channel.baseUrl, input.taskId, input.taskMeta)
   if (!resumeUrl) {
-    return { ok: false }
+    return { state: 'failed', error: 'missing resume url' }
   }
 
   try {
@@ -635,14 +579,75 @@ export async function resumeImageTaskOnce(input: {
       },
       signal: input.signal,
     })
-    if (!response.ok) {
-      return { ok: false }
+
+    let payload: unknown = undefined
+    try {
+      payload = await response.json()
+    } catch {
+      payload = undefined
     }
-    const payload = (await response.json()) as { data?: unknown }
-    const items = Array.isArray(payload.data) ? (payload.data as RawImageItem[]) : []
+
+    const taskRegistration = parseTaskRegistration({
+      baseUrl: input.channel.baseUrl,
+      payload,
+      response,
+    })
+
+    if (!response.ok) {
+      if (response.status === 404 || response.status === 410) {
+        return {
+          state: 'failed',
+          error: `HTTP ${response.status}`,
+          serverTaskId: taskRegistration.serverTaskId ?? input.taskId,
+          serverTaskMeta: taskRegistration.serverTaskMeta ?? input.taskMeta,
+        }
+      }
+
+      return {
+        state: 'pending',
+        serverTaskId: taskRegistration.serverTaskId ?? input.taskId,
+        serverTaskMeta: taskRegistration.serverTaskMeta ?? input.taskMeta,
+      }
+    }
+
+    const payloadRecord = payload && typeof payload === 'object' ? (payload as { data?: unknown; error?: unknown }) : {}
+    const items = Array.isArray(payloadRecord.data) ? (payloadRecord.data as RawImageItem[]) : []
     const first = items.map((item) => toImageSrc(item)).find((value): value is string => Boolean(value))
-    return first ? { ok: true, src: first } : { ok: false }
+    if (first) {
+      return {
+        state: 'success',
+        src: first,
+        serverTaskId: taskRegistration.serverTaskId ?? input.taskId,
+        serverTaskMeta: taskRegistration.serverTaskMeta ?? input.taskMeta,
+      }
+    }
+
+    if (isPendingTaskPayload({
+      payload,
+      response,
+      taskId: taskRegistration.serverTaskId ?? input.taskId,
+      taskMeta: taskRegistration.serverTaskMeta ?? input.taskMeta,
+    })) {
+      return {
+        state: 'pending',
+        serverTaskId: taskRegistration.serverTaskId ?? input.taskId,
+        serverTaskMeta: taskRegistration.serverTaskMeta ?? input.taskMeta,
+      }
+    }
+
+    const normalizedError =
+      typeof payloadRecord.error === 'string' && payloadRecord.error.trim() ? payloadRecord.error.trim() : undefined
+    return {
+      state: 'failed',
+      error: normalizedError ?? 'task completed without image payload',
+      serverTaskId: taskRegistration.serverTaskId ?? input.taskId,
+      serverTaskMeta: taskRegistration.serverTaskMeta ?? input.taskMeta,
+    }
   } catch {
-    return { ok: false }
+    return {
+      state: 'pending',
+      serverTaskId: input.taskId,
+      serverTaskMeta: input.taskMeta,
+    }
   }
 }

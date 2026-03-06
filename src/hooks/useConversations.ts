@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { message } from 'antd'
+import { message, notification } from 'antd'
 import { resumeImageTaskOnce } from '../services/imageGeneration'
 import { getModelCatalogFromChannels } from '../services/modelCatalog'
 import type {
@@ -7,18 +7,27 @@ import type {
   Conversation,
   ConversationSummary,
   Message,
+  ModelSpec,
   Run,
   Side,
   SideMode,
   SingleSideSettings,
 } from '../types/chat'
-import { appendMessagesToConversation, createConversation, makeId, toSummary } from '../utils/chat'
+import { createConversation, makeId, toSummary } from '../utils/chat'
 import { buildImageFileName } from '../utils/fileName'
 import { isDownloadableImageRef, resolveImageSourceForDownload } from '../services/imageRef'
+import {
+  clearImageTasks,
+  loadImageTasks,
+  makeImageTaskId,
+  removeImageTasksForConversation,
+  replaceImageTasksForConversation,
+} from '../services/imageTaskStore'
 import { createConversationOrchestrator } from '../features/conversation/application/conversationOrchestrator'
 import { createRunExecutor } from '../features/conversation/application/runExecutor'
 import {
   buildPanelVariableBatches,
+  classifyFailure,
   getMultiSideIds,
   normalizeConversation,
   normalizeSettingsBySide,
@@ -33,6 +42,11 @@ import {
 import { trackDuration, startMetric } from '../features/performance/runtimeMetrics'
 
 const PROGRESS_PERSIST_DEBOUNCE_MS = 250
+const GLOBAL_RESUME_POLL_VISIBLE_MS = 5_000
+const GLOBAL_RESUME_POLL_HIDDEN_MS = 20_000
+const RESUME_POLL_INTERVAL_MS = 5_000
+const RESUME_RETRY_COOLDOWN_MS = 4_000
+const IMAGE_PENDING_TIMEOUT_MS = 5 * 60_000
 const MESSAGE_HISTORY_INITIAL_LIMIT = 100
 const MESSAGE_HISTORY_PAGE_SIZE = 50
 const MAX_IN_MEMORY_CONVERSATIONS = 5
@@ -133,11 +147,94 @@ function conversationHasActiveImageThreads(conversation: Conversation | null | u
   )
 }
 
+function getRunCompletionStats(run: Run): { pendingCount: number; successCount: number; failedCount: number } {
+  return run.images.reduce(
+    (acc, image) => {
+      if (image.status === 'pending') {
+        acc.pendingCount += 1
+      } else if (image.status === 'success') {
+        acc.successCount += 1
+      } else {
+        acc.failedCount += 1
+      }
+      return acc
+    },
+    { pendingCount: 0, successCount: 0, failedCount: 0 },
+  )
+}
+
 function isAbortLikeError(error: unknown): boolean {
   if (!error || typeof error !== 'object') {
     return false
   }
   return 'name' in error && (error as { name?: unknown }).name === 'AbortError'
+}
+
+function isPendingImageTimedOut(run: Run): boolean {
+  const createdAtEpoch = toEpoch(run.createdAt)
+  if (createdAtEpoch <= 0) {
+    return false
+  }
+  return Date.now() - createdAtEpoch >= IMAGE_PENDING_TIMEOUT_MS
+}
+
+function inferModelShortcutTokens(model: ModelSpec): string[] {
+  const value = `${model.id} ${model.name}`.toLowerCase()
+  const tokens = new Set<string>([model.id.toLowerCase(), model.name.toLowerCase()])
+
+  if (Array.isArray(model.tags)) {
+    for (const tag of model.tags) {
+      if (typeof tag === 'string' && tag.trim()) {
+        tokens.add(tag.trim().toLowerCase())
+      }
+    }
+  }
+
+  if (value.includes('gemini')) tokens.add('google')
+  if (value.includes('google')) tokens.add('gemini')
+  if (value.includes('doubao')) tokens.add('豆包')
+  if (value.includes('midjourney')) tokens.add('mj')
+  if (value.includes('mj')) tokens.add('midjourney')
+
+  return Array.from(tokens)
+}
+
+function parseModelCommandDraft(
+  draft: string,
+  models: ModelSpec[],
+): { model: ModelSpec; scope: 'permanent' | 'temporary'; cleanedPrompt: string } | null {
+  const trimmed = draft.trim()
+  if (!trimmed.startsWith('@')) {
+    return null
+  }
+
+  const commandMatch = trimmed.match(/^@(\S+)(?:\s+([\s\S]*))?$/)
+  if (!commandMatch) {
+    return null
+  }
+
+  const query = commandMatch[1]?.trim().toLowerCase() ?? ''
+  const cleanedPrompt = commandMatch[2]?.trim() ?? ''
+  if (!query) {
+    return null
+  }
+
+  const matches = models.filter((model) =>
+    inferModelShortcutTokens(model).some((token) => token.includes(query)),
+  )
+  if (matches.length === 0) {
+    return null
+  }
+
+  const exactMatch =
+    matches.find((model) => inferModelShortcutTokens(model).some((token) => token === query)) ??
+    matches[0]
+
+  return {
+    model: exactMatch,
+    scope: cleanedPrompt.length > 0 ? 'temporary' : 'permanent',
+    cleanedPrompt,
+  }
 }
 
 function isDownloadableImage(image: Run['images'][number]): boolean {
@@ -211,10 +308,13 @@ export function useConversations() {
   const [sendScrollTrigger, setSendScrollTrigger] = useState(0)
   const pendingPersistConversationIdsRef = useRef<Set<string>>(new Set())
   const persistTimerRef = useRef<number | null>(null)
+  const resumePollTimerRef = useRef<number | null>(null)
+  const backgroundResumePollTimerRef = useRef<number | null>(null)
   const conversationCacheOrderRef = useRef<string[]>([])
   const runLocationByConversationRef = useRef<Record<string, Map<string, { messageIndex: number; runIndex: number }>>>({})
   const activeRunControllersRef = useRef<Record<string, Map<string, AbortController>>>({})
   const resumingImageIdsRef = useRef<Set<string>>(new Set())
+  const runCompletionSignatureRef = useRef<Map<string, string>>(new Map())
 
   const activeConversation = conversationSelectors.selectActiveConversation(state)
   const { activeSideMode, activeSideCount, activeSettingsBySide } = conversationSelectors.selectActiveSettings(state)
@@ -234,6 +334,52 @@ export function useConversations() {
 
   const runExecutor = useMemo(() => createRunExecutor(), [])
   const orchestrator = useMemo(() => createConversationOrchestrator({ createRun: runExecutor.createRun }), [runExecutor])
+
+  const notifyRunCompleted = (conversationId: string, run: Run) => {
+    const stats = getRunCompletionStats(run)
+    const signature = stats.pendingCount > 0
+      ? `pending:${stats.pendingCount}`
+      : `settled:${stats.successCount}:${stats.failedCount}`
+    const runKey = `${conversationId}:${run.id}`
+    const previousSignature = runCompletionSignatureRef.current.get(runKey)
+
+    if (previousSignature === signature) {
+      return
+    }
+
+    runCompletionSignatureRef.current.set(runKey, signature)
+    if (stats.pendingCount > 0) {
+      return
+    }
+
+    const snapshot = stateRef.current
+    const conversationTitle =
+      snapshot.contents[conversationId]?.title ??
+      snapshot.summaries.find((item) => item.id === conversationId)?.title ??
+      '未命名对话'
+    const isCurrentConversation = snapshot.activeId === conversationId
+    const resultLabel =
+      stats.failedCount === 0 ? '任务已完成' : stats.successCount === 0 ? '任务执行失败' : '任务已结束'
+    const summaryParts = [
+      stats.successCount > 0 ? `成功 ${stats.successCount} 张` : '',
+      stats.failedCount > 0 ? `失败 ${stats.failedCount} 张` : '',
+    ].filter((item) => item.length > 0)
+    const description = isCurrentConversation
+      ? `${conversationTitle}：${summaryParts.join('，') || '结果已更新'}。`
+      : `${conversationTitle}：${summaryParts.join('，') || '结果已更新'}。点击跳转查看。`
+
+    notification.success({
+      placement: 'topRight',
+      title: resultLabel,
+      description,
+      duration: isCurrentConversation ? 3 : 5,
+      onClick: isCurrentConversation
+        ? undefined
+        : () => {
+            setActiveConversation(conversationId)
+          },
+    })
+  }
 
   const rebuildRunLocationIndex = (conversation: Conversation) => {
     const nextMap = new Map<string, { messageIndex: number; runIndex: number }>()
@@ -343,6 +489,7 @@ export function useConversations() {
     conversation: Conversation,
     options?: { saveStorage?: boolean; saveIndex?: boolean },
   ) => {
+    syncTaskRegistryForConversation(conversation)
     rebuildRunLocationIndex(conversation)
     touchConversationCache(conversation.id)
     const snapshot = stateRef.current
@@ -434,6 +581,14 @@ export function useConversations() {
         window.clearTimeout(persistTimerRef.current)
         persistTimerRef.current = null
       }
+      if (resumePollTimerRef.current !== null) {
+        window.clearInterval(resumePollTimerRef.current)
+        resumePollTimerRef.current = null
+      }
+      if (backgroundResumePollTimerRef.current !== null) {
+        window.clearInterval(backgroundResumePollTimerRef.current)
+        backgroundResumePollTimerRef.current = null
+      }
       Object.values(activeRunControllersRef.current).forEach((controllers) => {
         controllers.forEach((controller) => controller.abort())
       })
@@ -455,7 +610,7 @@ export function useConversations() {
     const existing = snapshot.contents[conversationId]
     if (existing) {
       touchConversationCache(conversationId)
-      void resumeDetachedImagesOnceForConversation(conversationId)
+      void resumePendingImagesForConversation(conversationId)
       return
     }
 
@@ -466,6 +621,7 @@ export function useConversations() {
     }
 
     const normalized = normalizeConversation(loaded, snapshot.channels, getModelCatalogFromChannels(snapshot.channels))
+    syncTaskRegistryForConversation(normalized)
     rebuildRunLocationIndex(normalized)
     touchConversationCache(conversationId)
     const next = upsertConversationState(
@@ -476,7 +632,7 @@ export function useConversations() {
       conversationCacheOrderRef.current,
     )
     syncAndPersist({ summaries: next.nextSummaries, contents: next.nextContents }, { saveIndex: false })
-    void resumeDetachedImagesOnceForConversation(conversationId)
+    void resumePendingImagesForConversation(conversationId)
   }
 
   useEffect(() => {
@@ -509,6 +665,7 @@ export function useConversations() {
     dynamicPromptEnabled: boolean,
     panelValueFormat: PanelValueFormat,
     panelVariables: PanelVariableRow[],
+    favoriteModelIds: string[],
   ) => {
     repository.saveStagedSettings({
       sideMode: mode,
@@ -518,6 +675,7 @@ export function useConversations() {
       dynamicPromptEnabled,
       panelValueFormat,
       panelVariables,
+      favoriteModelIds,
     })
 
     dispatch({
@@ -546,6 +704,7 @@ export function useConversations() {
       stateRef.current.dynamicPromptEnabled,
       stateRef.current.panelValueFormat,
       stateRef.current.panelVariables,
+      stateRef.current.favoriteModelIds,
     )
 
     const current = stateRef.current
@@ -567,7 +726,6 @@ export function useConversations() {
     const seedMode = activeSideMode
     const seedSideCount = activeSideCount
     const seedSettings = normalizeSettingsBySide(activeSettingsBySide, state.channels, modelCatalog, seedSideCount)
-    const previousActiveId = stateRef.current.activeId
 
     saveStagedSettings(
       seedMode,
@@ -577,14 +735,8 @@ export function useConversations() {
       stateRef.current.dynamicPromptEnabled,
       stateRef.current.panelValueFormat,
       stateRef.current.panelVariables,
+      stateRef.current.favoriteModelIds,
     )
-
-    if (previousActiveId) {
-      const activeControllers = activeRunControllersRef.current[previousActiveId]
-      activeControllers?.forEach((controller) => controller.abort())
-      delete activeRunControllersRef.current[previousActiveId]
-      detachConversationImageThreads(previousActiveId)
-    }
 
     setActiveConversation(null)
     actions.setDraft('')
@@ -601,6 +753,8 @@ export function useConversations() {
     dispatch({ type: 'conversation/clear' })
     conversationCacheOrderRef.current = []
     runLocationByConversationRef.current = {}
+    runCompletionSignatureRef.current.clear()
+    clearImageTasks()
     void repository.clearConversations()
   }
 
@@ -614,6 +768,10 @@ export function useConversations() {
 
     conversationCacheOrderRef.current = conversationCacheOrderRef.current.filter((id) => id !== conversationId)
     delete runLocationByConversationRef.current[conversationId]
+    Array.from(runCompletionSignatureRef.current.keys())
+      .filter((key) => key.startsWith(`${conversationId}:`))
+      .forEach((key) => runCompletionSignatureRef.current.delete(key))
+    removeImageTasksForConversation(conversationId)
     void repository.removeConversation(conversationId)
 
     if (snapshot.activeId === conversationId) {
@@ -677,6 +835,26 @@ export function useConversations() {
     updateConversationState(activeSideMode, activeSideCount, merged)
   }
 
+  const applyModelShortcut = (modelId: string) => {
+    const targetSides = activeSideMode === 'single' ? (['single'] as Side[]) : activeSides
+    const nextSettings = { ...activeSettingsBySide }
+
+    for (const side of targetSides) {
+      const current = nextSettings[side]
+      if (!current) {
+        continue
+      }
+      nextSettings[side] = {
+        ...current,
+        modelId,
+        paramValues: {},
+      }
+    }
+
+    const merged = normalizeSettingsBySide(nextSettings, state.channels, modelCatalog, activeSideCount)
+    updateConversationState(activeSideMode, activeSideCount, merged)
+  }
+
   const setSideModelParam = (side: Side, paramKey: string, value: string | number | boolean) => {
     const current = activeSettingsBySide[side]
     const merged = normalizeSettingsBySide(
@@ -698,12 +876,39 @@ export function useConversations() {
     updateConversationState(activeSideMode, activeSideCount, merged)
   }
 
+  const setFavoriteModelIds = (value: string[]) => {
+    const nextFavoriteModelIds = Array.from(
+      new Set(value.filter((modelId) => modelCatalog.models.some((model) => model.id === modelId))),
+    )
+    dispatch({ type: 'settings/setFavoriteModels', payload: nextFavoriteModelIds })
+
+    const snapshot = stateRef.current
+    repository.saveStagedSettings({
+      sideMode: activeSideMode,
+      sideCount: activeSideCount,
+      settingsBySide: activeSettingsBySide,
+      runConcurrency: snapshot.runConcurrency,
+      dynamicPromptEnabled: snapshot.dynamicPromptEnabled,
+      panelValueFormat: snapshot.panelValueFormat,
+      panelVariables: snapshot.panelVariables,
+      favoriteModelIds: nextFavoriteModelIds,
+    })
+
+    stateRef.current = {
+      ...snapshot,
+      favoriteModelIds: nextFavoriteModelIds,
+    }
+  }
+
   const setChannels = (nextChannels: typeof state.channels) => {
     dispatch({ type: 'channels/set', payload: nextChannels })
     repository.saveChannels(nextChannels)
 
     const nextCatalog = getModelCatalogFromChannels(nextChannels)
     const normalized = normalizeSettingsBySide(activeSettingsBySide, nextChannels, nextCatalog, activeSideCount)
+    const filteredFavoriteModelIds = stateRef.current.favoriteModelIds.filter((modelId) =>
+      nextCatalog.models.some((model) => model.id === modelId),
+    )
 
     repository.saveStagedSettings({
       sideMode: activeSideMode,
@@ -713,7 +918,14 @@ export function useConversations() {
       dynamicPromptEnabled: stateRef.current.dynamicPromptEnabled,
       panelValueFormat: stateRef.current.panelValueFormat,
       panelVariables: stateRef.current.panelVariables,
+      favoriteModelIds: filteredFavoriteModelIds,
     })
+
+    dispatch({ type: 'settings/setFavoriteModels', payload: filteredFavoriteModelIds })
+    stateRef.current = {
+      ...stateRef.current,
+      favoriteModelIds: filteredFavoriteModelIds,
+    }
 
     dispatch({
       type: 'settings/updateSide',
@@ -751,6 +963,7 @@ export function useConversations() {
       dynamicPromptEnabled: snapshot.dynamicPromptEnabled,
       panelValueFormat: snapshot.panelValueFormat,
       panelVariables: snapshot.panelVariables,
+      favoriteModelIds: snapshot.favoriteModelIds,
     })
 
     stateRef.current = {
@@ -771,6 +984,7 @@ export function useConversations() {
       dynamicPromptEnabled: value,
       panelValueFormat: snapshot.panelValueFormat,
       panelVariables: snapshot.panelVariables,
+      favoriteModelIds: snapshot.favoriteModelIds,
     })
 
     stateRef.current = {
@@ -791,6 +1005,7 @@ export function useConversations() {
       dynamicPromptEnabled: snapshot.dynamicPromptEnabled,
       panelValueFormat: value,
       panelVariables: snapshot.panelVariables,
+      favoriteModelIds: snapshot.favoriteModelIds,
     })
 
     stateRef.current = {
@@ -811,11 +1026,47 @@ export function useConversations() {
       dynamicPromptEnabled: snapshot.dynamicPromptEnabled,
       panelValueFormat: snapshot.panelValueFormat,
       panelVariables: value,
+      favoriteModelIds: snapshot.favoriteModelIds,
     })
 
     stateRef.current = {
       ...snapshot,
       panelVariables: value,
+    }
+  }
+
+  const appendConversationEntry = (
+    conversation: Conversation,
+    userContent: string,
+    assistantContent: string,
+    runs: Run[] = [],
+    titleSource?: string,
+  ): Conversation => {
+    const now = new Date().toISOString()
+    const userMessage: Message = {
+      id: makeId(),
+      createdAt: now,
+      role: 'user',
+      content: userContent,
+    }
+    const assistantMessage: Message = {
+      id: makeId(),
+      createdAt: now,
+      role: 'assistant',
+      content: assistantContent,
+      runs,
+    }
+    const hadUserMessage = conversation.messages.some((message) => message.role === 'user')
+    const nextTitle = !hadUserMessage ? toSummary({
+      ...conversation,
+      messages: [...conversation.messages, { ...userMessage, content: titleSource ?? userContent }],
+    }).title : conversation.title
+
+    return {
+      ...conversation,
+      title: nextTitle,
+      updatedAt: now,
+      messages: [...conversation.messages, userMessage, assistantMessage],
     }
   }
   const replaceRunsInConversation = (conversationId: string, nextRunsById: Map<string, Run>) => {
@@ -870,6 +1121,9 @@ export function useConversations() {
     }
 
     persistConversation(updatedConversation)
+    nextRunsById.forEach((run) => {
+      notifyRunCompleted(conversationId, run)
+    })
   }
 
   const updateRunImageInConversation = (
@@ -976,7 +1230,31 @@ export function useConversations() {
       saveStorage: false,
       saveIndex: false,
     })
+    notifyRunCompleted(conversationId, nextRun)
     scheduleConversationPersistence(conversationId)
+  }
+
+  const syncTaskRegistryForConversation = (conversation: Conversation) => {
+    const nextTasks = conversation.messages.flatMap((message) =>
+      (message.runs ?? []).flatMap((run) =>
+        run.images
+          .filter((image) => image.status === 'pending' && Boolean(image.serverTaskId || image.serverTaskMeta))
+          .map((image) => ({
+            id: makeImageTaskId(conversation.id, run.id, image.id),
+            conversationId: conversation.id,
+            runId: run.id,
+            imageId: image.id,
+            seq: image.seq,
+            channelId: run.channelId,
+            serverTaskId: image.serverTaskId,
+            serverTaskMeta: image.serverTaskMeta,
+            createdAt: run.createdAt,
+            updatedAt: image.lastResumeAttemptAt ?? image.detachedAt ?? conversation.updatedAt,
+          })),
+      ),
+    )
+
+    replaceImageTasksForConversation(conversation.id, nextTasks)
   }
 
   const detachConversationImageThreads = (conversationId: string) => {
@@ -997,6 +1275,17 @@ export function useConversations() {
           }
           runChanged = true
           changed = true
+          const canResume = Boolean(image.serverTaskId || image.serverTaskMeta)
+          if (!canResume) {
+            return {
+              ...image,
+              status: 'failed' as const,
+              threadState: 'settled' as const,
+              error: '图片生成已中断，请重试',
+              errorCode: 'unknown' as const,
+              detachedAt,
+            }
+          }
           return {
             ...image,
             threadState: 'detached' as const,
@@ -1019,7 +1308,7 @@ export function useConversations() {
     })
   }
 
-  const resumeDetachedImagesOnceForConversation = async (conversationId: string) => {
+  const resumePendingImagesForConversation = async (conversationId: string) => {
     const snapshot = stateRef.current
     const conversation = snapshot.contents[conversationId]
     if (!conversation) {
@@ -1031,8 +1320,6 @@ export function useConversations() {
         run.images
           .filter((image) =>
             image.status === 'pending' &&
-            image.threadState === 'detached' &&
-            !image.lastResumeAttemptAt &&
             Boolean(image.serverTaskId || image.serverTaskMeta),
           )
           .map((image) => ({ run, image })),
@@ -1040,8 +1327,25 @@ export function useConversations() {
     )
 
     for (const entry of resumable) {
+      if (isPendingImageTimedOut(entry.run)) {
+        updateRunImageInConversation(conversationId, {
+          runId: entry.run.id,
+          seq: entry.image.seq,
+          status: 'failed',
+          threadState: 'settled',
+          error: '图片生成超时（超过 5 分钟）',
+          errorCode: 'timeout',
+          lastResumeAttemptAt: new Date().toISOString(),
+        })
+        continue
+      }
+
       const imageKey = `${conversationId}:${entry.run.id}:${entry.image.id}`
       if (resumingImageIdsRef.current.has(imageKey)) {
+        continue
+      }
+      const lastAttemptEpoch = toEpoch(entry.image.lastResumeAttemptAt)
+      if (Date.now() - lastAttemptEpoch < RESUME_RETRY_COOLDOWN_MS) {
         continue
       }
 
@@ -1073,14 +1377,28 @@ export function useConversations() {
           taskId: entry.image.serverTaskId,
           taskMeta: entry.image.serverTaskMeta,
         })
-        if (!resumed.ok) {
+        if (resumed.state === 'pending') {
+          updateRunImageInConversation(conversationId, {
+            runId: entry.run.id,
+            seq: entry.image.seq,
+            status: 'pending',
+            threadState: 'active',
+            serverTaskId: resumed.serverTaskId ?? entry.image.serverTaskId,
+            serverTaskMeta: resumed.serverTaskMeta ?? entry.image.serverTaskMeta,
+            lastResumeAttemptAt: attemptedAt,
+          })
+          continue
+        }
+        if (resumed.state === 'failed') {
           updateRunImageInConversation(conversationId, {
             runId: entry.run.id,
             seq: entry.image.seq,
             status: 'failed',
             threadState: 'settled',
-            error: '图片生成失败',
-            errorCode: 'unknown',
+            error: resumed.error?.trim() ? resumed.error : '图片生成失败',
+            errorCode: classifyFailure(resumed.error?.trim() ? resumed.error : '图片生成失败'),
+            serverTaskId: resumed.serverTaskId ?? entry.image.serverTaskId,
+            serverTaskMeta: resumed.serverTaskMeta ?? entry.image.serverTaskMeta,
             lastResumeAttemptAt: attemptedAt,
           })
           continue
@@ -1094,6 +1412,8 @@ export function useConversations() {
           thumbRef: resumed.src,
           refKind: /^data:image\//i.test(resumed.src) ? 'inline' : 'url',
           refKey: /^data:image\//i.test(resumed.src) ? undefined : resumed.src,
+          serverTaskId: resumed.serverTaskId ?? entry.image.serverTaskId,
+          serverTaskMeta: resumed.serverTaskMeta ?? entry.image.serverTaskMeta,
           error: undefined,
           errorCode: undefined,
           lastResumeAttemptAt: attemptedAt,
@@ -1103,6 +1423,124 @@ export function useConversations() {
       }
     }
   }
+
+  const pollBackgroundPendingTasks = async () => {
+    const registeredTasks = loadImageTasks()
+    if (registeredTasks.length === 0) {
+      return
+    }
+
+    const conversationIds = Array.from(new Set(registeredTasks.map((item) => item.conversationId)))
+    for (const conversationId of conversationIds) {
+      await ensureConversationLoaded(conversationId)
+      await resumePendingImagesForConversation(conversationId)
+    }
+  }
+
+  useEffect(() => {
+    if (!state.activeId) {
+      return
+    }
+
+    void resumePendingImagesForConversation(state.activeId)
+
+    if (resumePollTimerRef.current !== null) {
+      window.clearInterval(resumePollTimerRef.current)
+    }
+    resumePollTimerRef.current = window.setInterval(() => {
+      const activeId = stateRef.current.activeId
+      if (!activeId) {
+        return
+      }
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+        return
+      }
+      void resumePendingImagesForConversation(activeId)
+    }, RESUME_POLL_INTERVAL_MS)
+
+    const handleVisible = () => {
+      const activeId = stateRef.current.activeId
+      if (!activeId) {
+        return
+      }
+      void resumePendingImagesForConversation(activeId)
+    }
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        handleVisible()
+      }
+    }
+
+    const handlePageHide = () => {
+      const activeId = stateRef.current.activeId
+      if (!activeId) {
+        return
+      }
+      detachConversationImageThreads(activeId)
+      void flushPendingPersistence()
+    }
+
+    window.addEventListener('pageshow', handleVisible)
+    window.addEventListener('focus', handleVisible)
+    window.addEventListener('pagehide', handlePageHide)
+    window.addEventListener('beforeunload', handlePageHide)
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+
+    return () => {
+      if (resumePollTimerRef.current !== null) {
+        window.clearInterval(resumePollTimerRef.current)
+        resumePollTimerRef.current = null
+      }
+      window.removeEventListener('pageshow', handleVisible)
+      window.removeEventListener('focus', handleVisible)
+      window.removeEventListener('pagehide', handlePageHide)
+      window.removeEventListener('beforeunload', handlePageHide)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+    }
+  }, [state.activeId])
+
+  useEffect(() => {
+    const scheduleBackgroundPolling = () => {
+      if (backgroundResumePollTimerRef.current !== null) {
+        window.clearInterval(backgroundResumePollTimerRef.current)
+      }
+      const intervalMs =
+        typeof document !== 'undefined' && document.visibilityState === 'hidden'
+          ? GLOBAL_RESUME_POLL_HIDDEN_MS
+          : GLOBAL_RESUME_POLL_VISIBLE_MS
+      backgroundResumePollTimerRef.current = window.setInterval(() => {
+        void pollBackgroundPendingTasks()
+      }, intervalMs)
+    }
+
+    const handleVisibilityChange = () => {
+      scheduleBackgroundPolling()
+      if (document.visibilityState === 'visible') {
+        void pollBackgroundPendingTasks()
+      }
+    }
+
+    const handleVisible = () => {
+      void pollBackgroundPendingTasks()
+    }
+
+    scheduleBackgroundPolling()
+    void pollBackgroundPendingTasks()
+    window.addEventListener('pageshow', handleVisible)
+    window.addEventListener('focus', handleVisible)
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+
+    return () => {
+      if (backgroundResumePollTimerRef.current !== null) {
+        window.clearInterval(backgroundResumePollTimerRef.current)
+        backgroundResumePollTimerRef.current = null
+      }
+      window.removeEventListener('pageshow', handleVisible)
+      window.removeEventListener('focus', handleVisible)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+    }
+  }, [])
 
   const findRunInConversation = (conversation: Conversation, runId: string): Run | null => {
     for (const message of conversation.messages) {
@@ -1217,11 +1655,55 @@ export function useConversations() {
     const snapshot = stateRef.current
     const currentActive = await getLoadedActiveConversation()
     const activeState = conversationSelectors.selectActiveSettings(snapshot)
+    const modelCommand = parseModelCommandDraft(snapshot.draft, modelCatalog.models)
 
-    const planned = orchestrator.planSendDraft(snapshot, {
+    if (modelCommand?.scope === 'permanent') {
+      applyModelShortcut(modelCommand.model.id)
+      const baseConversation =
+        currentActive ??
+        createConversation(activeState.activeSettingsBySide, activeState.activeSideMode, activeState.activeSideCount)
+      const updatedConversation = appendConversationEntry(
+        baseConversation,
+        snapshot.draft,
+        `模型已切换为 ${modelCommand.model.name}，后续请求将默认使用该模型。`,
+        [],
+        modelCommand.model.name,
+      )
+      persistConversation(updatedConversation)
+      setActiveConversation(updatedConversation.id)
+      setSendScrollTrigger((prev) => prev + 1)
+      actions.setDraft('')
+      void message.success(`已切换到 ${modelCommand.model.name}`)
+      return
+    }
+
+    const effectiveDraft = modelCommand?.cleanedPrompt?.length ? modelCommand.cleanedPrompt : snapshot.draft
+    const effectiveSettingsBySide = modelCommand?.scope === 'temporary'
+      ? (() => {
+          const targetSides = activeState.activeSideMode === 'single' ? (['single'] as Side[]) : getMultiSideIds(activeState.activeSideCount)
+          const nextSettings = { ...activeState.activeSettingsBySide }
+          for (const side of targetSides) {
+            const current = nextSettings[side]
+            if (!current) {
+              continue
+            }
+            nextSettings[side] = {
+              ...current,
+              modelId: modelCommand.model.id,
+              paramValues: {},
+            }
+          }
+          return nextSettings
+        })()
+      : activeState.activeSettingsBySide
+
+    const planned = orchestrator.planSendDraft({
+      ...snapshot,
+      draft: effectiveDraft,
+    }, {
       mode: activeState.activeSideMode,
       sideCount: activeState.activeSideCount,
-      settingsBySide: activeState.activeSettingsBySide,
+      settingsBySide: effectiveSettingsBySide,
       modelCatalog,
     })
 
@@ -1239,30 +1721,42 @@ export function useConversations() {
 
     if (!currentActive) {
       const conversation = createConversation(
-        plan.settingsBySide,
-        plan.mode,
-        plan.sideCount,
+        activeState.activeSettingsBySide,
+        activeState.activeSideMode,
+        activeState.activeSideCount,
       )
-      const updatedConversation = appendMessagesToConversation(conversation, plan.userPrompt, plan.pendingRuns)
+      const assistantContent = modelCommand?.scope === 'temporary'
+        ? `已临时切换到 ${modelCommand.model.name} 执行本次请求，点击图片可预览。`
+        : '已完成生成请求，点击图片可预览。'
+      const updatedConversation = appendConversationEntry(
+        conversation,
+        snapshot.draft,
+        assistantContent,
+        plan.pendingRuns,
+        effectiveDraft,
+      )
       persistConversation(updatedConversation)
       setActiveConversation(updatedConversation.id)
       targetConversationId = updatedConversation.id
     } else {
-      const updatedConversation = appendMessagesToConversation(
-        {
-          ...currentActive,
-          sideMode: plan.mode,
-          sideCount: plan.sideCount,
-          settingsBySide: plan.settingsBySide,
-        },
-        plan.userPrompt,
+      const assistantContent = modelCommand?.scope === 'temporary'
+        ? `已临时切换到 ${modelCommand.model.name} 执行本次请求，点击图片可预览。`
+        : '已完成生成请求，点击图片可预览。'
+      const updatedConversation = appendConversationEntry(
+        currentActive,
+        snapshot.draft,
+        assistantContent,
         plan.pendingRuns,
+        effectiveDraft,
       )
       persistConversation(updatedConversation)
       targetConversationId = updatedConversation.id
     }
 
     actions.setDraft('')
+    if (modelCommand?.scope === 'temporary') {
+      void message.success(`本次已临时切换到 ${modelCommand.model.name}`)
+    }
 
     try {
       const adaptiveConcurrency = resolveAdaptiveRunConcurrency(snapshot.runConcurrency)
@@ -1828,6 +2322,7 @@ export function useConversations() {
     dynamicPromptEnabled: state.dynamicPromptEnabled,
     panelValueFormat: state.panelValueFormat,
     panelVariables: state.panelVariables,
+    favoriteModelIds: state.favoriteModelIds,
     runConcurrency: state.runConcurrency,
     historyVisibleLimit,
     historyPageSize: MESSAGE_HISTORY_PAGE_SIZE,
@@ -1847,6 +2342,7 @@ export function useConversations() {
     setDynamicPromptEnabled,
     setPanelValueFormat,
     setPanelVariables,
+    setFavoriteModelIds,
     setRunConcurrency,
     createNewConversation,
     clearAllConversations,
@@ -1856,6 +2352,7 @@ export function useConversations() {
     updateSideCount,
     updateSideSettings,
     setSideModel,
+    applyModelShortcut,
     setSideModelParam,
     setChannels,
     sendDraft,
