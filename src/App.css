@@ -254,9 +254,21 @@
 
 .chat-body.chat-body-multi .run-meta-title-prompt {
   flex-basis: 160px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: normal;
   overflow-wrap: anywhere;
   word-break: break-word;
+}
+
+.chat-body.chat-body-multi .run-meta-title-prompt.expanded {
+  display: block;
+  -webkit-line-clamp: unset;
+  overflow: visible;
+  text-overflow: clip;
 }
 
 .chat-stage {
@@ -915,6 +927,8 @@
 .run-meta-title-prompt.expanded {
   white-space: normal;
   word-break: break-word;
+  overflow: visible;
+  text-overflow: clip;
 }
 
 .run-meta-title-toggle {

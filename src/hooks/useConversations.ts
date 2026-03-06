@@ -49,6 +49,28 @@ function upsertConversationState(
   return { nextSummaries, nextContents }
 }
 
+function resolveDownloadSource(image: Run['images'][number]): string | null {
+  return image.fullRef ?? image.fileRef ?? image.thumbRef ?? null
+}
+
+function isDownloadableImage(image: Run['images'][number]): boolean {
+  return image.status === 'success' && Boolean(resolveDownloadSource(image))
+}
+
+export function collectBatchDownloadImagesByRunId(
+  allRuns: Run[],
+  runId: string,
+): Array<{ run: Run; image: Run['images'][number] }> {
+  const sourceRun = allRuns.find((item) => item.id === runId)
+  if (!sourceRun) {
+    return []
+  }
+
+  return sourceRun.images
+    .filter((item) => isDownloadableImage(item))
+    .map((image) => ({ run: sourceRun, image }))
+}
+
 export type { PanelVariableRow }
 
 export function useConversations() {
@@ -935,17 +957,63 @@ export function useConversations() {
 
   const sanitizeFileName = (value: string) => value.replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
 
-  const triggerDownload = (src: string, filename: string) => {
+  const delay = (ms: number) => new Promise<void>((resolve) => {
+    window.setTimeout(resolve, ms)
+  })
+
+  const toDownloadHref = async (src: string): Promise<{ href: string; revoke?: () => void }> => {
+    if (typeof window === 'undefined') {
+      return { href: src }
+    }
+
+    // Prefer blob URLs for remote images so repeated downloads do not trigger page navigation.
+    if (/^https?:\/\//i.test(src)) {
+      try {
+        const response = await fetch(src)
+        if (response.ok) {
+          const blob = await response.blob()
+          const href = URL.createObjectURL(blob)
+          return {
+            href,
+            revoke: () => URL.revokeObjectURL(href),
+          }
+        }
+      } catch {
+        // Fall back to original source if fetch is blocked by CORS or network errors.
+      }
+    }
+
+    return { href: src }
+  }
+
+  const triggerDownload = async (src: string, filename: string) => {
     if (typeof document === 'undefined') {
       return
     }
+
+    const target = await toDownloadHref(src)
     const link = document.createElement('a')
-    link.href = src
+    link.href = target.href
     link.download = filename
     link.rel = 'noopener'
+    link.style.display = 'none'
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)
+
+    if (target.revoke) {
+      window.setTimeout(() => target.revoke?.(), 60_000)
+    }
+  }
+
+  const triggerDownloadsSequentially = async (items: Array<{ src: string; filename: string }>) => {
+    for (let index = 0; index < items.length; index += 1) {
+      const item = items[index]
+      await triggerDownload(item.src, item.filename)
+      if (index < items.length - 1) {
+        await delay(120)
+      }
+    }
   }
 
   const downloadAllRunImages = (runId: string) => {
@@ -960,21 +1028,22 @@ export function useConversations() {
       return
     }
 
-    const successfulImages = sourceRun.images.filter(
-      (item) => item.status === 'success' && Boolean(item.fullRef ?? item.fileRef ?? item.thumbRef),
-    )
+    const successfulImages = sourceRun.images.filter((item) => isDownloadableImage(item))
     if (successfulImages.length === 0) {
       return
     }
 
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
-
-    successfulImages.forEach((image) => {
-      const src = (image.fullRef ?? image.fileRef ?? image.thumbRef) as string
+    const downloadItems = successfulImages.flatMap((image) => {
+      const src = resolveDownloadSource(image)
+      if (!src) {
+        return []
+      }
       const ext = inferImageExtension(src)
       const filename = sanitizeFileName(`${timestamp}_${sourceRun.batchId}_${sourceRun.id}_${image.seq}.${ext}`)
-      triggerDownload(src, filename)
+      return [{ src, filename }]
     })
+    void triggerDownloadsSequentially(downloadItems)
   }
 
   const downloadSingleRunImage = (runId: string, imageId: string) => {
@@ -989,10 +1058,8 @@ export function useConversations() {
       return
     }
 
-    const target = sourceRun.images.find(
-      (item) => item.id === imageId && item.status === 'success' && Boolean(item.fullRef ?? item.fileRef ?? item.thumbRef),
-    )
-    const src = target?.fullRef ?? target?.fileRef ?? target?.thumbRef
+    const target = sourceRun.images.find((item) => item.id === imageId && isDownloadableImage(item))
+    const src = target ? resolveDownloadSource(target) : null
     if (!target || !src) {
       return
     }
@@ -1000,7 +1067,7 @@ export function useConversations() {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
     const ext = inferImageExtension(src)
     const filename = sanitizeFileName(`${timestamp}_${sourceRun.batchId}_${sourceRun.id}_${target.seq}.${ext}`)
-    triggerDownload(src, filename)
+    void triggerDownload(src, filename)
   }
 
   const downloadBatchRunImages = (runId: string) => {
@@ -1010,30 +1077,24 @@ export function useConversations() {
       return
     }
 
-    const sourceRun = findRunInConversation(currentActive, runId)
-    if (!sourceRun) {
-      return
-    }
-
     const allRuns = currentActive.messages.flatMap((message) => message.runs ?? [])
-    const batchRuns = allRuns.filter((item) => item.batchId === sourceRun.batchId && item.side === sourceRun.side)
-    const successImages = batchRuns.flatMap((run) =>
-      run.images
-        .filter((item) => item.status === 'success' && Boolean(item.fullRef ?? item.fileRef ?? item.thumbRef))
-        .map((item) => ({ run, image: item })),
-    )
+    const successImages = collectBatchDownloadImagesByRunId(allRuns, runId)
 
     if (successImages.length === 0) {
       return
     }
 
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
-    successImages.forEach(({ run, image }) => {
-      const src = (image.fullRef ?? image.fileRef ?? image.thumbRef) as string
+    const downloadItems = successImages.flatMap(({ run, image }) => {
+      const src = resolveDownloadSource(image)
+      if (!src) {
+        return []
+      }
       const ext = inferImageExtension(src)
       const filename = sanitizeFileName(`${timestamp}_${run.batchId}_${run.id}_${image.seq}.${ext}`)
-      triggerDownload(src, filename)
+      return [{ src, filename }]
     })
+    void triggerDownloadsSequentially(downloadItems)
   }
 
   const loadOlderMessages = () => {

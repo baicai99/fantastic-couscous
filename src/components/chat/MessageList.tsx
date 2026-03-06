@@ -12,6 +12,7 @@ const DEFAULT_ESTIMATED_MESSAGE_HEIGHT = 220
 const PROMPT_SUMMARY_MAX_CHARS = 100
 const DEFAULT_MESSAGE_PAGE_SIZE = 50
 const DEFAULT_IMAGES_PER_RUN = 6
+const PROMPT_TRUNCATION_EPSILON = 1
 
 interface MessageListProps {
   activeConversation: Conversation | null
@@ -105,20 +106,46 @@ function getFailureDetails(run: Run): string[] {
   return Array.from(new Set(details))
 }
 
-function shouldShowPromptToggle(prompt: string, maxChars = PROMPT_SUMMARY_MAX_CHARS): boolean {
-  return prompt.trim().length > maxChars
+function isPromptTextTruncated(node: HTMLElement): boolean {
+  const hasLayoutMetrics =
+    node.clientHeight > 0 ||
+    node.clientWidth > 0 ||
+    node.scrollHeight > 0 ||
+    node.scrollWidth > 0
+
+  // JSDOM has no real layout metrics; keep a deterministic fallback for tests.
+  if (!hasLayoutMetrics) {
+    const promptLength = Number(node.dataset.promptLength ?? 0)
+    const maxChars = Number(node.dataset.promptSummaryMaxChars ?? PROMPT_SUMMARY_MAX_CHARS)
+    return promptLength > maxChars
+  }
+
+  return (
+    node.scrollHeight - node.clientHeight > PROMPT_TRUNCATION_EPSILON ||
+    node.scrollWidth - node.clientWidth > PROMPT_TRUNCATION_EPSILON
+  )
 }
 
 function renderRunMetaTitle(input: {
   run: Run
   runNumber: number
   expanded: boolean
+  showPromptToggle: boolean
   onToggle: (runId: string) => void
+  onPromptNodeChange: (runId: string, node: HTMLElement | null) => void
   showBatchDownload: boolean
   onDownloadBatchRun?: (runId: string) => void
 }) {
-  const { run, runNumber, expanded, onToggle, showBatchDownload, onDownloadBatchRun } = input
-  const canToggle = shouldShowPromptToggle(run.finalPrompt)
+  const {
+    run,
+    runNumber,
+    expanded,
+    showPromptToggle,
+    onToggle,
+    onPromptNodeChange,
+    showBatchDownload,
+    onDownloadBatchRun,
+  } = input
   const promptText = run.finalPrompt.trim()
 
   return (
@@ -141,10 +168,15 @@ function renderRunMetaTitle(input: {
           下载这一批次
         </Button>
       ) : null}
-      <Text className={`run-meta-title-prompt ${expanded ? 'expanded' : ''}`}>
+      <Text
+        className={`run-meta-title-prompt ${expanded ? 'expanded' : ''}`}
+        data-prompt-length={promptText.length}
+        data-prompt-summary-max-chars={PROMPT_SUMMARY_MAX_CHARS}
+        ref={(node) => onPromptNodeChange(run.id, node as HTMLElement | null)}
+      >
         {`Prompt: ${promptText || '无'}`}
       </Text>
-      {canToggle ? (
+      {showPromptToggle ? (
         <Button
           type="link"
           size="small"
@@ -233,7 +265,9 @@ function renderRunCard(
   onRetryRun: (runId: string) => void,
   onDownloadSingleImage: ((runId: string, imageId: string) => void) | undefined,
   isPromptExpanded: boolean,
+  showPromptToggle: boolean,
   onTogglePrompt: (runId: string) => void,
+  onPromptNodeChange: (runId: string, node: HTMLElement | null) => void,
   visibleImageCount: number,
   onExpandRunImages: () => void,
   showBatchDownload: boolean,
@@ -257,7 +291,9 @@ function renderRunCard(
                   run,
                   runNumber,
                   expanded: isPromptExpanded,
+                  showPromptToggle,
                   onToggle: onTogglePrompt,
+                  onPromptNodeChange,
                   showBatchDownload,
                   onDownloadBatchRun,
                 }),
@@ -329,8 +365,10 @@ function MessageListComponent(props: MessageListProps) {
   const [scrollTop, setScrollTop] = useState(0)
   const [viewportHeight, setViewportHeight] = useState(0)
   const [expandedPromptByRunId, setExpandedPromptByRunId] = useState<Record<string, boolean>>({})
+  const [truncatedPromptByRunId, setTruncatedPromptByRunId] = useState<Record<string, boolean>>({})
   const [messageLimit, setMessageLimit] = useState(initialMessageLimit)
   const [expandedImageCountByRunId, setExpandedImageCountByRunId] = useState<Record<string, number>>({})
+  const promptNodeByRunIdRef = useRef<Record<string, HTMLElement>>({})
   const debouncedSetViewportHeight = useDebouncedCallback((nextHeight: number) => {
     setViewportHeight((prev) => (prev === nextHeight ? prev : nextHeight))
   }, 80)
@@ -413,6 +451,34 @@ function MessageListComponent(props: MessageListProps) {
   }, [historyMessages.length, overscan, scrollTop, viewportHeight, windowSize])
 
   const visibleMessages = historyMessages.slice(windowed.start, windowed.end)
+  const setPromptNode = useCallback((runId: string, node: HTMLElement | null) => {
+    if (node) {
+      promptNodeByRunIdRef.current[runId] = node
+      return
+    }
+    delete promptNodeByRunIdRef.current[runId]
+  }, [])
+
+  const recalculatePromptTruncation = useCallback(() => {
+    const next: Record<string, boolean> = {}
+    for (const [runId, node] of Object.entries(promptNodeByRunIdRef.current)) {
+      next[runId] = isPromptTextTruncated(node)
+    }
+
+    setTruncatedPromptByRunId((prev) => {
+      const prevKeys = Object.keys(prev)
+      const nextKeys = Object.keys(next)
+      if (prevKeys.length === nextKeys.length && nextKeys.every((key) => prev[key] === next[key])) {
+        return prev
+      }
+      return next
+    })
+  }, [])
+
+  useLayoutEffect(() => {
+    recalculatePromptTruncation()
+  }, [recalculatePromptTruncation, visibleMessages, sideView, expandedPromptByRunId, viewportHeight])
+
   const togglePromptExpanded = (runId: string) => {
     setExpandedPromptByRunId((prev) => ({
       ...prev,
@@ -541,6 +607,8 @@ function MessageListComponent(props: MessageListProps) {
                       const batchLoopCount = runs.filter((item) => item.batchId === run.batchId && item.side === run.side).length
                       const isDynamicBatch = Object.keys(run.variablesSnapshot ?? {}).length > 0 && batchLoopCount > 1
                       const rows = sortImagesBySeq(run.images).map((item) => ({ seq: item.seq, item }))
+                      const isPromptExpanded = Boolean(expandedPromptByRunId[run.id])
+                      const showPromptToggle = isPromptExpanded || Boolean(truncatedPromptByRunId[run.id])
                       return renderRunCard(
                         run,
                         index + 1,
@@ -549,8 +617,10 @@ function MessageListComponent(props: MessageListProps) {
                         onOpenPreview,
                         onRetryRun,
                         onDownloadSingleImage,
-                        Boolean(expandedPromptByRunId[run.id]),
+                        isPromptExpanded,
+                        showPromptToggle,
                         togglePromptExpanded,
+                        setPromptNode,
                         resolveVisibleImageCount(run),
                         () => expandRunImages(run.id, rows.length),
                         isDynamicBatch,
@@ -565,6 +635,8 @@ function MessageListComponent(props: MessageListProps) {
                       const batchLoopCount = runs.filter((item) => item.batchId === run.batchId && item.side === run.side).length
                       const isDynamicBatch = Object.keys(run.variablesSnapshot ?? {}).length > 0 && batchLoopCount > 1
                       const rows = sortImagesBySeq(run.images).map((item) => ({ seq: item.seq, item }))
+                      const isPromptExpanded = Boolean(expandedPromptByRunId[run.id])
+                      const showPromptToggle = isPromptExpanded || Boolean(truncatedPromptByRunId[run.id])
                       return renderRunCard(
                         run,
                         index + 1,
@@ -573,8 +645,10 @@ function MessageListComponent(props: MessageListProps) {
                         onOpenPreview,
                         onRetryRun,
                         onDownloadSingleImage,
-                        Boolean(expandedPromptByRunId[run.id]),
+                        isPromptExpanded,
+                        showPromptToggle,
                         togglePromptExpanded,
+                        setPromptNode,
                         resolveVisibleImageCount(run),
                         () => expandRunImages(run.id, rows.length),
                         isDynamicBatch,
