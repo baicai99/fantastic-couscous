@@ -1,6 +1,6 @@
 ﻿import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
-import { DownloadOutlined, ReloadOutlined, RetweetOutlined } from '@ant-design/icons'
-import { Button, Card, Collapse, Space, Typography } from 'antd'
+import { DownloadOutlined, ReloadOutlined, RetweetOutlined, SettingOutlined } from '@ant-design/icons'
+import { Button, Card, Collapse, Modal, Space, Typography } from 'antd'
 import type { Conversation, FailureCode, ImageItem, Message, Run, Side } from '../../types/chat'
 import { gridColumnCount, sortImagesBySeq } from '../../utils/chat'
 import { ENABLE_MESSAGE_WINDOWING } from '../../features/performance/flags'
@@ -531,6 +531,7 @@ function MessageListComponent(props: MessageListProps) {
   const retryingMessageIdsRef = useRef<Set<string>>(new Set())
   const [downloadingMessageIds, setDownloadingMessageIds] = useState<string[]>([])
   const downloadingMessageIdsRef = useRef<Set<string>>(new Set())
+  const [paramModalMessageId, setParamModalMessageId] = useState<string | null>(null)
   const debouncedSetViewportHeight = useDebouncedCallback((nextHeight: number) => {
     setViewportHeight((prev) => (prev === nextHeight ? prev : nextHeight))
   }, 80)
@@ -630,11 +631,20 @@ function MessageListComponent(props: MessageListProps) {
 
     return { start, end, topSpacer, bottomSpacer }
   }, [firstVisibleIndex, historyMessages.length, isWindowingActive, overscan, viewportHeight, windowSize])
-
   const visibleMessages = useMemo(
     () => historyMessages.slice(windowed.start, windowed.end),
     [historyMessages, windowed.end, windowed.start],
   )
+  const paramModalMessage = useMemo(
+    () => visibleMessages.find((message) => message.id === paramModalMessageId) ?? null,
+    [paramModalMessageId, visibleMessages],
+  )
+  const paramModalRuns = useMemo(() => {
+    if (!paramModalMessage || paramModalMessage.role !== 'assistant') {
+      return []
+    }
+    return sideView === 'single' ? getSingleRuns(paramModalMessage) : getSideRuns(paramModalMessage, sideView)
+  }, [paramModalMessage, sideView])
 
   const togglePromptExpanded = useCallback((runId: string) => {
     setExpandedPromptByRunId((prev) => ({
@@ -868,6 +878,19 @@ function MessageListComponent(props: MessageListProps) {
                       >
                         再来一次
                       </Button>
+                      <Button
+                        size="small"
+                        type="default"
+                        className="assistant-action-btn"
+                        icon={<SettingOutlined />}
+                        onClick={(event) => {
+                          triggerAssistantAction(`message-${message.id}-show-params`, event, () => {
+                            setParamModalMessageId(message.id)
+                          })
+                        }}
+                      >
+                        显示参数
+                      </Button>
                     </Space>
                   )
                 })()
@@ -959,6 +982,42 @@ function MessageListComponent(props: MessageListProps) {
         {windowed.bottomSpacer > 0 ? <div style={{ height: `${windowed.bottomSpacer}px` }} /> : null}
         <div ref={bottomRef} />
       </Space>
+      <Modal
+        title="生成参数"
+        open={Boolean(paramModalMessageId)}
+        onCancel={() => setParamModalMessageId(null)}
+        footer={null}
+        width={760}
+        destroyOnHidden
+      >
+        <Space orientation="vertical" size={12} className="full-width">
+          {paramModalRuns.length > 0 ? paramModalRuns.map((run, index) => (
+            <Card key={run.id} size="small" title={`Run #${index + 1}`}>
+              <Space orientation="vertical" size={6} className="full-width">
+                <Text>模型: {run.modelName ?? run.modelId ?? '未记录'}</Text>
+                <Text>模型 ID: {run.modelId || '未记录'}</Text>
+                <Text>渠道: {run.channelName ?? run.channelId ?? '未记录'}</Text>
+                <Text>模板 prompt: {run.templatePrompt || '无'}</Text>
+                <Text>最终 prompt: {run.finalPrompt || '无'}</Text>
+                <Text>变量: {formatParamSnapshot(run.variablesSnapshot)}</Text>
+                <Text>参数: {formatParamSnapshot(run.paramsSnapshot)}</Text>
+                <Text>
+                  画幅 / 分辨率 / 张数 / 列数: {run.settingsSnapshot.aspectRatio} / {run.settingsSnapshot.resolution} /{' '}
+                  {run.settingsSnapshot.imageCount} / {run.settingsSnapshot.gridColumns}
+                </Text>
+                <Text>
+                  尺寸模式 / 自定义尺寸: {run.settingsSnapshot.sizeMode} / {run.settingsSnapshot.customWidth} x{' '}
+                  {run.settingsSnapshot.customHeight}
+                </Text>
+                <Text>自动保存: {run.settingsSnapshot.autoSave ? '开' : '关'}</Text>
+                <Text>创建时间: {run.createdAt}</Text>
+                <Text>Batch ID: {run.batchId}</Text>
+                <Text>Run ID: {run.id}</Text>
+              </Space>
+            </Card>
+          )) : <Text type="secondary">暂无可展示的参数。</Text>}
+        </Space>
+      </Modal>
     </div>
   )
 }

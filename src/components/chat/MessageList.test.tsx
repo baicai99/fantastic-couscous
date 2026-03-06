@@ -845,6 +845,29 @@ describe('MessageList', () => {
     rafSpy.mockRestore()
   })
 
+  it('shows parameter modal for assistant message without removing run card', async () => {
+    const user = userEvent.setup()
+    render(
+      <div style={{ height: 600 }}>
+        <MessageList
+          activeConversation={makeConversation(['portrait of a girl'])}
+          sideView="single"
+          onOpenPreview={() => {}}
+          onRetryRun={() => {}}
+          onReplayRun={() => {}}
+        />
+      </div>,
+    )
+
+    expect(screen.getByText(/Run #1/)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /显示参数/ }))
+
+    expect(await screen.findByText('生成参数')).toBeInTheDocument()
+    expect(await screen.findByText(/模型 ID: m/)).toBeInTheDocument()
+    expect(screen.getByText(/最终 prompt: portrait of a girl/)).toBeInTheDocument()
+    expect(screen.getByText(/Batch ID: b1/)).toBeInTheDocument()
+  })
+
   it('smoothly scrolls to bottom when auto scroll is triggered', () => {
     const scrollIntoView = vi.fn()
     Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
