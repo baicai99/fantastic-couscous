@@ -737,7 +737,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
   )
 
   return (
-    <div className="panel-scroll">
+    <div className="panel-scroll settings-panel-root">
       {messageContextHolder}
       <div className="settings-panel-header">
         <Button
@@ -749,6 +749,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
           aria-label="Settings"
         />
       </div>
+      <div className="settings-panel-scroll-region">
       <Collapse
         style={{ marginBottom: 16 }}
         activeKey={topCollapseKeys}
@@ -827,6 +828,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
       ) : (
         renderSettingForm('single')
       )}
+      </div>
 
       <Drawer
         title="API 渠道管理"

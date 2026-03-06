@@ -378,7 +378,7 @@ export function ConversationWorkspace() {
           />
         }
         collapsedContent={
-          <div className="panel-scroll settings-mini-content">
+          <div className="settings-mini-content">
             <Button
               className="settings-header-btn"
               type="text"

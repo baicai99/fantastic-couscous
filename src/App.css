@@ -65,18 +65,70 @@
 }
 
 .settings-panel-header {
+  flex: 0 0 auto;
   display: flex;
   justify-content: flex-end;
   align-items: center;
-  margin-right: -8px;
-  margin-bottom: 8px;
+  padding-top: 16px;
+  padding-right: 8px;
+  margin-right: 0;
+  margin-bottom: 0;
+}
+
+.settings-panel-root {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
+}
+
+.settings-panel-scroll-region {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 16px;
 }
 
 .settings-header-btn {
-  font-size: 24px;
-  width: 40px;
-  height: 40px;
-  border-radius: 10px;
+  width: 56px;
+  height: 56px;
+  line-height: 56px;
+  margin: 0 0 6px;
+  padding: 0;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none !important;
+  box-shadow: none !important;
+  background: transparent !important;
+  color: rgba(0, 0, 0, 0.88);
+  transition: none !important;
+  outline: none !important;
+}
+
+.settings-header-btn .ant-btn-icon {
+  margin-inline-end: 0;
+  font-size: 20px;
+}
+
+.settings-header-btn:hover {
+  background: #f6f8fa !important;
+  color: rgba(0, 0, 0, 0.88) !important;
+}
+
+.settings-header-btn:focus,
+.settings-header-btn:focus-visible,
+.settings-header-btn:active {
+  background: transparent !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+.settings-header-btn::after,
+.settings-header-btn.ant-wave-target::after {
+  display: none !important;
 }
 
 .panel-title {
@@ -722,8 +774,9 @@
 .settings-mini-content {
   display: flex;
   align-items: flex-start;
-  justify-content: flex-end;
-  padding-right: 8px;
+  justify-content: center;
+  padding-top: 16px;
+  padding-right: 0;
 }
 
 .message-card {
