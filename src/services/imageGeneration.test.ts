@@ -127,4 +127,54 @@ describe('imageGeneration request body', () => {
 
     expect(result.items[0]?.error).toBe('提示词有敏感内容，被拒绝了。')
   })
+
+  it('treats b64_json URL-like value as URL instead of forcing base64 decode', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: [{ b64_json: 'https://img.example/c.png' }] }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await generateImages({
+      channel: {
+        id: 'ch',
+        name: 'c',
+        baseUrl: 'https://api.example.com/v1',
+        apiKey: 'k',
+      },
+      modelId: 'gemini-3-pro-image-preview',
+      prompt: 'x',
+      imageCount: 1,
+      paramValues: {
+        responseFormat: 'b64_json',
+      },
+    })
+
+    expect(result.items[0]?.src).toBe('https://img.example/c.png')
+  })
+
+  it('supports data/base64 fallback fields from provider payload', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: [{ base64: 'aGVsbG8=' }] }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await generateImages({
+      channel: {
+        id: 'ch',
+        name: 'c',
+        baseUrl: 'https://api.example.com/v1',
+        apiKey: 'k',
+      },
+      modelId: 'gemini-3-pro-image-preview',
+      prompt: 'x',
+      imageCount: 1,
+      paramValues: {
+        responseFormat: 'b64_json',
+      },
+    })
+
+    expect(result.items[0]?.src).toBe('data:image/png;base64,aGVsbG8=')
+  })
 })

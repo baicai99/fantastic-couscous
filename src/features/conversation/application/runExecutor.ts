@@ -69,6 +69,39 @@ export function createRunExecutor(deps: RunExecutorDeps = {}) {
     return Math.floor((base64.length * 3) / 4)
   }
 
+  function normalizeBase64Payload(payload: string): string | null {
+    const trimmed = payload.trim()
+    if (!trimmed) {
+      return null
+    }
+
+    const maybeDecoded = trimmed.includes('%')
+      ? (() => {
+        try {
+          return decodeURIComponent(trimmed)
+        } catch {
+          return trimmed
+        }
+      })()
+      : trimmed
+
+    const compacted = maybeDecoded.replace(/\s+/g, '').replace(/-/g, '+').replace(/_/g, '/')
+    if (!/^[A-Za-z0-9+/]*={0,2}$/.test(compacted)) {
+      return null
+    }
+
+    const missingPadding = compacted.length % 4
+    if (missingPadding === 1) {
+      return null
+    }
+
+    if (missingPadding > 1) {
+      return `${compacted}${'='.repeat(4 - missingPadding)}`
+    }
+
+    return compacted
+  }
+
   function dataUrlToBlob(value: string): Blob | null {
     const match = value.match(/^data:([^;,]+)?(;base64)?,(.*)$/i)
     if (!match) {
@@ -79,12 +112,21 @@ export function createRunExecutor(deps: RunExecutorDeps = {}) {
     const isBase64 = Boolean(match[2])
     const payload = match[3] ?? ''
     if (isBase64) {
-      const binary = atob(payload)
-      const bytes = new Uint8Array(binary.length)
-      for (let index = 0; index < binary.length; index += 1) {
-        bytes[index] = binary.charCodeAt(index)
+      const normalizedPayload = normalizeBase64Payload(payload)
+      if (!normalizedPayload) {
+        return null
       }
-      return new Blob([bytes], { type: mime })
+
+      try {
+        const binary = atob(normalizedPayload)
+        const bytes = new Uint8Array(binary.length)
+        for (let index = 0; index < binary.length; index += 1) {
+          bytes[index] = binary.charCodeAt(index)
+        }
+        return new Blob([bytes], { type: mime })
+      } catch {
+        return null
+      }
     }
 
     return new Blob([decodeURIComponent(payload)], { type: mime })

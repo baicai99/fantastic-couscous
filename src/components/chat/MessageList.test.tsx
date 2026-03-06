@@ -4,6 +4,16 @@ import { vi } from 'vitest'
 import { MessageList } from './MessageList'
 import type { Conversation } from '../../types/chat'
 
+function createDeferred<T = void>() {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
+}
+
 function makeConversation(finalPrompts: string[] = ['template cat']): Conversation {
   const runs = finalPrompts.map((finalPrompt, index) => ({
     id: `r${index + 1}`,
@@ -301,6 +311,35 @@ describe('MessageList', () => {
 
     expect(onReplayRun).toHaveBeenCalledWith('r1')
     expect(onRetryRun).toHaveBeenCalledWith('r1')
+  })
+
+  it('retries all failed runs without waiting previous run to finish', async () => {
+    const user = userEvent.setup()
+    const deferred = createDeferred<void>()
+    const onRetryRun = vi.fn((runId: string) => {
+      if (runId === 'r1') {
+        return deferred.promise
+      }
+      return Promise.resolve()
+    })
+
+    render(
+      <div style={{ height: 600 }}>
+        <MessageList
+          activeConversation={makeConversation(['first failed', 'second failed'])}
+          sideView="single"
+          onOpenPreview={() => {}}
+          onRetryRun={onRetryRun}
+          onReplayRun={() => {}}
+        />
+      </div>,
+    )
+
+    await user.click(screen.getByRole('button', { name: /重试所有失败项/ }))
+
+    expect(onRetryRun).toHaveBeenCalledTimes(2)
+    expect(onRetryRun.mock.calls[0]?.[0]).toBe('r1')
+    expect(onRetryRun.mock.calls[1]?.[0]).toBe('r2')
   })
 
   it('disables replay button while run is replaying', () => {

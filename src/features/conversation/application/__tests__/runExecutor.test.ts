@@ -98,4 +98,29 @@ describe('runExecutor', () => {
     expect(onImageProgress).toHaveBeenCalledTimes(2)
     expect(run.images.map((item) => item.status)).toEqual(['success', 'failed'])
   })
+
+  it('does not throw when base64 data url is invalid', async () => {
+    const invalidDataUrl = 'data:image/png;base64,not-a-valid-base64-@@@'
+    const mockGenerateImages = vi.fn().mockResolvedValue({
+      items: [{ seq: 1, src: invalidDataUrl }],
+    })
+    const executor = createRunExecutor({ generateImagesFn: mockGenerateImages })
+
+    const run = await executor.createRun({
+      batchId: 'batch',
+      sideMode: 'single',
+      side: 'single',
+      settings: { ...baseSettings, imageCount: 1, channelId: 'ch' },
+      templatePrompt: 'x',
+      finalPrompt: 'x',
+      variablesSnapshot: {},
+      modelId: 'model-a',
+      modelName: 'Model A',
+      paramsSnapshot: {},
+      channel: { id: 'ch', name: 'n', baseUrl: 'https://example.com', apiKey: 'key' },
+    })
+
+    expect(run.images).toHaveLength(1)
+    expect(run.images[0]?.status).toBe('success')
+  })
 })

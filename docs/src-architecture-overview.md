@@ -73,6 +73,7 @@
   - 先把失败图片标记回 pending。
   - 执行新 run（`imageCount = 失败图片数`）。
   - 把重试结果按失败索引回填到原 run。
+- `MessageList` 的“重试所有失败项”按钮会并发触发当前消息下所有失败 run 的 `retryRun`，避免串行等待导致 UI 逐条切换。点击后失败摘要会立即消失，失败预览格会立即回到 pending 骨架屏。
 
 ### 5.3 Replay 为新消息
 
@@ -93,6 +94,7 @@
   - 目标端点规范化到 `/v1/images/generations`（含 fallback path）。
   - 支持模型别名候选重试。
   - 识别常见错误（不支持尺寸、敏感内容、不支持模型）。
+  - 响应图片字段兼容 `url / b64_json / data / base64`，并先判定 URL/dataURL/合法 Base64，避免把非 Base64 内容误喂给解码流程。
 
 ## 7. 持久化策略
 

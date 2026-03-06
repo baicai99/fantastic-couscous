@@ -72,6 +72,7 @@
 - run 写入策略：先写 pending，再渐进更新，再最终替换。
 - 存储体积控制：历史消息可降级 `fullRef` 为 `thumbRef`。
 - 模型集合来源于“渠道返回模型”并经过可展示过滤。
+- 图片解码约束：`runExecutor.dataUrlToBlob()` 仅在 data URL payload 通过 Base64 校验后才调用 `atob`；非法 payload 会回退为 inline 引用，避免抛 `InvalidCharacterError`。
 
 ## 阅读顺序建议（最省 token）
 

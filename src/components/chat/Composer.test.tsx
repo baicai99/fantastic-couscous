@@ -1,8 +1,14 @@
 import { fireEvent, render, screen } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import userEvent from '@testing-library/user-event'
+import { Modal } from 'antd'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { PanelValueFormat, PanelVariableRow } from '../../features/conversation/domain/types'
 import type { SideMode } from '../../types/chat'
 import { Composer } from './Composer'
+
+afterEach(() => {
+  Modal.destroyAll()
+})
 
 function makeRows(): PanelVariableRow[] {
   return [{ id: 'row-1', key: 'subject', valuesText: '', selectedValue: '' }]
@@ -21,6 +27,7 @@ function renderComposer(
   sideMode: SideMode = 'single',
   onSideModeChange = vi.fn(),
   isSideConfigLocked = false,
+  panelVariables: PanelVariableRow[] = makeRows(),
 ) {
   return render(
     <Composer
@@ -29,7 +36,7 @@ function renderComposer(
       showAdvancedVariables
       dynamicPromptEnabled={dynamicPromptEnabled}
       panelValueFormat={format}
-      panelVariables={makeRows()}
+      panelVariables={panelVariables}
       resolvedVariables={{}}
       finalPromptPreview=""
       missingKeys={[]}
@@ -310,5 +317,121 @@ describe('Composer panel value format', () => {
     fireEvent.keyDown(textarea, { key: 'Escape', code: 'Escape' })
 
     expect(screen.queryByRole('listbox', { name: '快捷功能选择' })).not.toBeInTheDocument()
+  })
+
+  it('asks to enable dynamic prompt before sending when template keys are present', async () => {
+    const onSend = vi.fn()
+    const onDynamicPromptEnabledChange = vi.fn()
+    const user = userEvent.setup()
+
+    renderComposer('json', vi.fn(), vi.fn(), onSend, false, 'a {{subject}} portrait', vi.fn(), false, onDynamicPromptEnabledChange)
+
+    fireEvent.click(screen.getByRole('button', { name: /发送/ }))
+    expect(await screen.findByRole('button', { name: '帮我开启' })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: '帮我开启' }))
+
+    expect(onDynamicPromptEnabledChange).toHaveBeenCalledWith(true)
+    expect(onSend).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not enable dynamic prompt or send when first confirm is canceled', async () => {
+    const onSend = vi.fn()
+    const onDynamicPromptEnabledChange = vi.fn()
+    const user = userEvent.setup()
+
+    renderComposer('json', vi.fn(), vi.fn(), onSend, false, 'a {{subject}} portrait', vi.fn(), false, onDynamicPromptEnabledChange)
+
+    fireEvent.click(screen.getByRole('button', { name: /发送/ }))
+    expect(await screen.findByRole('button', { name: '帮我开启' })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /取\s*消|取消/ }))
+
+    expect(onDynamicPromptEnabledChange).not.toHaveBeenCalled()
+    expect(onSend).not.toHaveBeenCalled()
+  })
+
+  it('asks to add variables when dynamic prompt is enabled but panel variables are empty', async () => {
+    const onSend = vi.fn()
+    const onPanelVariablesChange = vi.fn()
+    const user = userEvent.setup()
+    const emptyRows: PanelVariableRow[] = [{ id: 'row-empty', key: '', valuesText: '', selectedValue: '' }]
+
+    renderComposer('json', vi.fn(), onPanelVariablesChange, onSend, false, 'a {{subject}} portrait', vi.fn(), true, vi.fn(), 'single', vi.fn(), false, emptyRows)
+
+    fireEvent.click(screen.getByRole('button', { name: /发送/ }))
+    expect(await screen.findByRole('button', { name: '帮我添加' })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: '帮我添加' }))
+
+    expect(onPanelVariablesChange).toHaveBeenCalledTimes(1)
+    const rows = onPanelVariablesChange.mock.calls[0]?.[0] as PanelVariableRow[]
+    expect(rows).toHaveLength(1)
+    expect(rows[0].key).toBe('subject')
+    expect(rows[0].valuesText).toBe('')
+    expect(onSend).not.toHaveBeenCalled()
+  })
+
+  it('chains first and second confirms when both dynamic prompt is off and panel variables are empty', async () => {
+    const onSend = vi.fn()
+    const onDynamicPromptEnabledChange = vi.fn()
+    const onPanelVariablesChange = vi.fn()
+    const user = userEvent.setup()
+    const emptyRows: PanelVariableRow[] = [{ id: 'row-empty', key: '', valuesText: '', selectedValue: '' }]
+
+    renderComposer(
+      'json',
+      vi.fn(),
+      onPanelVariablesChange,
+      onSend,
+      false,
+      'a {{style}} portrait of {{subject}}',
+      vi.fn(),
+      false,
+      onDynamicPromptEnabledChange,
+      'single',
+      vi.fn(),
+      false,
+      emptyRows,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /发送/ }))
+    expect(await screen.findByRole('button', { name: '帮我开启' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '帮我开启' }))
+
+    expect(await screen.findByRole('button', { name: '帮我添加' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '帮我添加' }))
+
+    expect(onDynamicPromptEnabledChange).toHaveBeenCalledWith(true)
+    expect(onPanelVariablesChange).toHaveBeenCalledTimes(1)
+    const rows = onPanelVariablesChange.mock.calls[0]?.[0] as PanelVariableRow[]
+    expect(rows.map((row) => row.key)).toEqual(['style', 'subject'])
+    expect(onSend).not.toHaveBeenCalled()
+  })
+
+  it('sends directly without confirms when draft has no template keys', () => {
+    const onSend = vi.fn()
+    renderComposer('json', vi.fn(), vi.fn(), onSend, false, 'a cinematic portrait')
+
+    fireEvent.click(screen.getByRole('button', { name: /发送/ }))
+
+    expect(onSend).toHaveBeenCalledTimes(1)
+    expect(screen.queryByText('检测到模板关键词')).not.toBeInTheDocument()
+    expect(screen.queryByText('检测到未配置高级变量')).not.toBeInTheDocument()
+  })
+
+  it('supports Enter path for the keyword guard', async () => {
+    const onDynamicPromptEnabledChange = vi.fn()
+    const onSend = vi.fn()
+    const user = userEvent.setup()
+    renderComposer('json', vi.fn(), vi.fn(), onSend, false, 'a {{subject}} portrait', vi.fn(), false, onDynamicPromptEnabledChange)
+
+    const textarea = screen.getByPlaceholderText('输入普通 prompt，例如：a cinematic portrait of a girl')
+    fireEvent.keyDown(textarea, { key: 'Enter', code: 'Enter' })
+
+    expect(await screen.findByRole('button', { name: '帮我开启' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '帮我开启' }))
+    expect(onDynamicPromptEnabledChange).toHaveBeenCalledWith(true)
+    expect(onSend).toHaveBeenCalledTimes(1)
   })
 })

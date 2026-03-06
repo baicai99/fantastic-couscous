@@ -569,13 +569,13 @@ function MessageListComponent(props: MessageListProps) {
       retryingMessageIdsRef.current.add(messageId)
       setRetryingMessageIds((prev) => (prev.includes(messageId) ? prev : [...prev, messageId]))
       try {
-        for (const runId of failedRunIds) {
-          try {
-            await onRetryRun(runId)
-          } catch {
-            // Continue retrying remaining runs even if one run fails.
-          }
-        }
+        await Promise.all(
+          failedRunIds.map((runId) =>
+            Promise.resolve(onRetryRun(runId)).catch(() => {
+              // Continue retrying remaining runs even if one run fails.
+            }),
+          ),
+        )
       } finally {
         retryingMessageIdsRef.current.delete(messageId)
         setRetryingMessageIds((prev) => prev.filter((id) => id !== messageId))

@@ -23,6 +23,8 @@ export interface GeneratedImageItem {
 interface RawImageItem {
   url?: unknown
   b64_json?: unknown
+  data?: unknown
+  base64?: unknown
 }
 
 function normalizeBaseUrl(value: string): string {
@@ -120,15 +122,52 @@ function buildRequestBody(
 }
 
 function toImageSrc(item: RawImageItem): string | null {
-  if (typeof item.url === 'string' && item.url.trim()) {
-    return item.url
+  function normalizeBase64Payload(value: string): string | null {
+    const trimmed = value.trim()
+    if (!trimmed) {
+      return null
+    }
+
+    const compacted = trimmed.replace(/\s+/g, '').replace(/-/g, '+').replace(/_/g, '/')
+    if (!/^[A-Za-z0-9+/]*={0,2}$/.test(compacted)) {
+      return null
+    }
+
+    const remainder = compacted.length % 4
+    if (remainder === 1) {
+      return null
+    }
+
+    if (remainder > 1) {
+      return `${compacted}${'='.repeat(4 - remainder)}`
+    }
+
+    return compacted
   }
 
-  if (typeof item.b64_json === 'string' && item.b64_json.trim()) {
-    return `data:image/png;base64,${item.b64_json}`
+  function toSource(candidate: unknown): string | null {
+    if (typeof candidate !== 'string' || !candidate.trim()) {
+      return null
+    }
+
+    const raw = candidate.trim()
+    if (/^data:image\//i.test(raw)) {
+      return raw
+    }
+
+    if (/^(https?:\/\/|blob:)/i.test(raw)) {
+      return raw
+    }
+
+    const normalized = normalizeBase64Payload(raw)
+    if (normalized) {
+      return `data:image/png;base64,${normalized}`
+    }
+
+    return null
   }
 
-  return null
+  return toSource(item.url) ?? toSource(item.b64_json) ?? toSource(item.data) ?? toSource(item.base64)
 }
 
 function toOriginLabel(baseUrl: string): string {
