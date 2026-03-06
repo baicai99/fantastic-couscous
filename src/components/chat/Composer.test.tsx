@@ -254,6 +254,53 @@ describe('Composer panel value format', () => {
     expect(onSourceImagesAppend.mock.calls[0]?.[0]).toHaveLength(1)
   })
 
+  it('calls onSourceImagesAppend when pasting image from clipboard', () => {
+    const onSourceImagesAppend = vi.fn()
+    const file = new File(['img'], 'paste.png', { type: 'image/png' })
+
+    render(
+      <Composer
+        draft=""
+        sourceImages={[]}
+        sendError=""
+        models={makeModels()}
+        showAdvancedVariables
+        dynamicPromptEnabled
+        panelValueFormat="json"
+        panelVariables={makeRows()}
+        resolvedVariables={{}}
+        finalPromptPreview=""
+        missingKeys={[]}
+        unusedVariableKeys={[]}
+        isSending={false}
+        isSendBlocked={false}
+        panelBatchError=""
+        panelMismatchRowIds={[]}
+        sideMode="single"
+        isSideConfigLocked={false}
+        onDraftChange={vi.fn()}
+        onSourceImagesAppend={onSourceImagesAppend}
+        onSourceImageRemove={vi.fn()}
+        onSourceImagesClear={vi.fn()}
+        onPanelValueFormatChange={vi.fn()}
+        onPanelVariablesChange={vi.fn()}
+        onDynamicPromptEnabledChange={vi.fn()}
+        onSideModeChange={vi.fn()}
+        onSend={vi.fn()}
+      />,
+    )
+
+    const textarea = screen.getByPlaceholderText('输入模板 prompt，如：{{subject}} portrait')
+    fireEvent.paste(textarea, {
+      clipboardData: {
+        files: [file],
+      },
+    })
+
+    expect(onSourceImagesAppend).toHaveBeenCalledTimes(1)
+    expect(onSourceImagesAppend).toHaveBeenCalledWith([file])
+  })
+
   it('renders plus upload trigger and forwards click to file input', async () => {
     const user = userEvent.setup()
     const { container } = render(
@@ -294,9 +341,8 @@ describe('Composer panel value format', () => {
     expect(clickSpy).toHaveBeenCalledTimes(1)
   })
 
-  it('renders source image item and supports remove/clear actions', () => {
+  it('renders source image item and supports remove action', () => {
     const onSourceImageRemove = vi.fn()
-    const onSourceImagesClear = vi.fn()
     const file = new File(['abc'], 'ref.webp', { type: 'image/webp' })
 
     render(
@@ -322,7 +368,7 @@ describe('Composer panel value format', () => {
         onDraftChange={vi.fn()}
         onSourceImagesAppend={vi.fn()}
         onSourceImageRemove={onSourceImageRemove}
-        onSourceImagesClear={onSourceImagesClear}
+        onSourceImagesClear={vi.fn()}
         onPanelValueFormatChange={vi.fn()}
         onPanelVariablesChange={vi.fn()}
         onDynamicPromptEnabledChange={vi.fn()}
@@ -333,8 +379,7 @@ describe('Composer panel value format', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /删除参考图 ref.webp/ }))
     expect(onSourceImageRemove).toHaveBeenCalledWith('img-1')
-    fireEvent.click(screen.getByRole('button', { name: /清空/ }))
-    expect(onSourceImagesClear).toHaveBeenCalledTimes(1)
+    expect(screen.queryByRole('button', { name: /清空/ })).not.toBeInTheDocument()
   })
 
   it('does not open quick picker when "/" is not at line start', () => {

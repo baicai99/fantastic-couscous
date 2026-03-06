@@ -288,6 +288,30 @@
   overflow: hidden;
 }
 
+.chat-image-drop-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 22;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(24, 144, 255, 0.1);
+  border: 2px dashed rgba(24, 144, 255, 0.42);
+}
+
+.chat-image-drop-overlay-card {
+  padding: 14px 18px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.95);
+  border: 1px solid rgba(24, 144, 255, 0.35);
+  color: rgba(0, 0, 0, 0.85);
+  font-size: 14px;
+  line-height: 1.4;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.12);
+}
+
 .chat-favorite-model-layer {
   position: absolute;
   top: 18px;
@@ -439,6 +463,15 @@
   padding: 8px 10px 10px;
 }
 
+.composer-card.has-source-images .ant-card-body {
+  min-height: 214px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px;
+}
+
 .composer-source-image-input {
   display: none;
 }
@@ -447,6 +480,7 @@
   width: 44px;
   min-width: 44px;
   height: 44px;
+  align-self: flex-end;
   border-radius: 50%;
   color: rgba(0, 0, 0, 0.42);
   border: none;
@@ -468,43 +502,64 @@
 }
 
 .composer-source-image-panel {
-  margin-top: 8px;
+  margin: 0;
 }
 
 .composer-source-image-toolbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 8px;
-  padding: 0 6px;
-  margin-bottom: 6px;
+  padding: 0 2px;
+  margin-bottom: 8px;
 }
 
 .composer-source-image-list {
   display: flex;
-  gap: 8px;
+  gap: 12px;
   overflow-x: auto;
-  padding: 2px;
+  padding: 0;
 }
 
 .composer-source-image-item {
-  display: flex;
-  align-items: center;
-  min-width: 184px;
-  max-width: 220px;
-  gap: 8px;
-  padding: 6px 8px;
-  border: 1px solid #e8e8e8;
-  border-radius: 12px;
-  background: #fafafa;
+  position: relative;
+  width: 120px;
+  min-width: 120px;
+  height: 120px;
+  border-radius: 24px;
+  overflow: hidden;
+  border: 1px solid #d9d9d9;
+  background: #f4f4f4;
 }
 
 .composer-source-image-thumb {
-  width: 34px;
-  height: 34px;
+  width: 100%;
+  height: 100%;
   object-fit: cover;
-  border-radius: 8px;
-  flex-shrink: 0;
+  display: block;
+}
+
+.composer-source-image-remove-btn.ant-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  border: none;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.56);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.composer-source-image-remove-btn.ant-btn:hover,
+.composer-source-image-remove-btn.ant-btn:focus,
+.composer-source-image-remove-btn.ant-btn:active {
+  color: #fff !important;
+  background: rgba(0, 0, 0, 0.72) !important;
 }
 
 .composer-source-image-meta {
@@ -521,6 +576,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  margin-top: auto;
 }
 
 .composer-textarea-wrap {
@@ -710,8 +766,8 @@
 .composer-action-col {
   display: flex;
   flex-direction: row;
-  align-items: center;
-  align-self: center;
+  align-items: flex-end;
+  align-self: flex-end;
   gap: 8px;
   flex-shrink: 0;
 }
@@ -723,6 +779,7 @@
   border-radius: 50%;
   padding: 0;
   box-shadow: none;
+  align-self: flex-end;
 }
 
 .composer-advanced-btn {
@@ -737,6 +794,7 @@
 }
 
 .message-list-viewport {
+  position: relative;
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
@@ -744,6 +802,53 @@
   scroll-padding-top: 12px;
   padding-bottom: calc(var(--chat-composer-safe-area, 170px) + 12px);
   scroll-padding-bottom: calc(var(--chat-composer-safe-area, 170px) + 12px);
+}
+
+.message-scroll-to-bottom-btn.ant-btn {
+  position: fixed;
+  left: 50%;
+  transform: translate(-50%, 10px) scale(0.9);
+  bottom: calc(var(--chat-composer-safe-area, 170px) + 8px);
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 18;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
+  transition:
+    opacity 0.22s ease,
+    transform 0.34s cubic-bezier(0.4, 0, 1, 1),
+    visibility 0s linear 0.34s;
+}
+
+.message-scroll-to-bottom-btn.ant-btn.is-visible {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transform: translate(-50%, 0) scale(1);
+  animation: message-scroll-to-bottom-pop 0.44s cubic-bezier(0.34, 1.56, 0.64, 1);
+  transition:
+    opacity 0.24s ease,
+    transform 0.38s cubic-bezier(0.34, 1.56, 0.64, 1),
+    visibility 0s linear 0s;
+}
+
+@keyframes message-scroll-to-bottom-pop {
+  0% {
+    transform: translate(-50%, 12px) scale(0.84);
+  }
+  60% {
+    transform: translate(-50%, -2px) scale(1.06);
+  }
+  100% {
+    transform: translate(-50%, 0) scale(1);
+  }
 }
 
 .message-list-content {
@@ -767,6 +872,10 @@
 
   .composer-card {
     border-radius: 26px;
+  }
+
+  .composer-card.has-source-images .ant-card-body {
+    min-height: 194px;
   }
 
   .composer-main-row {
@@ -794,7 +903,7 @@
     width: 40px;
     min-width: 40px;
     height: 40px;
-    align-self: center;
+    align-self: flex-end;
   }
 
   .composer-plus-btn.ant-btn {
@@ -804,9 +913,20 @@
     font-size: 20px;
   }
 
+  .composer-source-image-item {
+    width: 108px;
+    min-width: 108px;
+    height: 108px;
+    border-radius: 22px;
+  }
+
   .message-list-viewport {
     padding-bottom: calc(var(--chat-composer-safe-area, 200px) + env(safe-area-inset-bottom));
     scroll-padding-bottom: calc(var(--chat-composer-safe-area, 200px) + env(safe-area-inset-bottom));
+  }
+
+  .message-scroll-to-bottom-btn.ant-btn {
+    bottom: calc(var(--chat-composer-safe-area, 200px) + env(safe-area-inset-bottom) + 8px);
   }
 
   .message-list-content {

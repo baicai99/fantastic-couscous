@@ -58,6 +58,7 @@ interface ComposerProps {
   onPanelVariablesChange: (rows: PanelVariableRow[]) => void
   onDynamicPromptEnabledChange: (value: boolean) => void
   onSideModeChange: (mode: SideMode) => void
+  isAtMaxWidth?: boolean
   onPreferredWidthChange?: (width: number) => void
   onSend: () => void
 }
@@ -70,6 +71,8 @@ const DASH_COMMAND_OPTIONS: DashCommandOption[] = [
   { key: 'size', insertText: '--size ', label: '--size ' },
   { key: 'wh', insertText: '--wh ', label: '--wh ' },
 ]
+const COMPOSER_WIDTH_BUFFER_PX = 20
+const COMPOSER_WIDTH_SHRINK_DELAY_MS = 120
 
 function renderResolvedVars(variables: Record<string, string>) {
   const entries = Object.entries(variables)
@@ -201,6 +204,15 @@ function getLongestDraftLine(draft: string): string {
   return lines.reduce((longest, line) => (line.length > longest.length ? line : longest), '')
 }
 
+function extractImageFilesFromTransfer(dataTransfer: DataTransfer | null): File[] {
+  if (!dataTransfer) {
+    return []
+  }
+
+  const files = Array.from(dataTransfer.files ?? [])
+  return files.filter((file) => file.type.toLowerCase().startsWith('image/'))
+}
+
 export function Composer(props: ComposerProps) {
   const {
     draft,
@@ -223,11 +235,11 @@ export function Composer(props: ComposerProps) {
     onDraftChange,
     onSourceImagesAppend,
     onSourceImageRemove,
-    onSourceImagesClear,
     onPanelValueFormatChange,
     onPanelVariablesChange,
     onDynamicPromptEnabledChange,
     onSideModeChange,
+    isAtMaxWidth = false,
     onPreferredWidthChange,
     onSend,
   } = props
@@ -252,7 +264,13 @@ export function Composer(props: ComposerProps) {
   const sourceImageInputRef = useRef<HTMLInputElement | null>(null)
   const quickPickerRootRef = useRef<HTMLDivElement | null>(null)
   const preferredWidthMeasureRef = useRef<HTMLSpanElement | null>(null)
+  const mainRowRef = useRef<HTMLDivElement | null>(null)
+  const plusBtnRef = useRef<HTMLButtonElement | null>(null)
   const actionColRef = useRef<HTMLDivElement | null>(null)
+  const lastPreferredWidthRef = useRef(0)
+  const lastDraftLengthRef = useRef(draft.length)
+  const pendingShrinkWidthRef = useRef<number | null>(null)
+  const shrinkTimerRef = useRef<number | null>(null)
   const selectedQuickActions = [
     ...(dynamicPromptEnabled ? [DYNAMIC_PROMPT_QUICK_ACTION] : []),
     ...(sideMode === 'multi' ? [COMPARISON_MODE_QUICK_ACTION] : []),
@@ -290,10 +308,71 @@ export function Composer(props: ComposerProps) {
     }
 
     const measuredTextWidth = Math.ceil(preferredWidthMeasureRef.current?.getBoundingClientRect().width ?? 0)
+    const measuredLeadingWidth = Math.ceil(plusBtnRef.current?.getBoundingClientRect().width ?? 0)
     const measuredActionWidth = Math.ceil(actionColRef.current?.getBoundingClientRect().width ?? 0)
-    const preferredWidth = measuredTextWidth + measuredActionWidth + 24
-    onPreferredWidthChange(preferredWidth)
-  }, [draft, longestDraftLine, onPreferredWidthChange, selectedQuickActions.length, showAdvancedVariables])
+    const mainRow = mainRowRef.current
+    const mainRowStyle = mainRow ? window.getComputedStyle(mainRow) : null
+    const mainRowGap = mainRowStyle ? Number.parseFloat(mainRowStyle.columnGap || mainRowStyle.gap || '0') : 0
+    const textareaStyle = composerTextareaRef.current ? window.getComputedStyle(composerTextareaRef.current) : null
+    const textareaHorizontalPadding = textareaStyle
+      ? Number.parseFloat(textareaStyle.paddingLeft || '0') + Number.parseFloat(textareaStyle.paddingRight || '0')
+      : 0
+    const cardBody = mainRow?.parentElement
+    const cardBodyStyle = cardBody ? window.getComputedStyle(cardBody) : null
+    const horizontalPadding = cardBodyStyle
+      ? Number.parseFloat(cardBodyStyle.paddingLeft || '0') + Number.parseFloat(cardBodyStyle.paddingRight || '0')
+      : 0
+    const preferredWidth =
+      measuredTextWidth +
+      measuredLeadingWidth +
+      measuredActionWidth +
+      mainRowGap * 2 +
+      horizontalPadding +
+      textareaHorizontalPadding +
+      COMPOSER_WIDTH_BUFFER_PX
+    const isDraftGrowing = draft.length >= lastDraftLengthRef.current
+    const previousWidth = lastPreferredWidthRef.current
+    const isGrowingOrSteady = isDraftGrowing || preferredWidth >= previousWidth
+
+    if (isGrowingOrSteady) {
+      if (shrinkTimerRef.current !== null) {
+        window.clearTimeout(shrinkTimerRef.current)
+        shrinkTimerRef.current = null
+      }
+      pendingShrinkWidthRef.current = null
+
+      const stabilizedPreferredWidth = Math.max(preferredWidth, previousWidth)
+      lastPreferredWidthRef.current = stabilizedPreferredWidth
+      lastDraftLengthRef.current = draft.length
+      onPreferredWidthChange(stabilizedPreferredWidth)
+      return
+    }
+
+    lastDraftLengthRef.current = draft.length
+    pendingShrinkWidthRef.current = preferredWidth
+    if (shrinkTimerRef.current !== null) {
+      window.clearTimeout(shrinkTimerRef.current)
+    }
+    shrinkTimerRef.current = window.setTimeout(() => {
+      const nextWidth = pendingShrinkWidthRef.current
+      pendingShrinkWidthRef.current = null
+      shrinkTimerRef.current = null
+      if (typeof nextWidth !== 'number') {
+        return
+      }
+      lastPreferredWidthRef.current = nextWidth
+      onPreferredWidthChange(nextWidth)
+    }, COMPOSER_WIDTH_SHRINK_DELAY_MS)
+  }, [draft, longestDraftLine, onPreferredWidthChange, selectedQuickActions.length, showAdvancedVariables, useSheet, sourceImages.length])
+
+  useEffect(() => {
+    return () => {
+      if (shrinkTimerRef.current !== null) {
+        window.clearTimeout(shrinkTimerRef.current)
+        shrinkTimerRef.current = null
+      }
+    }
+  }, [])
   useEffect(() => {
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
       return undefined
@@ -780,7 +859,10 @@ export function Composer(props: ComposerProps) {
             ))}
           </div>
         ) : null}
-        <Card variant="borderless" className="composer-card">
+        <Card
+          variant="borderless"
+          className={`composer-card ${sourceImages.length > 0 ? 'has-source-images' : ''}`}
+        >
           <input
             ref={sourceImageInputRef}
             type="file"
@@ -796,8 +878,28 @@ export function Composer(props: ComposerProps) {
               event.currentTarget.value = ''
             }}
           />
-          <div className="composer-main-row">
+          {sourceImages.length > 0 ? (
+            <div className="composer-source-image-panel">
+              <div className="composer-source-image-list" aria-label="参考图列表">
+                {sourceImages.map((item) => (
+                  <div key={item.id} className="composer-source-image-item">
+                    <img src={item.previewUrl} alt={item.file.name || '参考图'} className="composer-source-image-thumb" />
+                    <Button
+                      type="text"
+                      size="small"
+                      icon={<DeleteOutlined />}
+                      className="composer-source-image-remove-btn"
+                      onClick={() => onSourceImageRemove(item.id)}
+                      aria-label={`删除参考图 ${item.file.name || ''}`}
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+          <div className="composer-main-row" ref={mainRowRef}>
             <Button
+              ref={plusBtnRef}
               type="text"
               icon={<PlusOutlined />}
               onClick={() => sourceImageInputRef.current?.click()}
@@ -814,6 +916,7 @@ export function Composer(props: ComposerProps) {
               </span>
               <Input.TextArea
                 value={draft}
+                wrap={isAtMaxWidth ? 'soft' : 'off'}
                 onChange={(event) => {
                   const nextText = event.target.value
                   const cursor = event.target.selectionStart ?? nextText.length
@@ -870,6 +973,14 @@ export function Composer(props: ComposerProps) {
                   if (cursor < quickPickerRange.start + 1) {
                     closeQuickPicker()
                   }
+                }}
+                onPaste={(event) => {
+                  const imageFiles = extractImageFilesFromTransfer(event.clipboardData)
+                  if (imageFiles.length === 0) {
+                    return
+                  }
+                  event.preventDefault()
+                  onSourceImagesAppend(imageFiles)
                 }}
                 onKeyDown={(event) => {
                   if (!isQuickPickerOpen) {
@@ -1012,40 +1123,6 @@ export function Composer(props: ComposerProps) {
               </Button>
             </div>
           </div>
-          {sourceImages.length > 0 ? (
-            <div className="composer-source-image-panel">
-              <div className="composer-source-image-toolbar">
-                <Text type="secondary">已添加 {sourceImages.length} 张参考图</Text>
-                <Button
-                  type="text"
-                  icon={<DeleteOutlined />}
-                  onClick={onSourceImagesClear}
-                  className="composer-clear-upload-btn"
-                >
-                  清空
-                </Button>
-              </div>
-              <div className="composer-source-image-list" aria-label="参考图列表">
-                {sourceImages.map((item) => (
-                  <div key={item.id} className="composer-source-image-item">
-                    <img src={item.previewUrl} alt={item.file.name || '参考图'} className="composer-source-image-thumb" />
-                    <div className="composer-source-image-meta">
-                      <Text className="composer-source-image-name" ellipsis={{ tooltip: item.file.name || '未命名文件' }}>
-                        {item.file.name || '未命名文件'}
-                      </Text>
-                    </div>
-                    <Button
-                      type="text"
-                      size="small"
-                      icon={<DeleteOutlined />}
-                      onClick={() => onSourceImageRemove(item.id)}
-                      aria-label={`删除参考图 ${item.file.name || ''}`}
-                    />
-                  </div>
-                ))}
-              </div>
-            </div>
-          ) : null}
         </Card>
       </div>
 

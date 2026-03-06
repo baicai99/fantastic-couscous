@@ -1,5 +1,5 @@
 ﻿import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
-import { CopyOutlined, DownloadOutlined, ReloadOutlined, RetweetOutlined, SettingOutlined } from '@ant-design/icons'
+import { CopyOutlined, DownloadOutlined, DownOutlined, ReloadOutlined, RetweetOutlined, SettingOutlined } from '@ant-design/icons'
 import { Button, Card, Collapse, Dropdown, Modal, Space, Tooltip, Typography, message } from 'antd'
 import type { MenuProps } from 'antd'
 import type { Conversation, FailureCode, ImageItem, Message, MessageAction, Run, Side } from '../../types/chat'
@@ -669,6 +669,7 @@ function MessageListComponent(props: MessageListProps) {
   const [downloadingMessageIds, setDownloadingMessageIds] = useState<string[]>([])
   const downloadingMessageIdsRef = useRef<Set<string>>(new Set())
   const [paramModalMessageId, setParamModalMessageId] = useState<string | null>(null)
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false)
   const debouncedSetViewportHeight = useDebouncedCallback((nextHeight: number) => {
     setViewportHeight((prev) => (prev === nextHeight ? prev : nextHeight))
   }, 80)
@@ -683,7 +684,19 @@ function MessageListComponent(props: MessageListProps) {
 
   useLayoutEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
+    setShowScrollToBottom(false)
   }, [autoScrollTrigger])
+
+  const updateScrollToBottomVisibility = useCallback(() => {
+    const node = viewportRef.current
+    if (!node) {
+      setShowScrollToBottom(false)
+      return
+    }
+
+    const nearBottom = node.scrollHeight - node.scrollTop - node.clientHeight < 24
+    setShowScrollToBottom((prev) => (prev === !nearBottom ? prev : !nearBottom))
+  }, [])
 
   useEffect(() => {
     const node = viewportRef.current
@@ -700,6 +713,26 @@ function MessageListComponent(props: MessageListProps) {
       debouncedSetViewportHeight.cancel()
     }
   }, [debouncedSetViewportHeight])
+
+  useEffect(() => {
+    const node = viewportRef.current
+    if (!node) {
+      return undefined
+    }
+
+    updateScrollToBottomVisibility()
+
+    const onScroll = () => {
+      updateScrollToBottomVisibility()
+    }
+
+    node.addEventListener('scroll', onScroll, { passive: true })
+    window.addEventListener('resize', onScroll)
+    return () => {
+      node.removeEventListener('scroll', onScroll)
+      window.removeEventListener('resize', onScroll)
+    }
+  }, [activeConversation?.id, historyMessages.length, updateScrollToBottomVisibility])
 
   useEffect(() => {
     const node = viewportRef.current
@@ -901,6 +934,11 @@ function MessageListComponent(props: MessageListProps) {
       delete target.dataset.assistantActionKey
       void Promise.resolve(action())
     }, ASSISTANT_ACTION_ANIMATION_MS)
+  }, [])
+
+  const handleScrollToBottom = useCallback(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
+    setShowScrollToBottom(false)
   }, [])
 
   if (!activeConversation || activeConversation.messages.length === 0) {
@@ -1157,6 +1195,17 @@ function MessageListComponent(props: MessageListProps) {
         {windowed.bottomSpacer > 0 ? <div style={{ height: `${windowed.bottomSpacer}px` }} /> : null}
         <div ref={bottomRef} />
       </Space>
+      <Button
+        type="default"
+        shape="circle"
+        aria-label="回到底部"
+        aria-hidden={!showScrollToBottom}
+        tabIndex={showScrollToBottom ? 0 : -1}
+        disabled={!showScrollToBottom}
+        className={`message-scroll-to-bottom-btn ${showScrollToBottom ? 'is-visible' : 'is-hidden'}`}
+        icon={<DownOutlined />}
+        onClick={handleScrollToBottom}
+      />
       <Modal
         title="生成参数"
         open={Boolean(paramModalMessageId)}

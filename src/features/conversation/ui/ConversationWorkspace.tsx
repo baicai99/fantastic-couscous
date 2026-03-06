@@ -33,6 +33,25 @@ interface MultiRenderProfile {
 const COMPOSER_MAX_WIDTH_PX = 920
 const COMPOSER_MIN_WIDTH_PX = COMPOSER_MAX_WIDTH_PX / 2
 
+function extractImageFilesFromTransfer(dataTransfer: DataTransfer | null): File[] {
+  if (!dataTransfer) {
+    return []
+  }
+  return Array.from(dataTransfer.files ?? []).filter((file) => file.type.toLowerCase().startsWith('image/'))
+}
+
+function hasImageFileInTransfer(dataTransfer: DataTransfer | null): boolean {
+  if (!dataTransfer) {
+    return false
+  }
+  if (extractImageFilesFromTransfer(dataTransfer).length > 0) {
+    return true
+  }
+  return Array.from(dataTransfer.items ?? []).some(
+    (item) => item.kind === 'file' && item.type.toLowerCase().startsWith('image/'),
+  )
+}
+
 function resolveMultiRenderProfile(sideCount: number): MultiRenderProfile {
   if (sideCount >= 4) {
     return {
@@ -76,9 +95,11 @@ export function ConversationWorkspace() {
     defaultMode: 'expanded',
   })
   const composerLayerRef = useRef<HTMLDivElement | null>(null)
+  const globalImageDragDepthRef = useRef(0)
   const [composerInset, setComposerInset] = useState(170)
   const [composerPreferredWidth, setComposerPreferredWidth] = useState(COMPOSER_MIN_WIDTH_PX)
   const [openAddChannelModalSignal, setOpenAddChannelModalSignal] = useState(0)
+  const [isGlobalImageDragging, setIsGlobalImageDragging] = useState(false)
   const debouncedSetComposerInset = useDebouncedCallback((nextInset: number) => {
     setComposerInset((prev) => (prev === nextInset ? prev : nextInset))
   }, 80)
@@ -231,6 +252,69 @@ export function ConversationWorkspace() {
     }
   }, [debouncedSetComposerInset])
 
+  useEffect(() => {
+    const resetGlobalImageDragState = () => {
+      globalImageDragDepthRef.current = 0
+      setIsGlobalImageDragging(false)
+    }
+
+    const handleDragEnter = (event: DragEvent) => {
+      if (!hasImageFileInTransfer(event.dataTransfer)) {
+        return
+      }
+      event.preventDefault()
+      globalImageDragDepthRef.current += 1
+      setIsGlobalImageDragging(true)
+    }
+
+    const handleDragOver = (event: DragEvent) => {
+      if (!hasImageFileInTransfer(event.dataTransfer)) {
+        return
+      }
+      event.preventDefault()
+      if (event.dataTransfer) {
+        event.dataTransfer.dropEffect = 'copy'
+      }
+      setIsGlobalImageDragging(true)
+    }
+
+    const handleDragLeave = (event: DragEvent) => {
+      if (hasImageFileInTransfer(event.dataTransfer)) {
+        globalImageDragDepthRef.current = Math.max(0, globalImageDragDepthRef.current - 1)
+      } else {
+        globalImageDragDepthRef.current = 0
+      }
+      if (globalImageDragDepthRef.current === 0) {
+        setIsGlobalImageDragging(false)
+      }
+    }
+
+    const handleDrop = (event: DragEvent) => {
+      const imageFiles = extractImageFilesFromTransfer(event.dataTransfer)
+      if (imageFiles.length === 0) {
+        resetGlobalImageDragState()
+        return
+      }
+      event.preventDefault()
+      appendDraftSourceImages(imageFiles)
+      resetGlobalImageDragState()
+    }
+
+    window.addEventListener('dragenter', handleDragEnter)
+    window.addEventListener('dragover', handleDragOver)
+    window.addEventListener('dragleave', handleDragLeave)
+    window.addEventListener('drop', handleDrop)
+    window.addEventListener('dragend', resetGlobalImageDragState)
+
+    return () => {
+      window.removeEventListener('dragenter', handleDragEnter)
+      window.removeEventListener('dragover', handleDragOver)
+      window.removeEventListener('dragleave', handleDragLeave)
+      window.removeEventListener('drop', handleDrop)
+      window.removeEventListener('dragend', resetGlobalImageDragState)
+    }
+  }, [appendDraftSourceImages])
+
   const handleTopSettingsClick = () => {
     toggleRightPanelMode()
   }
@@ -290,6 +374,11 @@ export function ConversationWorkspace() {
 
       <Layout className="panel-center">
         <div className="chat-stage" style={chatStageStyle}>
+          {isGlobalImageDragging ? (
+            <div className="chat-image-drop-overlay" role="status" aria-live="polite">
+              <div className="chat-image-drop-overlay-card">拖拽图片到任意位置即可上传（最多 6 张）</div>
+            </div>
+          ) : null}
           <div className="chat-favorite-model-layer">
             <FavoriteModelPill
               currentModelId={currentFavoriteModelId}
@@ -387,6 +476,7 @@ export function ConversationWorkspace() {
               onPanelVariablesChange={setPanelVariables}
               onDynamicPromptEnabledChange={setDynamicPromptEnabled}
               onSideModeChange={updateSideMode}
+              isAtMaxWidth={composerPreferredWidth >= COMPOSER_MAX_WIDTH_PX}
               onPreferredWidthChange={(nextWidth) => {
                 const clampedWidth = Math.max(COMPOSER_MIN_WIDTH_PX, Math.min(COMPOSER_MAX_WIDTH_PX, nextWidth))
                 setComposerPreferredWidth((prev) => (prev === clampedWidth ? prev : clampedWidth))

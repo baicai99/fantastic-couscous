@@ -1,4 +1,4 @@
-﻿import { render, screen, waitFor } from '@testing-library/react'
+﻿import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { message } from 'antd'
 import { afterEach, vi } from 'vitest'
@@ -1045,7 +1045,7 @@ describe('MessageList', () => {
 
     const viewport = container.querySelector('.message-list-viewport') as HTMLDivElement
     Object.defineProperty(viewport, 'scrollTop', { configurable: true, value: 180, writable: true })
-    viewport.dispatchEvent(new Event('scroll'))
+    fireEvent.scroll(viewport)
 
     expect(rafSpy).not.toHaveBeenCalled()
     rafSpy.mockRestore()
@@ -1075,7 +1075,7 @@ describe('MessageList', () => {
     Object.defineProperty(viewport, 'scrollHeight', { configurable: true, value: 800 })
     Object.defineProperty(viewport, 'clientHeight', { configurable: true, value: 600 })
     Object.defineProperty(viewport, 'scrollTop', { configurable: true, value: 190, writable: true })
-    viewport.dispatchEvent(new Event('scroll'))
+    fireEvent.scroll(viewport)
 
     expect(onReachBottom).toHaveBeenCalledTimes(1)
     rafSpy.mockRestore()
@@ -1172,6 +1172,40 @@ describe('MessageList', () => {
       </div>,
     )
 
+    expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'end' })
+  })
+
+  it('shows scroll-to-bottom button away from bottom and scrolls down on click', async () => {
+    const user = userEvent.setup()
+    const scrollIntoView = vi.fn()
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: scrollIntoView,
+    })
+
+    const { container } = render(
+      <div style={{ height: 600 }}>
+        <MessageList
+          activeConversation={makeConversation()}
+          sideView="single"
+          onOpenPreview={() => {}}
+          onRetryRun={() => {}}
+          onReplayRun={() => {}}
+        />
+      </div>,
+    )
+
+    scrollIntoView.mockClear()
+    const viewport = container.querySelector('.message-list-viewport') as HTMLDivElement
+    Object.defineProperty(viewport, 'scrollHeight', { configurable: true, value: 1200 })
+    Object.defineProperty(viewport, 'clientHeight', { configurable: true, value: 600 })
+    Object.defineProperty(viewport, 'scrollTop', { configurable: true, value: 120, writable: true })
+    fireEvent.scroll(viewport)
+
+    const jumpButton = await screen.findByRole('button', { name: '回到底部' })
+    expect(jumpButton).toBeInTheDocument()
+
+    await user.click(jumpButton)
     expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'end' })
   })
 
