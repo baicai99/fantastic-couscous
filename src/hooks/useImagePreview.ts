@@ -65,11 +65,11 @@ export function computeAnchoredOffset(prev: PreviewPoint, prevZoom: number, next
 
 function toSuccessPreviewImages(run: Run): PreviewImage[] {
   return sortImagesBySeq(run.images)
-    .filter((item) => item.status === 'success' && Boolean(item.fullRef ?? item.fileRef ?? item.thumbRef))
+    .filter((item) => item.status === 'success' && Boolean(item.fullRef ?? item.fileRef ?? item.thumbRef ?? item.refKey))
     .map((item) => ({
       id: item.id,
       seq: item.seq,
-      src: (item.fullRef ?? item.fileRef ?? item.thumbRef) as string,
+      src: (item.fullRef ?? item.fileRef ?? item.thumbRef ?? item.refKey) as string,
     }))
 }
 

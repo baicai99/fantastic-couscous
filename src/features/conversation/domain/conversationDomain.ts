@@ -767,13 +767,21 @@ function normalizeRun(run: Run): Run {
   }
 
   const normalizedImages = (run.images ?? []).map((item) => {
+    const refKind = item.refKind ?? (typeof item.refKey === 'string' && item.refKey.trim() ? 'idb-blob' : undefined)
     const fullRef = item.fullRef ?? item.fileRef
     const thumbRef = item.thumbRef ?? item.fileRef ?? item.fullRef
+    const refKey =
+      item.refKey ??
+      (refKind === 'url'
+        ? (fullRef ?? thumbRef)
+        : undefined)
     return {
       ...item,
       fullRef,
       thumbRef,
       fileRef: item.fileRef ?? fullRef ?? thumbRef,
+      refKind,
+      refKey,
     }
   })
 

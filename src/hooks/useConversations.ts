@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { getModelCatalogFromChannels } from '../services/modelCatalog'
 import type {
   Conversation,
@@ -10,11 +10,14 @@ import type {
   SingleSideSettings,
 } from '../types/chat'
 import { appendMessagesToConversation, createConversation, makeId, toSummary } from '../utils/chat'
+import { buildImageFileName } from '../utils/fileName'
+import { isDownloadableImageRef, resolveImageSourceForDownload } from '../services/imageRef'
 import { createConversationOrchestrator } from '../features/conversation/application/conversationOrchestrator'
 import { createRunExecutor } from '../features/conversation/application/runExecutor'
 import {
   buildPanelVariableBatches,
   getMultiSideIds,
+  normalizeConversation,
   normalizeSettingsBySide,
 } from '../features/conversation/domain/conversationDomain'
 import type { PanelValueFormat, PanelVariableRow } from '../features/conversation/domain/types'
@@ -29,15 +32,29 @@ import { trackDuration, startMetric } from '../features/performance/runtimeMetri
 const PROGRESS_PERSIST_DEBOUNCE_MS = 250
 const MESSAGE_HISTORY_INITIAL_LIMIT = 100
 const MESSAGE_HISTORY_PAGE_SIZE = 50
+const MAX_IN_MEMORY_CONVERSATIONS = 5
 
 function upsertConversationState(
   summaries: ConversationSummary[],
   contents: Record<string, Conversation>,
   conversation: Conversation,
+  activeId: string | null,
+  lruOrder: string[],
 ): { nextSummaries: ConversationSummary[]; nextContents: Record<string, Conversation> } {
+  const cachedIds = [conversation.id, ...lruOrder.filter((id) => id !== conversation.id)]
+  const keepIds = new Set(cachedIds.slice(0, MAX_IN_MEMORY_CONVERSATIONS))
+  if (activeId) {
+    keepIds.add(activeId)
+  }
+
   const nextContents = {
     ...contents,
     [conversation.id]: conversation,
+  }
+  for (const existingId of Object.keys(nextContents)) {
+    if (!keepIds.has(existingId)) {
+      delete nextContents[existingId]
+    }
   }
 
   const summary = toSummary(conversation)
@@ -49,12 +66,8 @@ function upsertConversationState(
   return { nextSummaries, nextContents }
 }
 
-function resolveDownloadSource(image: Run['images'][number]): string | null {
-  return image.fullRef ?? image.fileRef ?? image.thumbRef ?? null
-}
-
 function isDownloadableImage(image: Run['images'][number]): boolean {
-  return image.status === 'success' && Boolean(resolveDownloadSource(image))
+  return isDownloadableImageRef(image)
 }
 
 export function collectBatchDownloadImagesByRunId(
@@ -78,10 +91,15 @@ export function useConversations() {
   const [initialState] = useState(() => {
     const channels = repository.loadChannels()
     const modelCatalog = getModelCatalogFromChannels(channels)
+    const initialLoad = repository.load()
     return createInitialConversationState({
       channels,
       modelCatalog,
-      initialLoad: repository.load(),
+      initialLoad: {
+        summaries: initialLoad.summaries,
+        contents: {},
+        activeId: initialLoad.activeId,
+      },
       initialStaged: repository.loadStagedSettings(),
     })
   })
@@ -100,6 +118,8 @@ export function useConversations() {
   const [sendScrollTrigger, setSendScrollTrigger] = useState(0)
   const pendingPersistConversationIdsRef = useRef<Set<string>>(new Set())
   const persistTimerRef = useRef<number | null>(null)
+  const conversationCacheOrderRef = useRef<string[]>([])
+  const runLocationByConversationRef = useRef<Record<string, Map<string, { messageIndex: number; runIndex: number }>>>({})
 
   const activeConversation = conversationSelectors.selectActiveConversation(state)
   const { activeSideMode, activeSideCount, activeSettingsBySide } = conversationSelectors.selectActiveSettings(state)
@@ -120,10 +140,82 @@ export function useConversations() {
   const runExecutor = useMemo(() => createRunExecutor(), [])
   const orchestrator = useMemo(() => createConversationOrchestrator({ createRun: runExecutor.createRun }), [runExecutor])
 
+  const rebuildRunLocationIndex = (conversation: Conversation) => {
+    const nextMap = new Map<string, { messageIndex: number; runIndex: number }>()
+    for (let messageIndex = 0; messageIndex < conversation.messages.length; messageIndex += 1) {
+      const runs = conversation.messages[messageIndex].runs ?? []
+      for (let runIndex = 0; runIndex < runs.length; runIndex += 1) {
+        nextMap.set(runs[runIndex].id, { messageIndex, runIndex })
+      }
+    }
+    runLocationByConversationRef.current[conversation.id] = nextMap
+  }
+
+  const touchConversationCache = (conversationId: string) => {
+    conversationCacheOrderRef.current = [
+      conversationId,
+      ...conversationCacheOrderRef.current.filter((id) => id !== conversationId),
+    ].slice(0, MAX_IN_MEMORY_CONVERSATIONS)
+  }
+
+  const compactConversationForMemory = (conversation: Conversation): Conversation => {
+    const cutoffIndex = Math.max(0, conversation.messages.length - 20)
+    return {
+      ...conversation,
+      messages: conversation.messages.map((message, index) => {
+        if (index >= cutoffIndex || !Array.isArray(message.runs) || message.runs.length === 0) {
+          return message
+        }
+
+        return {
+          ...message,
+          runs: message.runs.map((run) => ({
+            ...run,
+            images: run.images.map((image) => ({
+              ...image,
+              fullRef: undefined,
+              fileRef: image.thumbRef ?? image.fileRef,
+              refKey: image.refKey,
+              refKind: image.refKind,
+            })),
+          })),
+        }
+      }),
+    }
+  }
+
+  const compressConversationForHighMemory = (conversation: Conversation): Conversation => {
+    const cutoffIndex = Math.max(0, conversation.messages.length - 6)
+    return {
+      ...conversation,
+      messages: conversation.messages.map((message, index) => {
+        if (index >= cutoffIndex || !Array.isArray(message.runs) || message.runs.length === 0) {
+          return message
+        }
+        return {
+          ...message,
+          runs: message.runs.map((run) => ({
+            ...run,
+            images: run.images.map((image) => ({
+              ...image,
+              fullRef: undefined,
+              fileRef: image.thumbRef ?? image.fileRef,
+            })),
+          })),
+        }
+      }),
+    }
+  }
+
   const syncAndPersist = (
     next: { summaries: ConversationSummary[]; contents: Record<string, Conversation> },
     options?: { saveIndex?: boolean },
   ) => {
+    stateRef.current = {
+      ...stateRef.current,
+      summaries: next.summaries,
+      contents: next.contents,
+    }
     dispatch({ type: 'conversation/sync', payload: next })
     if (options?.saveIndex ?? true) {
       repository.saveIndex(next.summaries)
@@ -134,15 +226,49 @@ export function useConversations() {
     conversation: Conversation,
     options?: { saveStorage?: boolean; saveIndex?: boolean },
   ) => {
+    rebuildRunLocationIndex(conversation)
+    touchConversationCache(conversation.id)
     const snapshot = stateRef.current
-    const next = upsertConversationState(snapshot.summaries, snapshot.contents, conversation)
+    const next = upsertConversationState(
+      snapshot.summaries,
+      snapshot.contents,
+      conversation,
+      snapshot.activeId,
+      conversationCacheOrderRef.current,
+    )
     syncAndPersist(
       { summaries: next.nextSummaries, contents: next.nextContents },
       { saveIndex: options?.saveIndex },
     )
     if (options?.saveStorage ?? true) {
-      repository.saveConversation(conversation)
+      void repository.saveConversation(conversation)
     }
+  }
+
+  const getMemoryPressure = (): number => {
+    if (typeof performance === 'undefined') {
+      return 0
+    }
+    const maybeMemory = performance as Performance & {
+      memory?: { usedJSHeapSize: number; jsHeapSizeLimit: number }
+    }
+    const info = maybeMemory.memory
+    if (!info || !info.jsHeapSizeLimit) {
+      return 0
+    }
+    return info.usedJSHeapSize / info.jsHeapSizeLimit
+  }
+
+  const resolveAdaptiveRunConcurrency = (requested: number): number => {
+    const normalized = Math.max(1, Math.floor(requested))
+    const pressure = getMemoryPressure()
+    if (pressure >= 0.78) {
+      return 1
+    }
+    if (pressure >= 0.65) {
+      return Math.min(2, normalized)
+    }
+    return normalized
   }
 
   const flushPendingPersistence = async (): Promise<void> => {
@@ -157,12 +283,18 @@ export function useConversations() {
     }
 
     const start = startMetric()
+    const pressure = getMemoryPressure()
+    const pendingConversations: Conversation[] = []
     for (const conversationId of pendingPersistConversationIdsRef.current) {
       const conversation = snapshot.contents[conversationId]
       if (conversation) {
-        repository.saveConversation(conversation)
+        const isActive = conversationId === snapshot.activeId
+        const activeCompressed = isActive && pressure >= 0.74 ? compressConversationForHighMemory(conversation) : conversation
+        const persisted = isActive ? activeCompressed : compactConversationForMemory(conversation)
+        pendingConversations.push(persisted)
       }
     }
+    await Promise.all(pendingConversations.map((conversation) => repository.saveConversation(conversation)))
     pendingPersistConversationIdsRef.current.clear()
     repository.saveIndex(snapshot.summaries)
     trackDuration('persistence.flushBatch', start)
@@ -190,11 +322,60 @@ export function useConversations() {
     }
   }, [runExecutor])
 
+  useEffect(() => {
+    if (state.summaries.length === 0) {
+      return
+    }
+    void repository.migrateLegacyContent(state.summaries.map((item) => item.id))
+  }, [repository, state.summaries])
+
+  const ensureConversationLoaded = async (conversationId: string): Promise<void> => {
+    const snapshot = stateRef.current
+    const existing = snapshot.contents[conversationId]
+    if (existing) {
+      touchConversationCache(conversationId)
+      return
+    }
+
+    const fallbackTitle = snapshot.summaries.find((item) => item.id === conversationId)?.title ?? '未命名'
+    const loaded = await repository.loadConversation(conversationId, fallbackTitle)
+    if (!loaded) {
+      return
+    }
+
+    const normalized = normalizeConversation(loaded, snapshot.channels, getModelCatalogFromChannels(snapshot.channels))
+    rebuildRunLocationIndex(normalized)
+    touchConversationCache(conversationId)
+    const next = upsertConversationState(
+      snapshot.summaries,
+      snapshot.contents,
+      normalized,
+      snapshot.activeId,
+      conversationCacheOrderRef.current,
+    )
+    syncAndPersist({ summaries: next.nextSummaries, contents: next.nextContents }, { saveIndex: false })
+  }
+
+  useEffect(() => {
+    if (!state.activeId) {
+      return
+    }
+    void ensureConversationLoaded(state.activeId)
+  }, [state.activeId])
+
   const setActiveConversation = (conversationId: string | null) => {
     void flushPendingPersistence()
+    runExecutor.releaseObjectUrls?.()
     setHistoryVisibleLimit(MESSAGE_HISTORY_INITIAL_LIMIT)
+    stateRef.current = {
+      ...stateRef.current,
+      activeId: conversationId,
+    }
     dispatch({ type: 'conversation/switch', payload: conversationId })
     repository.saveActiveId(conversationId)
+    if (conversationId) {
+      void ensureConversationLoaded(conversationId)
+    }
   }
 
   const saveStagedSettings = (
@@ -204,6 +385,7 @@ export function useConversations() {
     runConcurrency: number,
     dynamicPromptEnabled: boolean,
     panelValueFormat: PanelValueFormat,
+    panelVariables: PanelVariableRow[],
   ) => {
     repository.saveStagedSettings({
       sideMode: mode,
@@ -212,6 +394,7 @@ export function useConversations() {
       runConcurrency,
       dynamicPromptEnabled,
       panelValueFormat,
+      panelVariables,
     })
 
     dispatch({
@@ -239,6 +422,7 @@ export function useConversations() {
       stateRef.current.runConcurrency,
       stateRef.current.dynamicPromptEnabled,
       stateRef.current.panelValueFormat,
+      stateRef.current.panelVariables,
     )
 
     const current = stateRef.current
@@ -268,6 +452,7 @@ export function useConversations() {
       stateRef.current.runConcurrency,
       stateRef.current.dynamicPromptEnabled,
       stateRef.current.panelValueFormat,
+      stateRef.current.panelVariables,
     )
 
     setActiveConversation(null)
@@ -282,7 +467,9 @@ export function useConversations() {
   const clearAllConversations = () => {
     void flushPendingPersistence()
     dispatch({ type: 'conversation/clear' })
-    repository.clearConversations()
+    conversationCacheOrderRef.current = []
+    runLocationByConversationRef.current = {}
+    void repository.clearConversations()
   }
 
   const removeConversation = (conversationId: string) => {
@@ -293,7 +480,9 @@ export function useConversations() {
     delete nextContents[conversationId]
     syncAndPersist({ summaries: nextSummaries, contents: nextContents })
 
-    repository.removeConversation(conversationId)
+    conversationCacheOrderRef.current = conversationCacheOrderRef.current.filter((id) => id !== conversationId)
+    delete runLocationByConversationRef.current[conversationId]
+    void repository.removeConversation(conversationId)
 
     if (snapshot.activeId === conversationId) {
       const nextActiveId = nextSummaries[0]?.id ?? null
@@ -391,6 +580,7 @@ export function useConversations() {
       runConcurrency: stateRef.current.runConcurrency,
       dynamicPromptEnabled: stateRef.current.dynamicPromptEnabled,
       panelValueFormat: stateRef.current.panelValueFormat,
+      panelVariables: stateRef.current.panelVariables,
     })
 
     dispatch({
@@ -428,6 +618,7 @@ export function useConversations() {
       runConcurrency: next,
       dynamicPromptEnabled: snapshot.dynamicPromptEnabled,
       panelValueFormat: snapshot.panelValueFormat,
+      panelVariables: snapshot.panelVariables,
     })
 
     stateRef.current = {
@@ -447,6 +638,7 @@ export function useConversations() {
       runConcurrency: snapshot.runConcurrency,
       dynamicPromptEnabled: value,
       panelValueFormat: snapshot.panelValueFormat,
+      panelVariables: snapshot.panelVariables,
     })
 
     stateRef.current = {
@@ -466,11 +658,32 @@ export function useConversations() {
       runConcurrency: snapshot.runConcurrency,
       dynamicPromptEnabled: snapshot.dynamicPromptEnabled,
       panelValueFormat: value,
+      panelVariables: snapshot.panelVariables,
     })
 
     stateRef.current = {
       ...snapshot,
       panelValueFormat: value,
+    }
+  }
+
+  const setPanelVariables = (value: PanelVariableRow[]) => {
+    actions.setPanelVariables(value)
+
+    const snapshot = stateRef.current
+    repository.saveStagedSettings({
+      sideMode: activeSideMode,
+      sideCount: activeSideCount,
+      settingsBySide: activeSettingsBySide,
+      runConcurrency: snapshot.runConcurrency,
+      dynamicPromptEnabled: snapshot.dynamicPromptEnabled,
+      panelValueFormat: snapshot.panelValueFormat,
+      panelVariables: value,
+    })
+
+    stateRef.current = {
+      ...snapshot,
+      panelVariables: value,
     }
   }
   const replaceRunsInConversation = (conversationId: string, nextRunsById: Map<string, Run>) => {
@@ -480,32 +693,38 @@ export function useConversations() {
       return
     }
 
+    const locationMap =
+      runLocationByConversationRef.current[conversationId] ??
+      (() => {
+        const rebuilt = new Map<string, { messageIndex: number; runIndex: number }>()
+        currentConversation.messages.forEach((message, messageIndex) => {
+          ;(message.runs ?? []).forEach((run, runIndex) => {
+            rebuilt.set(run.id, { messageIndex, runIndex })
+          })
+        })
+        runLocationByConversationRef.current[conversationId] = rebuilt
+        return rebuilt
+      })()
+
     let changed = false
-    const nextMessages = currentConversation.messages.map((message) => {
-      if (!Array.isArray(message.runs) || message.runs.length === 0) {
-        return message
+    const nextMessages = [...currentConversation.messages]
+    nextRunsById.forEach((replacement, runId) => {
+      const loc = locationMap.get(runId)
+      if (!loc) {
+        return
       }
-
-      let messageChanged = false
-      const nextRuns = message.runs.map((run) => {
-        const replacement = nextRunsById.get(run.id)
-        if (!replacement) {
-          return run
-        }
-
-        changed = true
-        messageChanged = true
-        return replacement
-      })
-
-      if (!messageChanged) {
-        return message
+      const message = nextMessages[loc.messageIndex]
+      const runs = message.runs ?? []
+      if (!runs[loc.runIndex] || runs[loc.runIndex].id !== runId) {
+        return
       }
-
-      return {
+      const nextRuns = [...runs]
+      nextRuns[loc.runIndex] = replacement
+      nextMessages[loc.messageIndex] = {
         ...message,
         runs: nextRuns,
       }
+      changed = true
     })
 
     if (!changed) {
@@ -530,6 +749,8 @@ export function useConversations() {
       fileRef?: string
       thumbRef?: string
       fullRef?: string
+      refKind?: Run['images'][number]['refKind']
+      refKey?: Run['images'][number]['refKey']
       bytes?: number
       error?: string
       errorCode?: Run['images'][number]['errorCode']
@@ -541,71 +762,62 @@ export function useConversations() {
       return
     }
 
-    let changed = false
-    const nextMessages = currentConversation.messages.map((message) => {
-      if (!Array.isArray(message.runs) || message.runs.length === 0) {
-        return message
-      }
-
-      let messageChanged = false
-      const nextRuns = message.runs.map((run) => {
-        if (run.id !== input.runId) {
-          return run
-        }
-
-        let runChanged = false
-        const nextImages = run.images.map((item) => {
-          if (item.seq !== input.seq) {
-            return item
-          }
-
-          const nextItem = {
-            ...item,
-            status: input.status,
-            fileRef: input.fileRef,
-            thumbRef: input.thumbRef,
-            fullRef: input.fullRef,
-            bytes: input.bytes,
-            error: input.error,
-            errorCode: input.errorCode,
-          }
-          if (
-            nextItem.status === item.status &&
-            nextItem.fileRef === item.fileRef &&
-            nextItem.thumbRef === item.thumbRef &&
-            nextItem.fullRef === item.fullRef &&
-            nextItem.bytes === item.bytes &&
-            nextItem.error === item.error &&
-            nextItem.errorCode === item.errorCode
-          ) {
-            return item
-          }
-          runChanged = true
-          changed = true
-          return nextItem
-        })
-
-        if (!runChanged) {
-          return run
-        }
-        messageChanged = true
-        return {
-          ...run,
-          images: nextImages,
-        }
-      })
-
-      if (!messageChanged) {
-        return message
-      }
-      return {
-        ...message,
-        runs: nextRuns,
-      }
-    })
-
-    if (!changed) {
+    const locationMap = runLocationByConversationRef.current[conversationId]
+    const location = locationMap?.get(input.runId)
+    if (!location) {
       return
+    }
+
+    const message = currentConversation.messages[location.messageIndex]
+    const runs = message.runs ?? []
+    const run = runs[location.runIndex]
+    if (!run || run.id !== input.runId) {
+      return
+    }
+
+    const imageIndex = run.images.findIndex((item) => item.seq === input.seq)
+    if (imageIndex < 0) {
+      return
+    }
+    const targetImage = run.images[imageIndex]
+    const nextImage = {
+      ...targetImage,
+      status: input.status,
+      fileRef: input.fileRef,
+      thumbRef: input.thumbRef,
+      fullRef: input.fullRef,
+      refKind: input.refKind,
+      refKey: input.refKey,
+      bytes: input.bytes,
+      error: input.error,
+      errorCode: input.errorCode,
+    }
+    if (
+      nextImage.status === targetImage.status &&
+      nextImage.fileRef === targetImage.fileRef &&
+      nextImage.thumbRef === targetImage.thumbRef &&
+      nextImage.fullRef === targetImage.fullRef &&
+      nextImage.refKind === targetImage.refKind &&
+      nextImage.refKey === targetImage.refKey &&
+      nextImage.bytes === targetImage.bytes &&
+      nextImage.error === targetImage.error &&
+      nextImage.errorCode === targetImage.errorCode
+    ) {
+      return
+    }
+
+    const nextImages = [...run.images]
+    nextImages[imageIndex] = nextImage
+    const nextRun: Run = {
+      ...run,
+      images: nextImages,
+    }
+    const nextRuns = [...runs]
+    nextRuns[location.runIndex] = nextRun
+    const nextMessages = [...currentConversation.messages]
+    nextMessages[location.messageIndex] = {
+      ...message,
+      runs: nextRuns,
     }
 
     persistConversation({
@@ -627,6 +839,25 @@ export function useConversations() {
       }
     }
     return null
+  }
+
+  const getLoadedActiveConversation = async (): Promise<Conversation | null> => {
+    const snapshot = stateRef.current
+    if (!snapshot.activeId) {
+      return null
+    }
+
+    const existing = snapshot.contents[snapshot.activeId] ?? null
+    if (existing) {
+      return existing
+    }
+
+    await ensureConversationLoaded(snapshot.activeId)
+    const refreshed = stateRef.current
+    if (!refreshed.activeId) {
+      return null
+    }
+    return refreshed.contents[refreshed.activeId] ?? null
   }
 
   const mergeRetryResultIntoRun = (sourceRun: Run, retryRun: Run): Run => {
@@ -653,6 +884,8 @@ export function useConversations() {
         fileRef: retryImage.fileRef,
         thumbRef: retryImage.thumbRef,
         fullRef: retryImage.fullRef,
+        refKind: retryImage.refKind,
+        refKey: retryImage.refKey,
         bytes: retryImage.bytes,
         error: retryImage.error,
         errorCode: retryImage.errorCode,
@@ -683,6 +916,8 @@ export function useConversations() {
         fileRef: undefined,
         thumbRef: undefined,
         fullRef: undefined,
+        refKind: undefined,
+        refKey: undefined,
         bytes: undefined,
         error: undefined,
         errorCode: undefined,
@@ -697,8 +932,7 @@ export function useConversations() {
 
   const sendDraft = async () => {
     const snapshot = stateRef.current
-
-    const currentActive = snapshot.activeId ? snapshot.contents[snapshot.activeId] ?? null : null
+    const currentActive = await getLoadedActiveConversation()
     const activeState = conversationSelectors.selectActiveSettings(snapshot)
 
     const planned = orchestrator.planSendDraft(snapshot, {
@@ -748,6 +982,7 @@ export function useConversations() {
     actions.setDraft('')
 
     try {
+      const adaptiveConcurrency = resolveAdaptiveRunConcurrency(snapshot.runConcurrency)
       const completedRuns = await orchestrator.executeRunPlans(
         plan.runPlans.map((runPlan) => ({
           batchId: plan.batchId,
@@ -764,7 +999,7 @@ export function useConversations() {
           pendingRunId: runPlan.pendingRun.id,
           pendingCreatedAt: runPlan.pendingRun.createdAt,
         })),
-        snapshot.runConcurrency,
+        adaptiveConcurrency,
         {
           onRunImageProgress: (progress) => {
             updateRunImageInConversation(targetConversationId, progress)
@@ -783,7 +1018,7 @@ export function useConversations() {
 
   const retryRun = async (runId: string) => {
     const snapshot = stateRef.current
-    const currentActive = snapshot.activeId ? snapshot.contents[snapshot.activeId] ?? null : null
+    const currentActive = await getLoadedActiveConversation()
     const plan = orchestrator.planRetry(currentActive, runId, {
       channels: snapshot.channels,
       modelCatalog,
@@ -831,9 +1066,8 @@ export function useConversations() {
     replaceRunsInConversation(currentActive.id, new Map([[sourceRun.id, mergedRun]]))
   }
 
-  const editRunTemplate = (runId: string) => {
-    const snapshot = stateRef.current
-    const currentActive = snapshot.activeId ? snapshot.contents[snapshot.activeId] ?? null : null
+  const editRunTemplate = async (runId: string) => {
+    const currentActive = await getLoadedActiveConversation()
     if (!currentActive) {
       return
     }
@@ -856,7 +1090,7 @@ export function useConversations() {
 
     try {
       const snapshot = stateRef.current
-      const currentActive = snapshot.activeId ? snapshot.contents[snapshot.activeId] ?? null : null
+      const currentActive = await getLoadedActiveConversation()
       const plan = orchestrator.planReplay(currentActive, runId, {
         channels: snapshot.channels,
         modelCatalog,
@@ -955,8 +1189,6 @@ export function useConversations() {
     return 'png'
   }
 
-  const sanitizeFileName = (value: string) => value.replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
-
   const delay = (ms: number) => new Promise<void>((resolve) => {
     window.setTimeout(resolve, ms)
   })
@@ -986,7 +1218,7 @@ export function useConversations() {
     return { href: src }
   }
 
-  const triggerDownload = async (src: string, filename: string) => {
+  const triggerDownload = async (src: string, filename: string, cleanup?: () => void) => {
     if (typeof document === 'undefined') {
       return
     }
@@ -1004,12 +1236,15 @@ export function useConversations() {
     if (target.revoke) {
       window.setTimeout(() => target.revoke?.(), 60_000)
     }
+    if (cleanup) {
+      window.setTimeout(() => cleanup(), 60_000)
+    }
   }
 
-  const triggerDownloadsSequentially = async (items: Array<{ src: string; filename: string }>) => {
+  const triggerDownloadsSequentially = async (items: Array<{ src: string; filename: string; cleanup?: () => void }>) => {
     for (let index = 0; index < items.length; index += 1) {
       const item = items[index]
-      await triggerDownload(item.src, item.filename)
+      await triggerDownload(item.src, item.filename, item.cleanup)
       if (index < items.length - 1) {
         await delay(120)
       }
@@ -1034,16 +1269,25 @@ export function useConversations() {
     }
 
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
-    const downloadItems = successfulImages.flatMap((image) => {
-      const src = resolveDownloadSource(image)
-      if (!src) {
-        return []
+    void (async () => {
+      const downloadItems: Array<{ src: string; filename: string; cleanup?: () => void }> = []
+      for (const image of successfulImages) {
+        const resolved = await resolveImageSourceForDownload(image)
+        if (!resolved) {
+          continue
+        }
+        const ext = inferImageExtension(resolved.src)
+        const filename = buildImageFileName({
+          modelName: sourceRun.modelName,
+          prompt: sourceRun.finalPrompt,
+          seq: image.seq,
+          ext,
+          timestamp,
+        })
+        downloadItems.push({ src: resolved.src, filename, cleanup: resolved.revoke })
       }
-      const ext = inferImageExtension(src)
-      const filename = sanitizeFileName(`${timestamp}_${sourceRun.batchId}_${sourceRun.id}_${image.seq}.${ext}`)
-      return [{ src, filename }]
-    })
-    void triggerDownloadsSequentially(downloadItems)
+      await triggerDownloadsSequentially(downloadItems)
+    })()
   }
 
   const downloadSingleRunImage = (runId: string, imageId: string) => {
@@ -1059,15 +1303,25 @@ export function useConversations() {
     }
 
     const target = sourceRun.images.find((item) => item.id === imageId && isDownloadableImage(item))
-    const src = target ? resolveDownloadSource(target) : null
-    if (!target || !src) {
+    if (!target) {
       return
     }
-
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
-    const ext = inferImageExtension(src)
-    const filename = sanitizeFileName(`${timestamp}_${sourceRun.batchId}_${sourceRun.id}_${target.seq}.${ext}`)
-    void triggerDownload(src, filename)
+    void (async () => {
+      const resolved = await resolveImageSourceForDownload(target)
+      if (!resolved) {
+        return
+      }
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
+      const ext = inferImageExtension(resolved.src)
+      const filename = buildImageFileName({
+        modelName: sourceRun.modelName,
+        prompt: sourceRun.finalPrompt,
+        seq: target.seq,
+        ext,
+        timestamp,
+      })
+      await triggerDownload(resolved.src, filename, resolved.revoke)
+    })()
   }
 
   const downloadBatchRunImages = (runId: string) => {
@@ -1085,16 +1339,74 @@ export function useConversations() {
     }
 
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
-    const downloadItems = successImages.flatMap(({ run, image }) => {
-      const src = resolveDownloadSource(image)
-      if (!src) {
-        return []
+    let seqCounter = 0
+    void (async () => {
+      const downloadItems: Array<{ src: string; filename: string; cleanup?: () => void }> = []
+      for (const { run, image } of successImages) {
+        const resolved = await resolveImageSourceForDownload(image)
+        if (!resolved) {
+          continue
+        }
+        seqCounter += 1
+        const ext = inferImageExtension(resolved.src)
+        const filename = buildImageFileName({
+          modelName: run.modelName,
+          prompt: run.finalPrompt,
+          seq: seqCounter,
+          ext,
+          timestamp,
+        })
+        downloadItems.push({ src: resolved.src, filename, cleanup: resolved.revoke })
       }
-      const ext = inferImageExtension(src)
-      const filename = sanitizeFileName(`${timestamp}_${run.batchId}_${run.id}_${image.seq}.${ext}`)
-      return [{ src, filename }]
-    })
-    void triggerDownloadsSequentially(downloadItems)
+      await triggerDownloadsSequentially(downloadItems)
+    })()
+  }
+
+  const downloadMessageRunImages = (runIds: string[]) => {
+    const snapshot = stateRef.current
+    const currentActive = snapshot.activeId ? snapshot.contents[snapshot.activeId] ?? null : null
+    if (!currentActive || runIds.length === 0) {
+      return
+    }
+
+    const runIdSet = new Set(runIds)
+    const targetRuns = currentActive.messages
+      .flatMap((message) => message.runs ?? [])
+      .filter((run) => runIdSet.has(run.id))
+
+    if (targetRuns.length === 0) {
+      return
+    }
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
+    let seqCounter = 0
+    void (async () => {
+      const downloadItems: Array<{ src: string; filename: string; cleanup?: () => void }> = []
+      for (const run of targetRuns) {
+        const successfulImages = run.images.filter((item) => isDownloadableImage(item))
+        for (const image of successfulImages) {
+          const resolved = await resolveImageSourceForDownload(image)
+          if (!resolved) {
+            continue
+          }
+          seqCounter += 1
+          const ext = inferImageExtension(resolved.src)
+          const filename = buildImageFileName({
+            modelName: run.modelName,
+            prompt: run.finalPrompt,
+            seq: seqCounter,
+            ext,
+            timestamp,
+          })
+          downloadItems.push({ src: resolved.src, filename, cleanup: resolved.revoke })
+        }
+      }
+
+      if (downloadItems.length === 0) {
+        return
+      }
+      await triggerDownloadsSequentially(downloadItems)
+    })()
   }
 
   const loadOlderMessages = () => {
@@ -1130,7 +1442,7 @@ export function useConversations() {
     setShowAdvancedVariables: actions.setAdvancedVariables,
     setDynamicPromptEnabled,
     setPanelValueFormat,
-    setPanelVariables: actions.setPanelVariables,
+    setPanelVariables,
     setRunConcurrency,
     createNewConversation,
     clearAllConversations,
@@ -1154,6 +1466,7 @@ export function useConversations() {
     downloadAllRunImages,
     downloadSingleRunImage,
     downloadBatchRunImages,
+    downloadMessageRunImages,
     replayingRunIds,
   }
 }

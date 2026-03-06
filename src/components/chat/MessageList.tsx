@@ -21,9 +21,10 @@ interface MessageListProps {
   sideView: Side
   onOpenPreview: (run: Run, imageId: string, linkedRun?: Run) => void
   onUseUserPrompt?: (prompt: string) => void
-  onRetryRun: (runId: string) => void
+  onRetryRun: (runId: string) => void | Promise<void>
   onReplayRun: (runId: string) => void
   onDownloadAllRun?: (runId: string) => void
+  onDownloadMessageImages?: (runIds: string[]) => void
   onDownloadSingleImage?: (runId: string, imageId: string) => void
   onDownloadBatchRun?: (runId: string) => void
   replayingRunIds?: string[]
@@ -207,7 +208,7 @@ function renderImages(
         }}
       >
         {rows.map((row) => {
-          const src = row.item?.thumbRef ?? row.item?.fileRef ?? row.item?.fullRef
+          const src = row.item?.thumbRef ?? row.item?.fileRef ?? row.item?.fullRef ?? row.item?.refKey
           return (
             <div key={`${run?.id ?? 'none'}-${row.seq}`} className={`run-grid-item ${compact ? 'run-grid-item-compact' : ''}`}>
               {!compact ? <div className="run-image-seq-overlay">#{row.seq}</div> : null}
@@ -375,6 +376,7 @@ function MessageListComponent(props: MessageListProps) {
     onRetryRun,
     onReplayRun,
     onDownloadAllRun,
+    onDownloadMessageImages,
     onDownloadSingleImage,
     onDownloadBatchRun,
     replayingRunIds = [],
@@ -400,6 +402,8 @@ function MessageListComponent(props: MessageListProps) {
   const [expandedPromptByRunId, setExpandedPromptByRunId] = useState<Record<string, boolean>>({})
   const [visibleRunLimitByMessageId, setVisibleRunLimitByMessageId] = useState<Record<string, number>>({})
   const [visibleImageLimitByRunId, setVisibleImageLimitByRunId] = useState<Record<string, number>>({})
+  const [retryingMessageIds, setRetryingMessageIds] = useState<string[]>([])
+  const retryingMessageIdsRef = useRef<Set<string>>(new Set())
   const debouncedSetViewportHeight = useDebouncedCallback((nextHeight: number) => {
     setViewportHeight((prev) => (prev === nextHeight ? prev : nextHeight))
   }, 80)
@@ -549,6 +553,37 @@ function MessageListComponent(props: MessageListProps) {
     onLoadOlderMessages?.()
   }
 
+  const handleRetryAllFailed = useCallback(
+    async (messageId: string, runs: Run[]) => {
+      if (retryingMessageIdsRef.current.has(messageId)) {
+        return
+      }
+
+      const failedRunIds = runs
+        .filter((run) => run.images.some((item) => item.status === 'failed'))
+        .map((run) => run.id)
+      if (failedRunIds.length === 0) {
+        return
+      }
+
+      retryingMessageIdsRef.current.add(messageId)
+      setRetryingMessageIds((prev) => (prev.includes(messageId) ? prev : [...prev, messageId]))
+      try {
+        for (const runId of failedRunIds) {
+          try {
+            await onRetryRun(runId)
+          } catch {
+            // Continue retrying remaining runs even if one run fails.
+          }
+        }
+      } finally {
+        retryingMessageIdsRef.current.delete(messageId)
+        setRetryingMessageIds((prev) => prev.filter((id) => id !== messageId))
+      }
+    },
+    [onRetryRun],
+  )
+
   if (!activeConversation || activeConversation.messages.length === 0) {
     return (
       <div className="empty-state">
@@ -604,8 +639,20 @@ function MessageListComponent(props: MessageListProps) {
                     {message.role === 'assistant' && primaryRun
                       ? (() => {
                           const isReplaying = replayingRunIds.includes(primaryRun.id)
-                          const hasDownloadableImages = primaryRun.images.some(
-                            (item) => item.status === 'success' && Boolean(item.fullRef ?? item.fileRef ?? item.thumbRef),
+                          const isRetryingAllFailed = retryingMessageIds.includes(message.id)
+                          const imagesInMessage = runsForMessage.flatMap((run) => run.images)
+                          const isAllImagesCompleted = imagesInMessage.length > 0 && imagesInMessage.every(
+                            (item) => item.status !== 'pending',
+                          )
+                          const hasDownloadableImages = runsForMessage.some((run) =>
+                            run.images.some(
+                              (item) =>
+                                item.status === 'success' &&
+                                Boolean(item.fullRef ?? item.fileRef ?? item.thumbRef ?? item.refKey),
+                            ),
+                          )
+                          const hasFailedImages = runsForMessage.some((run) =>
+                            run.images.some((item) => item.status === 'failed'),
                           )
 
                           return (
@@ -613,9 +660,26 @@ function MessageListComponent(props: MessageListProps) {
                               <Button
                                 size="small"
                                 type="default"
+                                disabled={!hasFailedImages || isRetryingAllFailed}
+                                loading={isRetryingAllFailed}
+                                onClick={() => {
+                                  void handleRetryAllFailed(message.id, runsForMessage)
+                                }}
+                              >
+                                重试所有失败项
+                              </Button>
+                              <Button
+                                size="small"
+                                type="default"
                                 icon={<DownloadOutlined />}
-                                disabled={!hasDownloadableImages}
-                                onClick={() => onDownloadAllRun?.(primaryRun.id)}
+                                disabled={!isAllImagesCompleted || !hasDownloadableImages}
+                                onClick={() => {
+                                  if (onDownloadMessageImages) {
+                                    onDownloadMessageImages(runsForMessage.map((run) => run.id))
+                                    return
+                                  }
+                                  onDownloadAllRun?.(primaryRun.id)
+                                }}
                               >
                                 下载全部
                               </Button>

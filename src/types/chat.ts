@@ -4,6 +4,7 @@ export type ImageStatus = 'pending' | 'success' | 'failed'
 export type MessageRole = 'user' | 'assistant'
 export type SettingPrimitive = string | number | boolean
 export type ModelParamType = 'number' | 'enum' | 'boolean'
+export type ImageRefKind = 'url' | 'idb-blob' | 'inline'
 export type FailureCode =
   | 'timeout'
   | 'auth'
@@ -75,6 +76,8 @@ export interface ImageItem {
   fileRef?: string
   thumbRef?: string
   fullRef?: string
+  refKind?: ImageRefKind
+  refKey?: string
   width?: number
   height?: number
   bytes?: number

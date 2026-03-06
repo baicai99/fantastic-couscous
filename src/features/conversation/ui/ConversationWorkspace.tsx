@@ -125,6 +125,7 @@ export function ConversationWorkspace() {
     retryRun,
     replayRunAsNewMessage,
     downloadAllRunImages,
+    downloadMessageRunImages,
     downloadSingleRunImage,
     downloadBatchRunImages,
     replayingRunIds,
@@ -266,6 +267,7 @@ export function ConversationWorkspace() {
                         onRetryRun={retryRun}
                         onReplayRun={replayRunAsNewMessage}
                         onDownloadAllRun={downloadAllRunImages}
+                        onDownloadMessageImages={downloadMessageRunImages}
                         onDownloadSingleImage={downloadSingleRunImage}
                         onDownloadBatchRun={downloadBatchRunImages}
                         replayingRunIds={replayingRunIds}
@@ -293,6 +295,7 @@ export function ConversationWorkspace() {
                 onRetryRun={retryRun}
                 onReplayRun={replayRunAsNewMessage}
                 onDownloadAllRun={downloadAllRunImages}
+                onDownloadMessageImages={downloadMessageRunImages}
                 onDownloadSingleImage={downloadSingleRunImage}
                 onDownloadBatchRun={downloadBatchRunImages}
                 replayingRunIds={replayingRunIds}

@@ -1,6 +1,7 @@
-import { generateImages } from '../../../services/imageGeneration'
+﻿import { generateImages } from '../../../services/imageGeneration'
+import { putImageBlob } from '../../../services/imageAssetStore'
 import { autoSaveImage, isSaveDirectoryReady } from '../../../services/imageSave'
-import type { ApiChannel, Run, SettingPrimitive, Side, SideMode, SingleSideSettings } from '../../../types/chat'
+import type { ApiChannel, ImageRefKind, Run, SettingPrimitive, Side, SideMode, SingleSideSettings } from '../../../types/chat'
 import { makeId, toSettingsSnapshot } from '../../../utils/chat'
 import { classifyFailure } from '../domain/conversationDomain'
 
@@ -27,6 +28,8 @@ export interface CreateRunInput {
     fileRef?: string
     thumbRef?: string
     fullRef?: string
+    refKind?: ImageRefKind
+    refKey?: string
     bytes?: number
     error?: string
     errorCode?: ReturnType<typeof classifyFailure>
@@ -37,6 +40,24 @@ export interface RunExecutorDeps {
   generateImagesFn?: typeof generateImages
   autoSaveImageFn?: typeof autoSaveImage
 }
+
+interface ProcessedSuccessImage {
+  status: 'success'
+  fileRef?: string
+  thumbRef?: string
+  fullRef?: string
+  refKind?: ImageRefKind
+  refKey?: string
+  bytes?: number
+}
+
+interface ProcessedFailedImage {
+  status: 'failed'
+  error: string
+  errorCode: ReturnType<typeof classifyFailure>
+}
+
+type ProcessedImage = ProcessedSuccessImage | ProcessedFailedImage
 
 export function createRunExecutor(deps: RunExecutorDeps = {}) {
   const generateImagesFn = deps.generateImagesFn ?? generateImages
@@ -69,34 +90,71 @@ export function createRunExecutor(deps: RunExecutorDeps = {}) {
     return new Blob([decodeURIComponent(payload)], { type: mime })
   }
 
-  function toRefs(src: string, preferEphemeral: boolean): { thumbRef: string; fullRef: string; fileRef: string; bytes?: number } {
+  async function createThumbnailDataUrl(blob: Blob): Promise<string | null> {
+    if (typeof document === 'undefined' || typeof createImageBitmap !== 'function') {
+      return null
+    }
+
+    try {
+      const bitmap = await createImageBitmap(blob)
+      const maxEdge = 640
+      const ratio = Math.min(1, maxEdge / Math.max(bitmap.width, bitmap.height))
+      const width = Math.max(1, Math.round(bitmap.width * ratio))
+      const height = Math.max(1, Math.round(bitmap.height * ratio))
+      const canvas = document.createElement('canvas')
+      canvas.width = width
+      canvas.height = height
+      const context = canvas.getContext('2d')
+      if (!context) {
+        bitmap.close()
+        return null
+      }
+
+      context.drawImage(bitmap, 0, 0, width, height)
+      bitmap.close()
+      return canvas.toDataURL('image/webp', 0.82)
+    } catch {
+      return null
+    }
+  }
+
+  function makeAssetKey(): string {
+    return `asset:${Date.now()}:${makeId()}`
+  }
+
+  async function toRefs(src: string): Promise<ProcessedSuccessImage> {
     if (!src.startsWith('data:image/')) {
       return {
+        status: 'success',
         thumbRef: src,
-        fullRef: src,
         fileRef: src,
+        refKind: 'url',
+        refKey: src,
       }
     }
 
+    const blob = dataUrlToBlob(src)
     const bytes = estimateBase64Bytes(src)
-    if (preferEphemeral && typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {
-      const blob = dataUrlToBlob(src)
-      if (blob) {
-        const url = URL.createObjectURL(blob)
-        objectUrls.add(url)
-        return {
-          thumbRef: url,
-          fullRef: url,
-          fileRef: url,
-          bytes,
-        }
+    if (!blob) {
+      return {
+        status: 'success',
+        thumbRef: src,
+        fileRef: src,
+        refKind: 'inline',
+        bytes,
       }
     }
 
+    const assetKey = makeAssetKey()
+    await putImageBlob(assetKey, blob)
+
+    const thumbRef = (await createThumbnailDataUrl(blob)) ?? src
     return {
-      thumbRef: src,
-      fullRef: src,
-      fileRef: src,
+      status: 'success',
+      thumbRef,
+      fileRef: thumbRef,
+      refKind: 'idb-blob',
+      refKey: assetKey,
       bytes,
     }
   }
@@ -169,68 +227,92 @@ export function createRunExecutor(deps: RunExecutorDeps = {}) {
 
       try {
         const shouldAutoSave = settings.autoSave && isSaveDirectoryReady(settings.saveDirectory)
-        const effectiveParamValues = shouldAutoSave
-          ? {
-              ...paramsSnapshot,
-              responseFormat: 'b64_json' as const,
-            }
-          : paramsSnapshot
+        const completedBySeq = new Map<number, ProcessedImage>()
+        const completionTasks: Promise<void>[] = []
 
         const generated = await generateImagesFn({
           channel,
           modelId,
           prompt: finalPrompt,
           imageCount,
-          paramValues: effectiveParamValues,
+          paramValues: paramsSnapshot,
           onImageCompleted: (item) => {
-            const errorMessage = item.error?.trim() ? item.error : '该序号未返回图片'
-            const imageUpdate =
-              item.src
-                ? (() => {
-                    const refs = toRefs(item.src, shouldAutoSave)
-                    return {
-                    runId,
-                    seq: item.seq,
-                    status: 'success' as const,
-                    fileRef: refs.fileRef,
-                    thumbRef: refs.thumbRef,
-                    fullRef: refs.fullRef,
-                    bytes: refs.bytes,
-                  }
-                  })()
-                : {
-                    runId,
-                    seq: item.seq,
-                    status: 'failed' as const,
-                    error: errorMessage,
-                    errorCode: classifyFailure(errorMessage),
-                  }
+            completionTasks.push((async () => {
+              const errorMessage = item.error?.trim() ? item.error : '该序号未返回图片'
+              if (!item.src) {
+                const failed: ProcessedFailedImage = {
+                  status: 'failed',
+                  error: errorMessage,
+                  errorCode: classifyFailure(errorMessage),
+                }
+                completedBySeq.set(item.seq, failed)
+                onImageProgress?.({
+                  runId,
+                  seq: item.seq,
+                  status: 'failed',
+                  error: failed.error,
+                  errorCode: failed.errorCode,
+                })
+                return
+              }
 
-            onImageProgress?.(imageUpdate)
-
-            if (shouldAutoSave && item.src) {
-              void autoSaveImageFn({
-                imageSrc: item.src,
-                saveDirectory: settings.saveDirectory,
-                batchId,
+              const refs = await toRefs(item.src)
+              completedBySeq.set(item.seq, refs)
+              onImageProgress?.({
                 runId,
                 seq: item.seq,
+                status: 'success',
+                fileRef: refs.fileRef,
+                thumbRef: refs.thumbRef,
+                fullRef: refs.fullRef,
+                refKind: refs.refKind,
+                refKey: refs.refKey,
+                bytes: refs.bytes,
               })
-            }
+
+              if (shouldAutoSave) {
+                void autoSaveImageFn({
+                  imageSrc: item.src,
+                  saveDirectory: settings.saveDirectory,
+                  modelName,
+                  prompt: finalPrompt,
+                  seq: item.seq,
+                })
+              }
+            })())
           },
         })
 
-        const images = Array.from({ length: imageCount }, (_, index) => {
+        await Promise.allSettled(completionTasks)
+
+        const images = await Promise.all(Array.from({ length: imageCount }, async (_, index) => {
           const seq = index + 1
-          const item = generated.items.find((entry) => entry.seq === seq)
-          if (!item?.src) {
-            const message = item?.error?.trim() ? item.error : '该序号未返回图片'
+          const completed = completedBySeq.get(seq)
+          if (!completed || completed.status === 'failed') {
+            const fallbackItem = generated.items.find((entry) => entry.seq === seq)
+            if (!completed && fallbackItem?.src) {
+              const refs = await toRefs(fallbackItem.src)
+              return {
+                id: makeId(),
+                seq,
+                status: 'success' as const,
+                fileRef: refs.fileRef,
+                thumbRef: refs.thumbRef,
+                fullRef: refs.fullRef,
+                refKind: refs.refKind,
+                refKey: refs.refKey,
+                bytes: refs.bytes,
+              }
+            }
+
+            const message =
+              completed?.error ?? fallbackItem?.error?.trim() ?? '该序号未返回图片'
             return {
               id: makeId(),
               seq,
               status: 'failed' as const,
               error: message,
-              errorCode: classifyFailure(message),
+              errorCode: completed?.errorCode ?? classifyFailure(message),
             }
           }
 
@@ -238,9 +320,14 @@ export function createRunExecutor(deps: RunExecutorDeps = {}) {
             id: makeId(),
             seq,
             status: 'success' as const,
-            ...toRefs(item.src, shouldAutoSave),
+            fileRef: completed.fileRef,
+            thumbRef: completed.thumbRef,
+            fullRef: completed.fullRef,
+            refKind: completed.refKind,
+            refKey: completed.refKey,
+            bytes: completed.bytes,
           }
-        })
+        }))
 
         return { ...baseRun, id: runId, images }
       } catch (error) {

@@ -1,3 +1,5 @@
+import { buildImageFileName } from '../utils/fileName'
+
 const directoryHandleMap = new Map<string, FileSystemDirectoryHandle>()
 
 type BrowserWindowWithDirectoryPicker = Window & {
@@ -72,14 +74,13 @@ async function imageSrcToBlob(imageSrc: string): Promise<Blob> {
   return response.blob()
 }
 
-function safeFileName(raw: string): string {
-  return raw.replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
-}
-
-function makeFileName(input: { batchId: string; runId: string; seq: number; ext: string }): string {
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
-  const stem = `${timestamp}_${input.batchId}_${input.runId}_${input.seq}`
-  return `${safeFileName(stem)}.${input.ext}`
+function makeFileName(input: { modelName: string; prompt: string; seq: number; ext: string }): string {
+  return buildImageFileName({
+    modelName: input.modelName,
+    prompt: input.prompt,
+    seq: input.seq,
+    ext: input.ext,
+  })
 }
 
 async function saveByDirectoryHandle(
@@ -121,8 +122,8 @@ export async function pickSaveDirectory(): Promise<{ saveDirectory: string; dire
 export async function autoSaveImage(input: {
   imageSrc: string
   saveDirectory: string | undefined
-  batchId: string
-  runId: string
+  modelName: string
+  prompt: string
   seq: number
 }): Promise<boolean> {
   if (typeof document === 'undefined') {
@@ -141,8 +142,8 @@ export async function autoSaveImage(input: {
   }
   const ext = inferImageExtension(input.imageSrc)
   const filename = makeFileName({
-    batchId: input.batchId,
-    runId: input.runId,
+    modelName: input.modelName,
+    prompt: input.prompt,
     seq: input.seq,
     ext,
   })

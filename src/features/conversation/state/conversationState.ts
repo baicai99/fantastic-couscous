@@ -72,6 +72,7 @@ export function createInitialConversationState(input: {
     runConcurrency?: number
     dynamicPromptEnabled?: boolean
     panelValueFormat?: PanelValueFormat
+    panelVariables?: PanelVariableRow[]
   } | null
 }): ConversationState {
   const { channels, modelCatalog, initialLoad, initialStaged } = input
@@ -92,7 +93,10 @@ export function createInitialConversationState(input: {
     showAdvancedVariables: false,
     dynamicPromptEnabled: initialStaged?.dynamicPromptEnabled ?? true,
     panelValueFormat: initialStaged?.panelValueFormat ?? 'json',
-    panelVariables: defaultPanelRows(),
+    panelVariables:
+      Array.isArray(initialStaged?.panelVariables) && initialStaged.panelVariables.length > 0
+        ? initialStaged.panelVariables
+        : defaultPanelRows(),
     runConcurrency: Math.max(1, Math.floor(initialStaged?.runConcurrency ?? 4)),
     stagedSideMode: initialStaged?.sideMode ?? 'single',
     stagedSideCount,

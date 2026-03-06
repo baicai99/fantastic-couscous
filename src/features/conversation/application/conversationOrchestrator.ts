@@ -1,4 +1,4 @@
-import type { Conversation, FailureCode, ModelCatalog, Run, SettingPrimitive } from '../../../types/chat'
+import type { Conversation, FailureCode, ImageRefKind, ModelCatalog, Run, SettingPrimitive } from '../../../types/chat'
 import type { CreateRunInput } from './runExecutor'
 import { buildReplayPlan, buildRetryPlan, planRunBatch } from '../domain/conversationDomain'
 import type { ConversationState } from '../state/conversationState'
@@ -13,6 +13,10 @@ export interface RunImageProgress {
   seq: number
   status: 'success' | 'failed'
   fileRef?: string
+  thumbRef?: string
+  fullRef?: string
+  refKind?: ImageRefKind
+  refKey?: string
   error?: string
   errorCode?: FailureCode
 }

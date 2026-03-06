@@ -1,8 +1,10 @@
 import {
   clearConversationsFromStorage,
   loadChannelsFromStorage,
-  loadConversationsFromStorage,
+  loadConversationContentById,
+  loadConversationIndexFromStorage,
   loadStagedSettingsFromStorage,
+  migrateLegacyConversationContent,
   removeConversationContentFromStorage,
   saveActiveConversationId,
   saveChannelsToStorage,
@@ -11,14 +13,15 @@ import {
   saveStagedSettingsToStorage,
 } from '../../../services/conversationStorage'
 import type { ApiChannel, Conversation, ConversationSummary, Side, SideMode, SingleSideSettings } from '../../../types/chat'
-import type { PanelValueFormat } from '../domain/types'
+import type { PanelValueFormat, PanelVariableRow } from '../domain/types'
 
 export interface ConversationRepository {
   load: () => {
     summaries: ConversationSummary[]
-    contents: Record<string, Conversation>
     activeId: string | null
   }
+  loadConversation: (conversationId: string, fallbackTitle?: string) => Promise<Conversation | null>
+  migrateLegacyContent: (summaryIds: string[]) => Promise<void>
   loadChannels: () => ApiChannel[]
   loadStagedSettings: () => {
     sideMode: SideMode
@@ -27,11 +30,12 @@ export interface ConversationRepository {
     runConcurrency?: number
     dynamicPromptEnabled?: boolean
     panelValueFormat?: PanelValueFormat
+    panelVariables?: PanelVariableRow[]
   } | null
   saveIndex: (summaries: ConversationSummary[]) => void
-  saveConversation: (conversation: Conversation) => void
-  removeConversation: (conversationId: string) => void
-  clearConversations: () => void
+  saveConversation: (conversation: Conversation) => Promise<void>
+  removeConversation: (conversationId: string) => Promise<void>
+  clearConversations: () => Promise<void>
   saveActiveId: (conversationId: string | null) => void
   saveChannels: (channels: ApiChannel[]) => void
   saveStagedSettings: (input: {
@@ -41,12 +45,15 @@ export interface ConversationRepository {
     runConcurrency: number
     dynamicPromptEnabled: boolean
     panelValueFormat: PanelValueFormat
+    panelVariables: PanelVariableRow[]
   }) => void
 }
 
 export function createConversationRepository(): ConversationRepository {
   return {
-    load: () => loadConversationsFromStorage(),
+    load: () => loadConversationIndexFromStorage(),
+    loadConversation: (conversationId, fallbackTitle) => loadConversationContentById(conversationId, fallbackTitle),
+    migrateLegacyContent: (summaryIds) => migrateLegacyConversationContent(summaryIds),
     loadChannels: () => loadChannelsFromStorage(),
     loadStagedSettings: () => loadStagedSettingsFromStorage(),
     saveIndex,
@@ -55,7 +62,15 @@ export function createConversationRepository(): ConversationRepository {
     clearConversations: clearConversationsFromStorage,
     saveActiveId: (conversationId) => saveActiveConversationId(conversationId ?? ''),
     saveChannels: saveChannelsToStorage,
-    saveStagedSettings: ({ sideMode, sideCount, settingsBySide, runConcurrency, dynamicPromptEnabled, panelValueFormat }) => {
+    saveStagedSettings: ({
+      sideMode,
+      sideCount,
+      settingsBySide,
+      runConcurrency,
+      dynamicPromptEnabled,
+      panelValueFormat,
+      panelVariables,
+    }) => {
       saveStagedSettingsToStorage({
         sideMode,
         sideCount,
@@ -63,6 +78,7 @@ export function createConversationRepository(): ConversationRepository {
         runConcurrency,
         dynamicPromptEnabled,
         panelValueFormat,
+        panelVariables,
       })
     },
   }
