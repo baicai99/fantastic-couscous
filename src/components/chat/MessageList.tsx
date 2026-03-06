@@ -1,6 +1,6 @@
 ﻿import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { DownloadOutlined, ReloadOutlined, RetweetOutlined, SettingOutlined } from '@ant-design/icons'
-import { Button, Card, Collapse, Dropdown, Modal, Space, Typography } from 'antd'
+import { Button, Card, Collapse, Dropdown, Modal, Space, Tooltip, Typography } from 'antd'
 import type { MenuProps } from 'antd'
 import type { Conversation, FailureCode, ImageItem, Message, Run, Side } from '../../types/chat'
 import { gridColumnCount, sortImagesBySeq } from '../../utils/chat'
@@ -845,72 +845,76 @@ function MessageListComponent(props: MessageListProps) {
 
                   return (
                     <Space size={4} className="message-bottom-actions">
-                      <Dropdown
-                        trigger={['click']}
-                        menu={{
-                          items: actionMenuItems,
-                          onClick: (info) => {
-                            if (info.key === 'replay') {
-                              triggerAssistantAction(
-                                `message-${message.id}-replay-primary`,
-                                info.domEvent as unknown as ReactMouseEvent<HTMLElement>,
-                                () => onReplayRun(primaryRun.id),
-                              )
-                              return
-                            }
-                            if (info.key === 'retry-all-failed') {
-                              triggerAssistantAction(
-                                `message-${message.id}-retry-all-failed`,
-                                info.domEvent as unknown as ReactMouseEvent<HTMLElement>,
-                                () => {
-                                  void handleRetryAllFailed(message.id, runsForMessage)
-                                },
-                              )
-                            }
-                          },
-                        }}
-                      >
+                      <Tooltip title="生成操作">
+                        <Dropdown
+                          trigger={['click']}
+                          menu={{
+                            items: actionMenuItems,
+                            onClick: (info) => {
+                              if (info.key === 'replay') {
+                                triggerAssistantAction(
+                                  `message-${message.id}-replay-primary`,
+                                  info.domEvent as unknown as ReactMouseEvent<HTMLElement>,
+                                  () => onReplayRun(primaryRun.id),
+                                )
+                                return
+                              }
+                              if (info.key === 'retry-all-failed') {
+                                triggerAssistantAction(
+                                  `message-${message.id}-retry-all-failed`,
+                                  info.domEvent as unknown as ReactMouseEvent<HTMLElement>,
+                                  () => {
+                                    void handleRetryAllFailed(message.id, runsForMessage)
+                                  },
+                                )
+                              }
+                            },
+                          }}
+                        >
+                          <Button
+                            size="small"
+                            type="default"
+                            className="assistant-action-btn assistant-action-menu-trigger"
+                            icon={<ReloadOutlined />}
+                            aria-label="生成操作"
+                            loading={isRetryingAllFailed}
+                          />
+                        </Dropdown>
+                      </Tooltip>
+                      <Tooltip title="下载全部">
                         <Button
                           size="small"
                           type="default"
-                          className="assistant-action-btn assistant-action-menu-trigger"
-                          icon={<ReloadOutlined />}
-                          aria-label="生成操作"
-                          loading={isRetryingAllFailed}
+                          className="assistant-action-btn"
+                          icon={<DownloadOutlined />}
+                          aria-label="下载全部"
+                          disabled={!isAllImagesCompleted || !hasDownloadableImages || isDownloadingAllImages}
+                          loading={isDownloadingAllImages}
+                          onClick={(event) => {
+                            triggerAssistantAction(`message-${message.id}-download-all`, event, () => {
+                              void handleDownloadAllForMessage(
+                                message.id,
+                                runsForMessage.map((run) => run.id),
+                                primaryRun.id,
+                              )
+                            })
+                          }}
                         />
-                      </Dropdown>
-                      <Button
-                        size="small"
-                        type="default"
-                        className="assistant-action-btn"
-                        icon={<DownloadOutlined />}
-                        disabled={!isAllImagesCompleted || !hasDownloadableImages || isDownloadingAllImages}
-                        loading={isDownloadingAllImages}
-                        onClick={(event) => {
-                          triggerAssistantAction(`message-${message.id}-download-all`, event, () => {
-                            void handleDownloadAllForMessage(
-                              message.id,
-                              runsForMessage.map((run) => run.id),
-                              primaryRun.id,
-                            )
-                          })
-                        }}
-                      >
-                        下载全部
-                      </Button>
-                      <Button
-                        size="small"
-                        type="default"
-                        className="assistant-action-btn"
-                        icon={<SettingOutlined />}
-                        onClick={(event) => {
-                          triggerAssistantAction(`message-${message.id}-show-params`, event, () => {
-                            setParamModalMessageId(message.id)
-                          })
-                        }}
-                      >
-                        显示参数
-                      </Button>
+                      </Tooltip>
+                      <Tooltip title="显示参数">
+                        <Button
+                          size="small"
+                          type="default"
+                          className="assistant-action-btn"
+                          icon={<SettingOutlined />}
+                          aria-label="显示参数"
+                          onClick={(event) => {
+                            triggerAssistantAction(`message-${message.id}-show-params`, event, () => {
+                              setParamModalMessageId(message.id)
+                            })
+                          }}
+                        />
+                      </Tooltip>
                     </Space>
                   )
                 })()
