@@ -423,7 +423,8 @@ describe('MessageList', () => {
       </div>,
     )
 
-    await user.click(screen.getByRole('button', { name: /再来一次/ }))
+    await user.click(screen.getByRole('button', { name: /生成操作/ }))
+    await user.click(screen.getByRole('menuitem', { name: /再来一次/ }))
     await user.click(screen.getByRole('button', { name: /重试失败项/ }))
 
     await waitFor(() => {
@@ -454,7 +455,8 @@ describe('MessageList', () => {
       </div>,
     )
 
-    await user.click(screen.getByRole('button', { name: /重试所有失败项/ }))
+    await user.click(screen.getByRole('button', { name: /生成操作/ }))
+    await user.click(screen.getByRole('menuitem', { name: /重试所有失败项/ }))
 
     await waitFor(() => {
       expect(onRetryRun).toHaveBeenCalledTimes(2)
@@ -477,7 +479,7 @@ describe('MessageList', () => {
       </div>,
     )
 
-    expect(screen.getByRole('button', { name: /再来一次/ })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /生成操作/ })).toBeInTheDocument()
   })
 
   it('triggers download-all callback', async () => {

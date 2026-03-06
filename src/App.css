@@ -1098,6 +1098,13 @@
   align-items: center;
 }
 
+.message-bottom-actions .assistant-action-menu-trigger.ant-btn-sm {
+  width: 34px;
+  min-width: 34px;
+  padding-inline: 0;
+  justify-content: center;
+}
+
 .message-bottom-actions .assistant-action-btn.ant-btn-sm:hover,
 .message-bottom-actions .assistant-action-btn.ant-btn-sm:focus {
   border-color: #69b1ff !important;

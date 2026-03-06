@@ -1,6 +1,7 @@
 ﻿import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { DownloadOutlined, ReloadOutlined, RetweetOutlined, SettingOutlined } from '@ant-design/icons'
-import { Button, Card, Collapse, Modal, Space, Typography } from 'antd'
+import { Button, Card, Collapse, Dropdown, Modal, Space, Typography } from 'antd'
+import type { MenuProps } from 'antd'
 import type { Conversation, FailureCode, ImageItem, Message, Run, Side } from '../../types/chat'
 import { gridColumnCount, sortImagesBySeq } from '../../utils/chat'
 import { ENABLE_MESSAGE_WINDOWING } from '../../features/performance/flags'
@@ -829,23 +830,55 @@ function MessageListComponent(props: MessageListProps) {
                   const hasFailedImages = runsForMessage.some((run) =>
                     run.images.some((item) => item.status === 'failed'),
                   )
+                  const actionMenuItems: MenuProps['items'] = [
+                    {
+                      key: 'replay',
+                      label: '再来一次',
+                      disabled: isReplaying,
+                    },
+                    {
+                      key: 'retry-all-failed',
+                      label: '重试所有失败项',
+                      disabled: !hasFailedImages || isRetryingAllFailed,
+                    },
+                  ]
 
                   return (
                     <Space size={4} className="message-bottom-actions">
-                      <Button
-                        size="small"
-                        type="default"
-                        className="assistant-action-btn"
-                        disabled={!hasFailedImages || isRetryingAllFailed}
-                        loading={isRetryingAllFailed}
-                        onClick={(event) => {
-                          triggerAssistantAction(`message-${message.id}-retry-all-failed`, event, () => {
-                            void handleRetryAllFailed(message.id, runsForMessage)
-                          })
+                      <Dropdown
+                        trigger={['click']}
+                        menu={{
+                          items: actionMenuItems,
+                          onClick: (info) => {
+                            if (info.key === 'replay') {
+                              triggerAssistantAction(
+                                `message-${message.id}-replay-primary`,
+                                info.domEvent as unknown as ReactMouseEvent<HTMLElement>,
+                                () => onReplayRun(primaryRun.id),
+                              )
+                              return
+                            }
+                            if (info.key === 'retry-all-failed') {
+                              triggerAssistantAction(
+                                `message-${message.id}-retry-all-failed`,
+                                info.domEvent as unknown as ReactMouseEvent<HTMLElement>,
+                                () => {
+                                  void handleRetryAllFailed(message.id, runsForMessage)
+                                },
+                              )
+                            }
+                          },
                         }}
                       >
-                        重试所有失败项
-                      </Button>
+                        <Button
+                          size="small"
+                          type="default"
+                          className="assistant-action-btn assistant-action-menu-trigger"
+                          icon={<ReloadOutlined />}
+                          aria-label="生成操作"
+                          loading={isRetryingAllFailed}
+                        />
+                      </Dropdown>
                       <Button
                         size="small"
                         type="default"
@@ -864,19 +897,6 @@ function MessageListComponent(props: MessageListProps) {
                         }}
                       >
                         下载全部
-                      </Button>
-                      <Button
-                        size="small"
-                        type="primary"
-                        className="assistant-action-btn"
-                        icon={<ReloadOutlined />}
-                        onClick={(event) => {
-                          triggerAssistantAction(`message-${message.id}-replay-primary`, event, () => onReplayRun(primaryRun.id))
-                        }}
-                        loading={isReplaying}
-                        disabled={isReplaying}
-                      >
-                        再来一次
                       </Button>
                       <Button
                         size="small"
