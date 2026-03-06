@@ -1,7 +1,7 @@
 ﻿import { generateImages } from '../../../services/imageGeneration'
 import { putImageBlob } from '../../../services/imageAssetStore'
 import { autoSaveImage, isSaveDirectoryReady } from '../../../services/imageSave'
-import type { ApiChannel, ImageRefKind, Run, SettingPrimitive, Side, SideMode, SingleSideSettings } from '../../../types/chat'
+import type { ApiChannel, ImageRefKind, ImageThreadState, Run, SettingPrimitive, Side, SideMode, SingleSideSettings } from '../../../types/chat'
 import { makeId, toSettingsSnapshot } from '../../../utils/chat'
 import { classifyFailure } from '../domain/conversationDomain'
 
@@ -24,16 +24,20 @@ export interface CreateRunInput {
   onImageProgress?: (update: {
     runId: string
     seq: number
-    status: 'success' | 'failed'
+    status: 'pending' | 'success' | 'failed'
+    threadState?: ImageThreadState
     fileRef?: string
     thumbRef?: string
     fullRef?: string
     refKind?: ImageRefKind
     refKey?: string
+    serverTaskId?: string
+    serverTaskMeta?: Record<string, string>
     bytes?: number
     error?: string
     errorCode?: ReturnType<typeof classifyFailure>
   }) => void
+  signal?: AbortSignal
 }
 
 export interface RunExecutorDeps {
@@ -43,21 +47,34 @@ export interface RunExecutorDeps {
 
 interface ProcessedSuccessImage {
   status: 'success'
+  threadState: 'settled'
   fileRef?: string
   thumbRef?: string
   fullRef?: string
   refKind?: ImageRefKind
   refKey?: string
   bytes?: number
+  serverTaskId?: string
+  serverTaskMeta?: Record<string, string>
 }
 
 interface ProcessedFailedImage {
   status: 'failed'
+  threadState: 'settled'
   error: string
   errorCode: ReturnType<typeof classifyFailure>
+  serverTaskId?: string
+  serverTaskMeta?: Record<string, string>
 }
 
-type ProcessedImage = ProcessedSuccessImage | ProcessedFailedImage
+interface ProcessedPendingImage {
+  status: 'pending'
+  threadState: 'active'
+  serverTaskId?: string
+  serverTaskMeta?: Record<string, string>
+}
+
+type ProcessedImage = ProcessedSuccessImage | ProcessedFailedImage | ProcessedPendingImage
 
 export function createRunExecutor(deps: RunExecutorDeps = {}) {
   const generateImagesFn = deps.generateImagesFn ?? generateImages
@@ -168,6 +185,7 @@ export function createRunExecutor(deps: RunExecutorDeps = {}) {
     if (!src.startsWith('data:image/')) {
       return {
         status: 'success',
+        threadState: 'settled',
         thumbRef: src,
         fileRef: src,
         refKind: 'url',
@@ -180,6 +198,7 @@ export function createRunExecutor(deps: RunExecutorDeps = {}) {
     if (!blob) {
       return {
         status: 'success',
+        threadState: 'settled',
         thumbRef: src,
         fileRef: src,
         refKind: 'inline',
@@ -193,6 +212,7 @@ export function createRunExecutor(deps: RunExecutorDeps = {}) {
     const thumbRef = (await createThumbnailDataUrl(blob)) ?? src
     return {
       status: 'success',
+      threadState: 'settled',
       thumbRef,
       fileRef: thumbRef,
       refKind: 'idb-blob',
@@ -261,6 +281,7 @@ export function createRunExecutor(deps: RunExecutorDeps = {}) {
             id: makeId(),
             seq: index + 1,
             status: 'failed',
+            threadState: 'settled',
             error: '请先配置可用渠道（Base URL + API Key）',
             errorCode: 'auth',
           })),
@@ -285,20 +306,64 @@ export function createRunExecutor(deps: RunExecutorDeps = {}) {
           prompt: finalPrompt,
           imageCount,
           paramValues: effectiveParamValues,
+          signal: options.signal,
+          onTaskRegistered: (item) => {
+            const pending: ProcessedPendingImage = {
+              status: 'pending',
+              threadState: 'active',
+              serverTaskId: item.serverTaskId,
+              serverTaskMeta: item.serverTaskMeta,
+            }
+            completedBySeq.set(item.seq, pending)
+            onImageProgress?.({
+              runId,
+              seq: item.seq,
+              status: 'pending',
+              threadState: 'active',
+              serverTaskId: item.serverTaskId,
+              serverTaskMeta: item.serverTaskMeta,
+            })
+          },
           onImageCompleted: (item) => {
             completionTasks.push((async () => {
               const errorMessage = item.error?.trim() ? item.error : '该序号未返回图片'
               if (!item.src) {
+                const hasTaskHandle = Boolean(item.serverTaskId || item.serverTaskMeta)
+                if (hasTaskHandle && !item.error?.trim()) {
+                  const pending: ProcessedPendingImage = {
+                    status: 'pending',
+                    threadState: 'active',
+                    serverTaskId: item.serverTaskId,
+                    serverTaskMeta: item.serverTaskMeta,
+                  }
+                  completedBySeq.set(item.seq, pending)
+                  onImageProgress?.({
+                    runId,
+                    seq: item.seq,
+                    status: 'pending',
+                    threadState: 'active',
+                    serverTaskId: item.serverTaskId,
+                    serverTaskMeta: item.serverTaskMeta,
+                  })
+                  return
+                }
+
                 const failed: ProcessedFailedImage = {
                   status: 'failed',
+                  threadState: 'settled',
                   error: errorMessage,
                   errorCode: classifyFailure(errorMessage),
+                  serverTaskId: item.serverTaskId,
+                  serverTaskMeta: item.serverTaskMeta,
                 }
                 completedBySeq.set(item.seq, failed)
                 onImageProgress?.({
                   runId,
                   seq: item.seq,
                   status: 'failed',
+                  threadState: 'settled',
+                  serverTaskId: item.serverTaskId,
+                  serverTaskMeta: item.serverTaskMeta,
                   error: failed.error,
                   errorCode: failed.errorCode,
                 })
@@ -306,17 +371,27 @@ export function createRunExecutor(deps: RunExecutorDeps = {}) {
               }
 
               const refs = await toRefs(item.src)
-              completedBySeq.set(item.seq, refs)
+              const success: ProcessedSuccessImage = {
+                ...refs,
+                status: 'success',
+                threadState: 'settled',
+                serverTaskId: item.serverTaskId,
+                serverTaskMeta: item.serverTaskMeta,
+              }
+              completedBySeq.set(item.seq, success)
               onImageProgress?.({
                 runId,
                 seq: item.seq,
                 status: 'success',
-                fileRef: refs.fileRef,
-                thumbRef: refs.thumbRef,
-                fullRef: refs.fullRef,
-                refKind: refs.refKind,
-                refKey: refs.refKey,
-                bytes: refs.bytes,
+                threadState: 'settled',
+                fileRef: success.fileRef,
+                thumbRef: success.thumbRef,
+                fullRef: success.fullRef,
+                refKind: success.refKind,
+                refKey: success.refKey,
+                serverTaskId: success.serverTaskId,
+                serverTaskMeta: success.serverTaskMeta,
+                bytes: success.bytes,
               })
 
               if (shouldAutoSave) {
@@ -345,12 +420,26 @@ export function createRunExecutor(deps: RunExecutorDeps = {}) {
                 id: makeId(),
                 seq,
                 status: 'success' as const,
+                threadState: 'settled' as const,
                 fileRef: refs.fileRef,
                 thumbRef: refs.thumbRef,
                 fullRef: refs.fullRef,
                 refKind: refs.refKind,
                 refKey: refs.refKey,
+                serverTaskId: fallbackItem.serverTaskId,
+                serverTaskMeta: fallbackItem.serverTaskMeta,
                 bytes: refs.bytes,
+              }
+            }
+
+            if (!completed && (fallbackItem?.serverTaskId || fallbackItem?.serverTaskMeta) && !fallbackItem?.error) {
+              return {
+                id: makeId(),
+                seq,
+                status: 'pending' as const,
+                threadState: 'active' as const,
+                serverTaskId: fallbackItem.serverTaskId,
+                serverTaskMeta: fallbackItem.serverTaskMeta,
               }
             }
 
@@ -360,8 +449,22 @@ export function createRunExecutor(deps: RunExecutorDeps = {}) {
               id: makeId(),
               seq,
               status: 'failed' as const,
+              threadState: 'settled' as const,
+              serverTaskId: completed?.serverTaskId ?? fallbackItem?.serverTaskId,
+              serverTaskMeta: completed?.serverTaskMeta ?? fallbackItem?.serverTaskMeta,
               error: message,
               errorCode: completed?.errorCode ?? classifyFailure(message),
+            }
+          }
+
+          if (completed.status === 'pending') {
+            return {
+              id: makeId(),
+              seq,
+              status: 'pending' as const,
+              threadState: 'active' as const,
+              serverTaskId: completed.serverTaskId,
+              serverTaskMeta: completed.serverTaskMeta,
             }
           }
 
@@ -369,11 +472,14 @@ export function createRunExecutor(deps: RunExecutorDeps = {}) {
             id: makeId(),
             seq,
             status: 'success' as const,
+            threadState: 'settled' as const,
             fileRef: completed.fileRef,
             thumbRef: completed.thumbRef,
             fullRef: completed.fullRef,
             refKind: completed.refKind,
             refKey: completed.refKey,
+            serverTaskId: completed.serverTaskId,
+            serverTaskMeta: completed.serverTaskMeta,
             bytes: completed.bytes,
           }
         }))
@@ -389,6 +495,7 @@ export function createRunExecutor(deps: RunExecutorDeps = {}) {
             id: makeId(),
             seq: index + 1,
             status: 'failed',
+            threadState: 'settled',
             error: message,
             errorCode: code,
           })),

@@ -234,13 +234,14 @@ export function createMockRun(options: CreateMockRunOptions): Run {
           id: makeId(),
           seq,
           status: 'failed',
+          threadState: 'settled',
           error: failure.message,
           errorCode: failure.code,
         }
       }
 
       if (seq === imageCount && shouldPendingLast) {
-        return { id: makeId(), seq, status: 'pending' }
+        return { id: makeId(), seq, status: 'pending', threadState: 'active' }
       }
 
       const src = `https://picsum.photos/seed/${makeId()}/${width}/${height}`
@@ -248,6 +249,7 @@ export function createMockRun(options: CreateMockRunOptions): Run {
         id: makeId(),
         seq,
         status: 'success',
+        threadState: 'settled',
         fileRef: src,
         thumbRef: src,
         fullRef: src,

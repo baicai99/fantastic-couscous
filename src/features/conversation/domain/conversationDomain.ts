@@ -819,6 +819,11 @@ function normalizeRun(run: Run): Run {
         : undefined)
     return {
       ...item,
+      threadState:
+        item.threadState ??
+        (item.status === 'pending'
+          ? 'active'
+          : 'settled'),
       fullRef,
       thumbRef,
       fileRef: item.fileRef ?? fullRef ?? thumbRef,
@@ -1005,6 +1010,7 @@ export function planRunBatch(input: {
           id: makeId(),
           seq: index + 1,
           status: 'pending' as const,
+          threadState: 'active' as const,
         })),
       }
 
@@ -1165,4 +1171,3 @@ export function getUnusedVariableKeys(draft: string, resolvedVariables: Record<s
 export function previewTemplate(draft: string, resolvedVariables: Record<string, string>) {
   return renderTemplate(draft, resolvedVariables)
 }
-

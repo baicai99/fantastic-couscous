@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { message } from 'antd'
+import { resumeImageTaskOnce } from '../services/imageGeneration'
 import { getModelCatalogFromChannels } from '../services/modelCatalog'
 import type {
+  ApiChannel,
   Conversation,
   ConversationSummary,
   Message,
@@ -119,6 +121,25 @@ function upsertConversationState(
   return { nextSummaries, nextContents }
 }
 
+function conversationHasActiveImageThreads(conversation: Conversation | null | undefined): boolean {
+  if (!conversation) {
+    return false
+  }
+
+  return conversation.messages.some((message) =>
+    (message.runs ?? []).some((run) =>
+      run.images.some((image) => image.status === 'pending' && image.threadState === 'active'),
+    ),
+  )
+}
+
+function isAbortLikeError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') {
+    return false
+  }
+  return 'name' in error && (error as { name?: unknown }).name === 'AbortError'
+}
+
 function isDownloadableImage(image: Run['images'][number]): boolean {
   return isDownloadableImageRef(image)
 }
@@ -192,6 +213,8 @@ export function useConversations() {
   const persistTimerRef = useRef<number | null>(null)
   const conversationCacheOrderRef = useRef<string[]>([])
   const runLocationByConversationRef = useRef<Record<string, Map<string, { messageIndex: number; runIndex: number }>>>({})
+  const activeRunControllersRef = useRef<Record<string, Map<string, AbortController>>>({})
+  const resumingImageIdsRef = useRef<Set<string>>(new Set())
 
   const activeConversation = conversationSelectors.selectActiveConversation(state)
   const { activeSideMode, activeSideCount, activeSettingsBySide } = conversationSelectors.selectActiveSettings(state)
@@ -221,6 +244,27 @@ export function useConversations() {
       }
     }
     runLocationByConversationRef.current[conversation.id] = nextMap
+  }
+
+  const registerActiveRun = (conversationId: string, runId: string, controller: AbortController) => {
+    const existing = activeRunControllersRef.current[conversationId] ?? new Map<string, AbortController>()
+    existing.set(runId, controller)
+    activeRunControllersRef.current[conversationId] = existing
+  }
+
+  const unregisterActiveRun = (conversationId: string, runId: string) => {
+    const existing = activeRunControllersRef.current[conversationId]
+    if (!existing) {
+      return
+    }
+    existing.delete(runId)
+    if (existing.size === 0) {
+      delete activeRunControllersRef.current[conversationId]
+    }
+  }
+
+  const isRunStillActive = (conversationId: string, runId: string): boolean => {
+    return activeRunControllersRef.current[conversationId]?.has(runId) ?? false
   }
 
   const touchConversationCache = (conversationId: string) => {
@@ -390,6 +434,10 @@ export function useConversations() {
         window.clearTimeout(persistTimerRef.current)
         persistTimerRef.current = null
       }
+      Object.values(activeRunControllersRef.current).forEach((controllers) => {
+        controllers.forEach((controller) => controller.abort())
+      })
+      activeRunControllersRef.current = {}
       void flushPendingPersistence()
       runExecutor.releaseObjectUrls?.()
     }
@@ -407,6 +455,7 @@ export function useConversations() {
     const existing = snapshot.contents[conversationId]
     if (existing) {
       touchConversationCache(conversationId)
+      void resumeDetachedImagesOnceForConversation(conversationId)
       return
     }
 
@@ -427,6 +476,7 @@ export function useConversations() {
       conversationCacheOrderRef.current,
     )
     syncAndPersist({ summaries: next.nextSummaries, contents: next.nextContents }, { saveIndex: false })
+    void resumeDetachedImagesOnceForConversation(conversationId)
   }
 
   useEffect(() => {
@@ -530,19 +580,16 @@ export function useConversations() {
     )
 
     if (previousActiveId) {
-      const snapshot = stateRef.current
-      const nextSummaries = snapshot.summaries.filter((item) => item.id !== previousActiveId)
-      const nextContents = { ...snapshot.contents }
-      delete nextContents[previousActiveId]
-      syncAndPersist({ summaries: nextSummaries, contents: nextContents })
-      conversationCacheOrderRef.current = conversationCacheOrderRef.current.filter((id) => id !== previousActiveId)
-      delete runLocationByConversationRef.current[previousActiveId]
-      void repository.removeConversation(previousActiveId)
+      const activeControllers = activeRunControllersRef.current[previousActiveId]
+      activeControllers?.forEach((controller) => controller.abort())
+      delete activeRunControllersRef.current[previousActiveId]
+      detachConversationImageThreads(previousActiveId)
     }
 
     setActiveConversation(null)
     actions.setDraft('')
     dispatch({ type: 'send/clearError' })
+    dispatch({ type: 'send/succeed' })
   }
 
   const switchConversation = (conversationId: string) => {
@@ -830,15 +877,20 @@ export function useConversations() {
     input: {
       runId: string
       seq: number
-      status: 'success' | 'failed'
+      status?: 'pending' | 'success' | 'failed'
+      threadState?: Run['images'][number]['threadState']
       fileRef?: string
       thumbRef?: string
       fullRef?: string
       refKind?: Run['images'][number]['refKind']
       refKey?: Run['images'][number]['refKey']
+      serverTaskId?: Run['images'][number]['serverTaskId']
+      serverTaskMeta?: Run['images'][number]['serverTaskMeta']
       bytes?: number
       error?: string
       errorCode?: Run['images'][number]['errorCode']
+      detachedAt?: string
+      lastResumeAttemptAt?: string
     },
   ) => {
     const snapshot = stateRef.current
@@ -865,28 +917,39 @@ export function useConversations() {
       return
     }
     const targetImage = run.images[imageIndex]
+    const nextStatus = input.status ?? targetImage.status
     const nextImage = {
       ...targetImage,
-      status: input.status,
-      fileRef: input.fileRef,
-      thumbRef: input.thumbRef,
-      fullRef: input.fullRef,
-      refKind: input.refKind,
-      refKey: input.refKey,
-      bytes: input.bytes,
-      error: input.error,
-      errorCode: input.errorCode,
+      status: nextStatus,
+      threadState: 'threadState' in input ? input.threadState : targetImage.threadState,
+      fileRef: 'fileRef' in input ? input.fileRef : targetImage.fileRef,
+      thumbRef: 'thumbRef' in input ? input.thumbRef : targetImage.thumbRef,
+      fullRef: 'fullRef' in input ? input.fullRef : targetImage.fullRef,
+      refKind: 'refKind' in input ? input.refKind : targetImage.refKind,
+      refKey: 'refKey' in input ? input.refKey : targetImage.refKey,
+      serverTaskId: 'serverTaskId' in input ? input.serverTaskId : targetImage.serverTaskId,
+      serverTaskMeta: 'serverTaskMeta' in input ? input.serverTaskMeta : targetImage.serverTaskMeta,
+      bytes: 'bytes' in input ? input.bytes : targetImage.bytes,
+      error: 'error' in input ? input.error : targetImage.error,
+      errorCode: 'errorCode' in input ? input.errorCode : targetImage.errorCode,
+      detachedAt: 'detachedAt' in input ? input.detachedAt : targetImage.detachedAt,
+      lastResumeAttemptAt: 'lastResumeAttemptAt' in input ? input.lastResumeAttemptAt : targetImage.lastResumeAttemptAt,
     }
     if (
       nextImage.status === targetImage.status &&
+      nextImage.threadState === targetImage.threadState &&
       nextImage.fileRef === targetImage.fileRef &&
       nextImage.thumbRef === targetImage.thumbRef &&
       nextImage.fullRef === targetImage.fullRef &&
       nextImage.refKind === targetImage.refKind &&
       nextImage.refKey === targetImage.refKey &&
+      nextImage.serverTaskId === targetImage.serverTaskId &&
+      JSON.stringify(nextImage.serverTaskMeta ?? null) === JSON.stringify(targetImage.serverTaskMeta ?? null) &&
       nextImage.bytes === targetImage.bytes &&
       nextImage.error === targetImage.error &&
-      nextImage.errorCode === targetImage.errorCode
+      nextImage.errorCode === targetImage.errorCode &&
+      nextImage.detachedAt === targetImage.detachedAt &&
+      nextImage.lastResumeAttemptAt === targetImage.lastResumeAttemptAt
     ) {
       return
     }
@@ -914,6 +977,131 @@ export function useConversations() {
       saveIndex: false,
     })
     scheduleConversationPersistence(conversationId)
+  }
+
+  const detachConversationImageThreads = (conversationId: string) => {
+    const snapshot = stateRef.current
+    const currentConversation = snapshot.contents[conversationId]
+    if (!currentConversation) {
+      return
+    }
+
+    const detachedAt = new Date().toISOString()
+    let changed = false
+    const nextMessages = currentConversation.messages.map((message) => {
+      const nextRuns = (message.runs ?? []).map((run) => {
+        let runChanged = false
+        const nextImages = run.images.map((image) => {
+          if (image.status !== 'pending' || image.threadState !== 'active') {
+            return image
+          }
+          runChanged = true
+          changed = true
+          return {
+            ...image,
+            threadState: 'detached' as const,
+            detachedAt,
+          }
+        })
+        return runChanged ? { ...run, images: nextImages } : run
+      })
+      return message.runs ? { ...message, runs: nextRuns } : message
+    })
+
+    if (!changed) {
+      return
+    }
+
+    persistConversation({
+      ...currentConversation,
+      updatedAt: detachedAt,
+      messages: nextMessages,
+    })
+  }
+
+  const resumeDetachedImagesOnceForConversation = async (conversationId: string) => {
+    const snapshot = stateRef.current
+    const conversation = snapshot.contents[conversationId]
+    if (!conversation) {
+      return
+    }
+
+    const resumable = conversation.messages.flatMap((message) =>
+      (message.runs ?? []).flatMap((run) =>
+        run.images
+          .filter((image) =>
+            image.status === 'pending' &&
+            image.threadState === 'detached' &&
+            !image.lastResumeAttemptAt &&
+            Boolean(image.serverTaskId || image.serverTaskMeta),
+          )
+          .map((image) => ({ run, image })),
+      ),
+    )
+
+    for (const entry of resumable) {
+      const imageKey = `${conversationId}:${entry.run.id}:${entry.image.id}`
+      if (resumingImageIdsRef.current.has(imageKey)) {
+        continue
+      }
+
+      const channel = snapshot.channels.find((item) => item.id === entry.run.channelId) as ApiChannel | undefined
+      if (!channel) {
+        updateRunImageInConversation(conversationId, {
+          runId: entry.run.id,
+          seq: entry.image.seq,
+          status: 'failed',
+          threadState: 'settled',
+          error: '图片生成失败',
+          errorCode: 'unknown',
+          lastResumeAttemptAt: new Date().toISOString(),
+        })
+        continue
+      }
+
+      resumingImageIdsRef.current.add(imageKey)
+      const attemptedAt = new Date().toISOString()
+      updateRunImageInConversation(conversationId, {
+        runId: entry.run.id,
+        seq: entry.image.seq,
+        lastResumeAttemptAt: attemptedAt,
+      })
+
+      try {
+        const resumed = await resumeImageTaskOnce({
+          channel,
+          taskId: entry.image.serverTaskId,
+          taskMeta: entry.image.serverTaskMeta,
+        })
+        if (!resumed.ok) {
+          updateRunImageInConversation(conversationId, {
+            runId: entry.run.id,
+            seq: entry.image.seq,
+            status: 'failed',
+            threadState: 'settled',
+            error: '图片生成失败',
+            errorCode: 'unknown',
+            lastResumeAttemptAt: attemptedAt,
+          })
+          continue
+        }
+        updateRunImageInConversation(conversationId, {
+          runId: entry.run.id,
+          seq: entry.image.seq,
+          status: 'success',
+          threadState: 'settled',
+          fileRef: resumed.src,
+          thumbRef: resumed.src,
+          refKind: /^data:image\//i.test(resumed.src) ? 'inline' : 'url',
+          refKey: /^data:image\//i.test(resumed.src) ? undefined : resumed.src,
+          error: undefined,
+          errorCode: undefined,
+          lastResumeAttemptAt: attemptedAt,
+        })
+      } finally {
+        resumingImageIdsRef.current.delete(imageKey)
+      }
+    }
   }
 
   const findRunInConversation = (conversation: Conversation, runId: string): Run | null => {
@@ -966,14 +1154,19 @@ export function useConversations() {
       nextImages[targetIndex] = {
         ...current,
         status: retryImage.status,
+        threadState: retryImage.threadState,
         fileRef: retryImage.fileRef,
         thumbRef: retryImage.thumbRef,
         fullRef: retryImage.fullRef,
         refKind: retryImage.refKind,
         refKey: retryImage.refKey,
+        serverTaskId: retryImage.serverTaskId,
+        serverTaskMeta: retryImage.serverTaskMeta,
         bytes: retryImage.bytes,
         error: retryImage.error,
         errorCode: retryImage.errorCode,
+        detachedAt: retryImage.detachedAt,
+        lastResumeAttemptAt: retryImage.lastResumeAttemptAt,
       }
     })
 
@@ -998,14 +1191,19 @@ export function useConversations() {
       return {
         ...item,
         status: 'pending' as const,
+        threadState: 'active' as const,
         fileRef: undefined,
         thumbRef: undefined,
         fullRef: undefined,
         refKind: undefined,
         refKey: undefined,
+        serverTaskId: undefined,
+        serverTaskMeta: undefined,
         bytes: undefined,
         error: undefined,
         errorCode: undefined,
+        detachedAt: undefined,
+        lastResumeAttemptAt: undefined,
       }
     })
 
@@ -1068,6 +1266,8 @@ export function useConversations() {
 
     try {
       const adaptiveConcurrency = resolveAdaptiveRunConcurrency(snapshot.runConcurrency)
+      const runControllers = new Map(plan.runPlans.map((runPlan) => [runPlan.pendingRun.id, new AbortController()]))
+      runControllers.forEach((controller, runId) => registerActiveRun(targetConversationId, runId, controller))
       const completedRuns = await orchestrator.executeRunPlans(
         plan.runPlans.map((runPlan) => ({
           batchId: plan.batchId,
@@ -1083,19 +1283,30 @@ export function useConversations() {
           channel: runPlan.channel,
           pendingRunId: runPlan.pendingRun.id,
           pendingCreatedAt: runPlan.pendingRun.createdAt,
+          signal: runControllers.get(runPlan.pendingRun.id)?.signal,
         })),
         adaptiveConcurrency,
         {
           onRunImageProgress: (progress) => {
+            if (!isRunStillActive(targetConversationId, progress.runId)) {
+              return
+            }
             updateRunImageInConversation(targetConversationId, progress)
           },
         },
       )
 
-      const map = new Map(completedRuns.map((run) => [run.id, run]))
+      const activeCompletedRuns = completedRuns.filter((run) => isRunStillActive(targetConversationId, run.id))
+      const map = new Map(activeCompletedRuns.map((run) => [run.id, run]))
       replaceRunsInConversation(targetConversationId, map)
+      activeCompletedRuns.forEach((run) => unregisterActiveRun(targetConversationId, run.id))
       dispatch({ type: 'send/succeed' })
     } catch (error) {
+      plan.runPlans.forEach((runPlan) => unregisterActiveRun(targetConversationId, runPlan.pendingRun.id))
+      if (isAbortLikeError(error)) {
+        dispatch({ type: 'send/succeed' })
+        return
+      }
       const message = error instanceof Error ? error.message : 'Unknown error'
       dispatch({ type: 'send/fail', payload: message })
     }
@@ -1131,24 +1342,44 @@ export function useConversations() {
       imageCount: failedCount,
     }
 
-    const retry = await orchestrator.executeRetry({
-      batchId: plan.sourceRun.batchId,
-      sideMode: plan.sourceRun.sideMode,
-      side: plan.sourceRun.side,
-      settings: retrySettings,
-      templatePrompt: plan.sourceRun.templatePrompt,
-      finalPrompt: plan.sourceRun.finalPrompt,
-      variablesSnapshot: { ...plan.sourceRun.variablesSnapshot },
-      modelId: plan.modelId,
-      modelName: plan.modelName,
-      paramsSnapshot: { ...plan.paramsSnapshot },
-      channel: plan.channel,
-      retryOfRunId: plan.rootRunId,
-      retryAttempt: plan.nextRetryAttempt,
-    })
+    const controller = new AbortController()
+    registerActiveRun(currentActive.id, sourceRun.id, controller)
+    try {
+      const retry = await orchestrator.executeRetry({
+        batchId: plan.sourceRun.batchId,
+        sideMode: plan.sourceRun.sideMode,
+        side: plan.sourceRun.side,
+        settings: retrySettings,
+        templatePrompt: plan.sourceRun.templatePrompt,
+        finalPrompt: plan.sourceRun.finalPrompt,
+        variablesSnapshot: { ...plan.sourceRun.variablesSnapshot },
+        modelId: plan.modelId,
+        modelName: plan.modelName,
+        paramsSnapshot: { ...plan.paramsSnapshot },
+        channel: plan.channel,
+        retryOfRunId: plan.rootRunId,
+        retryAttempt: plan.nextRetryAttempt,
+        signal: controller.signal,
+        onImageProgress: (progress) => {
+          if (!isRunStillActive(currentActive.id, progress.runId)) {
+            return
+          }
+          updateRunImageInConversation(currentActive.id, progress)
+        },
+      })
 
-    const mergedRun = mergeRetryResultIntoRun(sourceRun, retry)
-    replaceRunsInConversation(currentActive.id, new Map([[sourceRun.id, mergedRun]]))
+      if (!isRunStillActive(currentActive.id, sourceRun.id)) {
+        return
+      }
+      const mergedRun = mergeRetryResultIntoRun(sourceRun, retry)
+      replaceRunsInConversation(currentActive.id, new Map([[sourceRun.id, mergedRun]]))
+    } catch (error) {
+      if (!isAbortLikeError(error)) {
+        throw error
+      }
+    } finally {
+      unregisterActiveRun(currentActive.id, sourceRun.id)
+    }
   }
 
   const editRunTemplate = async (runId: string) => {
@@ -1211,6 +1442,7 @@ export function useConversations() {
           id: makeId(),
           seq: index + 1,
           status: 'pending' as const,
+          threadState: 'active' as const,
         })),
       }
 
@@ -1228,26 +1460,46 @@ export function useConversations() {
         messages: [...currentActive.messages, replayMessage],
       })
 
-      const completedRun = await orchestrator.executeReplay({
-        batchId: plan.batchId,
-        sideMode: plan.sourceRun.sideMode,
-        side: plan.sourceRun.side,
-        settings: plan.settings,
-        templatePrompt: plan.sourceRun.templatePrompt,
-        finalPrompt: plan.sourceRun.finalPrompt,
-        variablesSnapshot: { ...plan.sourceRun.variablesSnapshot },
-        modelId: plan.modelId,
-        modelName: plan.modelName,
-        paramsSnapshot: { ...plan.paramsSnapshot },
-        channel: plan.channel,
-      })
+      const controller = new AbortController()
+      registerActiveRun(currentActive.id, pendingRun.id, controller)
+      try {
+        const completedRun = await orchestrator.executeReplay({
+          batchId: plan.batchId,
+          sideMode: plan.sourceRun.sideMode,
+          side: plan.sourceRun.side,
+          settings: plan.settings,
+          templatePrompt: plan.sourceRun.templatePrompt,
+          finalPrompt: plan.sourceRun.finalPrompt,
+          variablesSnapshot: { ...plan.sourceRun.variablesSnapshot },
+          modelId: plan.modelId,
+          modelName: plan.modelName,
+          paramsSnapshot: { ...plan.paramsSnapshot },
+          channel: plan.channel,
+          signal: controller.signal,
+          onImageProgress: (progress) => {
+            if (!isRunStillActive(currentActive.id, progress.runId)) {
+              return
+            }
+            updateRunImageInConversation(currentActive.id, progress)
+          },
+        })
 
-      const stableRun: Run = {
-        ...completedRun,
-        id: pendingRun.id,
-        createdAt: pendingRun.createdAt,
+        if (!isRunStillActive(currentActive.id, pendingRun.id)) {
+          return
+        }
+        const stableRun: Run = {
+          ...completedRun,
+          id: pendingRun.id,
+          createdAt: pendingRun.createdAt,
+        }
+        replaceRunsInConversation(currentActive.id, new Map([[pendingRun.id, stableRun]]))
+      } catch (error) {
+        if (!isAbortLikeError(error)) {
+          throw error
+        }
+      } finally {
+        unregisterActiveRun(currentActive.id, pendingRun.id)
       }
-      replaceRunsInConversation(currentActive.id, new Map([[pendingRun.id, stableRun]]))
     } finally {
       replayingRunIdsRef.current.delete(runId)
       setReplayingRunIds((prev) => prev.filter((id) => id !== runId))
@@ -1567,7 +1819,7 @@ export function useConversations() {
   return {
     summaries: state.summaries,
     activeConversation,
-    shouldConfirmCreateConversation: Boolean(activeConversation && activeConversation.messages.length > 0),
+    shouldConfirmCreateConversation: conversationHasActiveImageThreads(activeConversation),
     activeId: state.activeId,
     draft: state.draft,
     sendError: state.sendError,

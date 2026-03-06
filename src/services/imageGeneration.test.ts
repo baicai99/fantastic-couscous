@@ -1,5 +1,5 @@
 ﻿import { afterEach, describe, expect, it, vi } from 'vitest'
-import { generateImages } from './imageGeneration'
+import { generateImages, resumeImageTaskOnce } from './imageGeneration'
 
 describe('imageGeneration request body', () => {
   afterEach(() => {
@@ -221,5 +221,95 @@ describe('imageGeneration request body', () => {
     expect(onImageCompleted).toHaveBeenCalledTimes(3)
     expect(onImageCompleted.mock.calls[0]?.[0]?.error).toContain('正在等待第2轮')
     expect(onImageCompleted.mock.calls[1]?.[0]?.error).toContain('正在等待第3轮')
+  })
+
+  it('stops retrying when aborted by an external signal', async () => {
+    vi.useFakeTimers()
+    const controller = new AbortController()
+    const fetchMock = vi.fn().mockImplementation((_url: string, init?: RequestInit) =>
+      new Promise((_resolve, reject) => {
+        const signal = init?.signal
+        const rejectAbort = () => {
+          const abortError = Object.assign(new Error('aborted'), { name: 'AbortError' })
+          reject(abortError)
+        }
+        signal?.addEventListener('abort', rejectAbort, { once: true })
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const task = generateImages({
+      channel: {
+        id: 'ch',
+        name: 'c',
+        baseUrl: 'https://api.example.com/v1',
+        apiKey: 'k',
+      },
+      modelId: 'gemini-3-pro-image-preview',
+      prompt: 'x',
+      imageCount: 1,
+      paramValues: { responseFormat: 'url' },
+      signal: controller.signal,
+    })
+
+    controller.abort()
+    await expect(task).rejects.toMatchObject({ name: 'AbortError' })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('captures server task metadata when provider accepts an async task', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 202,
+      headers: new Headers({ location: 'https://api.example.com/tasks/task-1' }),
+      json: async () => ({ task_id: 'task-1', status: 'pending' }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await generateImages({
+      channel: {
+        id: 'ch',
+        name: 'c',
+        baseUrl: 'https://api.example.com/v1',
+        apiKey: 'k',
+      },
+      modelId: 'gemini-3-pro-image-preview',
+      prompt: 'x',
+      imageCount: 1,
+      paramValues: { responseFormat: 'url' },
+    })
+
+    expect(result.items[0]).toMatchObject({
+      seq: 1,
+      serverTaskId: 'task-1',
+      serverTaskMeta: { resumeUrl: 'https://api.example.com/tasks/task-1', location: 'https://api.example.com/tasks/task-1' },
+    })
+    expect(result.items[0]?.src).toBeUndefined()
+  })
+
+  it('resumes a stored server task with a single fetch', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: new Headers(),
+      json: async () => ({ data: [{ url: 'https://img.example/resumed.png' }] }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const resumed = await resumeImageTaskOnce({
+      channel: {
+        id: 'ch',
+        name: 'c',
+        baseUrl: 'https://api.example.com/v1',
+        apiKey: 'k',
+      },
+      taskId: 'task-1',
+      taskMeta: { resumeUrl: 'https://api.example.com/tasks/task-1' },
+    })
+
+    expect(resumed).toEqual({ ok: true, src: 'https://img.example/resumed.png' })
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://api.example.com/tasks/task-1',
+      expect.objectContaining({ method: 'GET' }),
+    )
   })
 })

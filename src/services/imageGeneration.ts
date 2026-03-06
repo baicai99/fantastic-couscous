@@ -7,17 +7,27 @@ interface GenerateImagesInput {
   prompt: string
   imageCount: number
   paramValues: Record<string, SettingPrimitive>
+  signal?: AbortSignal
+  onTaskRegistered?: (item: RegisteredImageTask) => void
   onImageCompleted?: (item: GeneratedImageItem) => void
 }
 
-interface GenerateImagesResult {
+export interface GenerateImagesResult {
   items: GeneratedImageItem[]
+}
+
+export interface RegisteredImageTask {
+  seq: number
+  serverTaskId?: string
+  serverTaskMeta?: Record<string, string>
 }
 
 export interface GeneratedImageItem {
   seq: number
   src?: string
   error?: string
+  serverTaskId?: string
+  serverTaskMeta?: Record<string, string>
 }
 
 interface RawImageItem {
@@ -25,6 +35,19 @@ interface RawImageItem {
   b64_json?: unknown
   data?: unknown
   base64?: unknown
+  id?: unknown
+  task_id?: unknown
+  taskId?: unknown
+  job_id?: unknown
+  jobId?: unknown
+  request_id?: unknown
+  requestId?: unknown
+  status_url?: unknown
+  statusUrl?: unknown
+  poll_url?: unknown
+  pollUrl?: unknown
+  result_url?: unknown
+  resultUrl?: unknown
 }
 
 const PER_IMAGE_TIMEOUT_MS = 60_000
@@ -190,6 +213,150 @@ function toOriginLabel(baseUrl: string): string {
   }
 }
 
+function readString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
+function pickTaskId(source: Record<string, unknown> | null | undefined): string | undefined {
+  if (!source) {
+    return undefined
+  }
+  return (
+    readString(source.task_id) ??
+    readString(source.taskId) ??
+    readString(source.job_id) ??
+    readString(source.jobId) ??
+    readString(source.request_id) ??
+    readString(source.requestId) ??
+    readString(source.id)
+  )
+}
+
+function pickResumeUrl(source: Record<string, unknown> | null | undefined): string | undefined {
+  if (!source) {
+    return undefined
+  }
+  return (
+    readString(source.status_url) ??
+    readString(source.statusUrl) ??
+    readString(source.poll_url) ??
+    readString(source.pollUrl) ??
+    readString(source.result_url) ??
+    readString(source.resultUrl)
+  )
+}
+
+function buildTaskMeta(input: {
+  baseUrl: string
+  taskId?: string
+  resumeUrl?: string
+  location?: string
+}): Record<string, string> | undefined {
+  const meta: Record<string, string> = {}
+  if (input.resumeUrl) {
+    meta.resumeUrl = input.resumeUrl
+  }
+  if (input.location) {
+    meta.location = input.location
+  }
+  if (!meta.resumeUrl && input.taskId) {
+    const normalized = normalizeBaseUrl(input.baseUrl)
+    meta.resumeUrl = `${buildGenerationUrl(normalized)}/${encodeURIComponent(input.taskId)}`
+  }
+  return Object.keys(meta).length > 0 ? meta : undefined
+}
+
+function parseTaskRegistration(input: {
+  baseUrl: string
+  payload: unknown
+  response: Response
+}): { serverTaskId?: string; serverTaskMeta?: Record<string, string> } {
+  const getHeader = (name: string): string | undefined => {
+    const headers = (input.response as Response & { headers?: Headers }).headers
+    if (!headers || typeof headers.get !== 'function') {
+      return undefined
+    }
+    return readString(headers.get(name))
+  }
+  const payloadRecord =
+    input.payload && typeof input.payload === 'object' ? (input.payload as Record<string, unknown>) : undefined
+  const payloadData = Array.isArray(payloadRecord?.data) ? (payloadRecord?.data[0] as Record<string, unknown> | undefined) : undefined
+  const taskId =
+    pickTaskId(payloadData) ??
+    pickTaskId(payloadRecord) ??
+    getHeader('x-task-id') ??
+    getHeader('x-request-id')
+  const resumeUrl =
+    pickResumeUrl(payloadData) ??
+    pickResumeUrl(payloadRecord) ??
+    getHeader('location')
+  return {
+    serverTaskId: taskId,
+    serverTaskMeta: buildTaskMeta({
+      baseUrl: input.baseUrl,
+      taskId,
+      resumeUrl,
+      location: getHeader('location'),
+    }),
+  }
+}
+
+function isPendingTaskPayload(input: {
+  payload: unknown
+  response: Response
+  taskId?: string
+  taskMeta?: Record<string, string>
+}): boolean {
+  if (input.response.status === 202) {
+    return true
+  }
+  if (input.taskId || input.taskMeta?.resumeUrl) {
+    const payloadRecord =
+      input.payload && typeof input.payload === 'object' ? (input.payload as Record<string, unknown>) : undefined
+    const status =
+      readString(payloadRecord?.status) ??
+      (Array.isArray(payloadRecord?.data) && payloadRecord?.data[0] && typeof payloadRecord.data[0] === 'object'
+        ? readString((payloadRecord.data[0] as Record<string, unknown>).status)
+        : undefined)
+    if (!status) {
+      return true
+    }
+    return ['queued', 'pending', 'processing', 'running', 'submitted', 'accepted'].includes(status.toLowerCase())
+  }
+  return false
+}
+
+function mergeSignals(external?: AbortSignal, internal?: AbortSignal): AbortSignal | undefined {
+  if (!external) {
+    return internal
+  }
+  if (!internal) {
+    return external
+  }
+  if (external.aborted) {
+    return external
+  }
+  if (internal.aborted) {
+    return internal
+  }
+  const controller = new AbortController()
+  const abort = () => controller.abort()
+  external.addEventListener('abort', abort, { once: true })
+  internal.addEventListener('abort', abort, { once: true })
+  return controller.signal
+}
+
+function resolveResumeUrl(channelBaseUrl: string, taskId?: string, taskMeta?: Record<string, string>): string | null {
+  const explicit = taskMeta?.resumeUrl ?? taskMeta?.location
+  if (explicit) {
+    return explicit
+  }
+  if (!taskId) {
+    return null
+  }
+  return `${buildGenerationUrl(channelBaseUrl)}/${encodeURIComponent(taskId)}`
+}
+
 function buildUnsupportedModelMessage(
   channelBaseUrl: string,
   selectedModelId: string,
@@ -240,7 +407,7 @@ function isSensitiveContentError(status: number, detail: string): boolean {
 }
 
 export async function generateImages(input: GenerateImagesInput): Promise<GenerateImagesResult> {
-  const { channel, modelId, prompt, imageCount, paramValues, onImageCompleted } = input
+  const { channel, modelId, prompt, imageCount, paramValues, signal, onTaskRegistered, onImageCompleted } = input
   const modelCandidates = getModelCandidates(modelId)
   const primaryUrl = buildGenerationUrl(channel.baseUrl)
   const fallbackUrl = primaryUrl.includes('/images/generations')
@@ -249,7 +416,7 @@ export async function generateImages(input: GenerateImagesInput): Promise<Genera
       ? primaryUrl.replace('/image/generations', '/images/generations')
       : null
 
-  async function doRequest(url: string, requestModelId: string, signal?: AbortSignal): Promise<string> {
+  async function doRequest(url: string, requestModelId: string, requestSignal?: AbortSignal): Promise<GeneratedImageItem> {
     const body = buildRequestBody(requestModelId, prompt, paramValues)
     const response = await fetch(url, {
       method: 'POST',
@@ -258,7 +425,7 @@ export async function generateImages(input: GenerateImagesInput): Promise<Genera
         Authorization: `Bearer ${channel.apiKey}`,
       },
       body: JSON.stringify(body),
-      signal,
+      signal: requestSignal,
     })
 
     if (!response.ok) {
@@ -283,14 +450,28 @@ export async function generateImages(input: GenerateImagesInput): Promise<Genera
     }
 
     const payload = (await response.json()) as { data?: unknown }
+    const taskRegistration = parseTaskRegistration({
+      baseUrl: channel.baseUrl,
+      payload,
+      response,
+    })
     const items = Array.isArray(payload.data) ? (payload.data as RawImageItem[]) : []
     const first = items.map((item) => toImageSrc(item)).find((value): value is string => Boolean(value))
 
-    if (!first) {
-      throw new Error('No usable image returned (url).')
+    if (first) {
+      return { seq: 0, src: first, ...taskRegistration }
     }
 
-    return first
+    if (isPendingTaskPayload({
+      payload,
+      response,
+      taskId: taskRegistration.serverTaskId,
+      taskMeta: taskRegistration.serverTaskMeta,
+    })) {
+      return { seq: 0, ...taskRegistration }
+    }
+
+    throw new Error('No usable image returned (url).')
   }
 
   function isUnsupportedModelError(error: unknown): boolean {
@@ -316,6 +497,7 @@ export async function generateImages(input: GenerateImagesInput): Promise<Genera
       let lastError: unknown = null
       let timedOut = false
       const requestController = new AbortController()
+      const mergedSignal = mergeSignals(signal, requestController.signal)
       const timeoutId = setTimeout(() => {
         timedOut = true
         requestController.abort()
@@ -324,13 +506,24 @@ export async function generateImages(input: GenerateImagesInput): Promise<Genera
       try {
         for (const candidate of modelCandidates) {
           try {
-            const src = await doRequest(primaryUrl, candidate, requestController.signal)
-            const successItem: GeneratedImageItem = { seq, src }
-            onImageCompleted?.(successItem)
-            return successItem
+            const result = await doRequest(primaryUrl, candidate, mergedSignal)
+            if (result.serverTaskId || result.serverTaskMeta) {
+              onTaskRegistered?.({
+                seq,
+                serverTaskId: result.serverTaskId,
+                serverTaskMeta: result.serverTaskMeta,
+              })
+            }
+            if (result.src) {
+              const successItem: GeneratedImageItem = { seq, src: result.src, serverTaskId: result.serverTaskId, serverTaskMeta: result.serverTaskMeta }
+              onImageCompleted?.(successItem)
+              return successItem
+            }
+            const pendingItem: GeneratedImageItem = { seq, serverTaskId: result.serverTaskId, serverTaskMeta: result.serverTaskMeta }
+            return pendingItem
           } catch (error) {
             lastError = error
-            if (timedOut || isAbortError(error)) {
+            if (signal?.aborted || timedOut || isAbortError(error)) {
               break
             }
 
@@ -340,13 +533,23 @@ export async function generateImages(input: GenerateImagesInput): Promise<Genera
 
             if (shouldTryPathFallback && fallbackUrl) {
               try {
-                const src = await doRequest(fallbackUrl, candidate, requestController.signal)
-                const successItem: GeneratedImageItem = { seq, src }
-                onImageCompleted?.(successItem)
-                return successItem
+                const result = await doRequest(fallbackUrl, candidate, mergedSignal)
+                if (result.serverTaskId || result.serverTaskMeta) {
+                  onTaskRegistered?.({
+                    seq,
+                    serverTaskId: result.serverTaskId,
+                    serverTaskMeta: result.serverTaskMeta,
+                  })
+                }
+                if (result.src) {
+                  const successItem: GeneratedImageItem = { seq, src: result.src, serverTaskId: result.serverTaskId, serverTaskMeta: result.serverTaskMeta }
+                  onImageCompleted?.(successItem)
+                  return successItem
+                }
+                return { seq, serverTaskId: result.serverTaskId, serverTaskMeta: result.serverTaskMeta }
               } catch (fallbackError) {
                 lastError = fallbackError
-                if (timedOut || isAbortError(fallbackError)) {
+                if (signal?.aborted || timedOut || isAbortError(fallbackError)) {
                   break
                 }
               }
@@ -359,6 +562,10 @@ export async function generateImages(input: GenerateImagesInput): Promise<Genera
               return failedItem
             }
           }
+        }
+
+        if (signal?.aborted || (!timedOut && isAbortError(lastError))) {
+          throw Object.assign(new Error('aborted'), { name: 'AbortError' })
         }
 
         if (timedOut) {
@@ -407,4 +614,35 @@ export async function generateImages(input: GenerateImagesInput): Promise<Genera
   })())
 
   return { items: await Promise.all(requests) }
+}
+
+export async function resumeImageTaskOnce(input: {
+  channel: ApiChannel
+  taskId?: string
+  taskMeta?: Record<string, string>
+  signal?: AbortSignal
+}): Promise<{ ok: true; src: string } | { ok: false }> {
+  const resumeUrl = resolveResumeUrl(input.channel.baseUrl, input.taskId, input.taskMeta)
+  if (!resumeUrl) {
+    return { ok: false }
+  }
+
+  try {
+    const response = await fetch(resumeUrl, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${input.channel.apiKey}`,
+      },
+      signal: input.signal,
+    })
+    if (!response.ok) {
+      return { ok: false }
+    }
+    const payload = (await response.json()) as { data?: unknown }
+    const items = Array.isArray(payload.data) ? (payload.data as RawImageItem[]) : []
+    const first = items.map((item) => toImageSrc(item)).find((value): value is string => Boolean(value))
+    return first ? { ok: true, src: first } : { ok: false }
+  } catch {
+    return { ok: false }
+  }
 }

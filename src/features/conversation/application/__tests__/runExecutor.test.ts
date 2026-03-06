@@ -123,4 +123,45 @@ describe('runExecutor', () => {
     expect(run.images).toHaveLength(1)
     expect(run.images[0]?.status).toBe('success')
   })
+
+  it('keeps pending images and task handles when provider returns async task registration', async () => {
+    const mockGenerateImages = vi.fn().mockImplementation(async (input: {
+      onTaskRegistered?: (item: { seq: number; serverTaskId?: string; serverTaskMeta?: Record<string, string> }) => void
+    }) => {
+      input.onTaskRegistered?.({ seq: 1, serverTaskId: 'task-1', serverTaskMeta: { resumeUrl: 'https://example.com/tasks/task-1' } })
+      return {
+        items: [{ seq: 1, serverTaskId: 'task-1', serverTaskMeta: { resumeUrl: 'https://example.com/tasks/task-1' } }],
+      }
+    })
+    const onImageProgress = vi.fn()
+    const executor = createRunExecutor({ generateImagesFn: mockGenerateImages })
+
+    const run = await executor.createRun({
+      batchId: 'batch',
+      sideMode: 'single',
+      side: 'single',
+      settings: { ...baseSettings, imageCount: 1, channelId: 'ch' },
+      templatePrompt: 'x',
+      finalPrompt: 'x',
+      variablesSnapshot: {},
+      modelId: 'model-a',
+      modelName: 'Model A',
+      paramsSnapshot: {},
+      channel: { id: 'ch', name: 'n', baseUrl: 'https://example.com', apiKey: 'key' },
+      onImageProgress,
+    })
+
+    expect(onImageProgress).toHaveBeenCalledWith(expect.objectContaining({
+      seq: 1,
+      status: 'pending',
+      threadState: 'active',
+      serverTaskId: 'task-1',
+    }))
+    expect(run.images[0]).toMatchObject({
+      status: 'pending',
+      threadState: 'active',
+      serverTaskId: 'task-1',
+      serverTaskMeta: { resumeUrl: 'https://example.com/tasks/task-1' },
+    })
+  })
 })

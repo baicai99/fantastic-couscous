@@ -138,7 +138,7 @@ function renderRunMetaTitle(input: {
   onToggle: (runId: string) => void
   showBatchDownload: boolean
   onDownloadBatchRun?: (runId: string) => void
-  onAssistantActionTrigger: AssistantActionTrigger
+  onAssistantActionTrigger?: AssistantActionTrigger
 }) {
   const {
     run,
@@ -166,7 +166,7 @@ function renderRunMetaTitle(input: {
           }}
           onClick={(event) => {
             event.stopPropagation()
-            onAssistantActionTrigger(`run-${run.id}-download-batch`, event, () => onDownloadBatchRun?.(run.id))
+            onAssistantActionTrigger?.(`run-${run.id}-download-batch`, event, () => onDownloadBatchRun?.(run.id))
           }}
         >
           下载这一批次
@@ -187,7 +187,7 @@ function renderRunMetaTitle(input: {
           className="run-meta-title-toggle assistant-action-btn"
           onClick={(event) => {
             event.stopPropagation()
-            onAssistantActionTrigger(`run-${run.id}-toggle-prompt`, event, () => onToggle(run.id))
+            onAssistantActionTrigger?.(`run-${run.id}-toggle-prompt`, event, () => onToggle(run.id))
           }}
         >
           {expanded ? '收起' : '展开'}

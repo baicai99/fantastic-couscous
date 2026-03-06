@@ -1,6 +1,7 @@
 ﻿import { DeleteOutlined, HistoryOutlined, MessageOutlined, PlusOutlined } from '@ant-design/icons'
 import { Button, Menu, Popconfirm, Tooltip } from 'antd'
 import type { MenuProps } from 'antd'
+import type { ReactNode } from 'react'
 import type { PanelMode } from '../../hooks/usePersistentPanelMode'
 import type { ConversationSummary } from '../../types/chat'
 
@@ -15,6 +16,18 @@ interface ConversationListProps {
   onClearAllConversations: () => void
   onDeleteConversation: (conversationId: string) => void
   onSwitchConversation: (conversationId: string) => void
+}
+
+interface ConversationAction {
+  key: string
+  title: string
+  ariaLabel: string
+  icon: ReactNode
+  onClick: () => void
+  withConfirm: boolean
+  confirmTitle?: string
+  confirmDescription?: string
+  confirmOkText?: string
 }
 
 export function ConversationList(props: ConversationListProps) {
@@ -67,7 +80,7 @@ export function ConversationList(props: ConversationListProps) {
     ),
   }))
 
-  const actions = [
+  const actions: ConversationAction[] = [
     {
       key: 'toggle',
       title: isCollapsedMode ? '展开左侧导航' : '收起左侧导航',
@@ -84,7 +97,7 @@ export function ConversationList(props: ConversationListProps) {
       onClick: onCreateConversation,
       withConfirm: shouldConfirmCreateConversation,
       confirmTitle: '关闭当前旧对话线程并新建对话？',
-      confirmDescription: '当前对话已有线程内容，继续后会直接关闭旧对话。',
+      confirmDescription: '当前会话仍有图片在后台生成，继续后将停止等待旧会话并新建对话。',
       confirmOkText: '关闭并新建',
     },
     {
@@ -95,7 +108,7 @@ export function ConversationList(props: ConversationListProps) {
       onClick: onClearAllConversations,
       withConfirm: true,
     },
-  ] as const
+  ]
 
   const actionClassName = isCollapsedMode ? 'conversation-collapsed-action-btn' : 'conversation-top-action-btn'
   const actionContainerClassName = isCollapsedMode ? 'conversation-menu-top-collapsed' : 'conversation-menu-top'

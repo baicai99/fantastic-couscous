@@ -1,6 +1,7 @@
 export type SideMode = 'single' | 'multi'
 export type Side = string
 export type ImageStatus = 'pending' | 'success' | 'failed'
+export type ImageThreadState = 'active' | 'detached' | 'settled'
 export type MessageRole = 'user' | 'assistant'
 export type SettingPrimitive = string | number | boolean
 export type ModelParamType = 'number' | 'enum' | 'boolean'
@@ -73,16 +74,21 @@ export interface ImageItem {
   id: string
   seq: number
   status: ImageStatus
+  threadState?: ImageThreadState
   fileRef?: string
   thumbRef?: string
   fullRef?: string
   refKind?: ImageRefKind
   refKey?: string
+  serverTaskId?: string
+  serverTaskMeta?: Record<string, string>
   width?: number
   height?: number
   bytes?: number
   error?: string
   errorCode?: FailureCode
+  detachedAt?: string
+  lastResumeAttemptAt?: string
 }
 
 export interface Run {
