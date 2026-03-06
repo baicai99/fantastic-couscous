@@ -517,6 +517,7 @@ export function useConversations() {
     const seedMode = activeSideMode
     const seedSideCount = activeSideCount
     const seedSettings = normalizeSettingsBySide(activeSettingsBySide, state.channels, modelCatalog, seedSideCount)
+    const previousActiveId = stateRef.current.activeId
 
     saveStagedSettings(
       seedMode,
@@ -527,6 +528,17 @@ export function useConversations() {
       stateRef.current.panelValueFormat,
       stateRef.current.panelVariables,
     )
+
+    if (previousActiveId) {
+      const snapshot = stateRef.current
+      const nextSummaries = snapshot.summaries.filter((item) => item.id !== previousActiveId)
+      const nextContents = { ...snapshot.contents }
+      delete nextContents[previousActiveId]
+      syncAndPersist({ summaries: nextSummaries, contents: nextContents })
+      conversationCacheOrderRef.current = conversationCacheOrderRef.current.filter((id) => id !== previousActiveId)
+      delete runLocationByConversationRef.current[previousActiveId]
+      void repository.removeConversation(previousActiveId)
+    }
 
     setActiveConversation(null)
     actions.setDraft('')
@@ -1555,6 +1567,7 @@ export function useConversations() {
   return {
     summaries: state.summaries,
     activeConversation,
+    shouldConfirmCreateConversation: Boolean(activeConversation && activeConversation.messages.length > 0),
     activeId: state.activeId,
     draft: state.draft,
     sendError: state.sendError,

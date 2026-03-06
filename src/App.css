@@ -897,6 +897,36 @@
   align-items: center;
 }
 
+.assistant-action-btn {
+  transform-origin: center;
+  transition: box-shadow 0.16s ease;
+}
+
+.assistant-action-btn.assistant-action-btn-animating {
+  animation: assistant-action-click 0.14s ease forwards;
+}
+
+@keyframes assistant-action-click {
+  0% {
+    transform: scale(1);
+    box-shadow: 0 0 0 rgba(22, 119, 255, 0);
+  }
+  45% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 3px rgba(22, 119, 255, 0.2);
+  }
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 rgba(22, 119, 255, 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .assistant-action-btn.assistant-action-btn-animating {
+    animation: none;
+  }
+}
+
 .run-edit-top-btn {
   margin-top: 0;
 }

@@ -79,6 +79,7 @@ export function ConversationWorkspace() {
   const {
     summaries,
     activeConversation,
+    shouldConfirmCreateConversation,
     activeId,
     draft,
     sendError,
@@ -227,6 +228,7 @@ export function ConversationWorkspace() {
             activeId={activeId}
             viewMode="expanded"
             onToggleCollapse={toggleLeftPanelMode}
+            shouldConfirmCreateConversation={shouldConfirmCreateConversation}
             onCreateConversation={createNewConversation}
             onClearAllConversations={clearAllConversations}
             onDeleteConversation={removeConversation}
@@ -239,6 +241,7 @@ export function ConversationWorkspace() {
             activeId={activeId}
             viewMode="collapsed"
             onToggleCollapse={toggleLeftPanelMode}
+            shouldConfirmCreateConversation={shouldConfirmCreateConversation}
             onCreateConversation={createNewConversation}
             onClearAllConversations={clearAllConversations}
             onDeleteConversation={removeConversation}

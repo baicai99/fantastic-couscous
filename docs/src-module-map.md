@@ -21,6 +21,7 @@
   - `src/components/chat/*`
   - `src/components/settings/SettingsPanel.tsx`
   - `src/components/preview/ImagePreviewModal.tsx`
+  - 左侧“新建对话”相关行为：`src/hooks/useConversations.ts` + `src/components/sidebar/ConversationList.tsx`
 
 - 动态提示词 / 变量批处理
   - `src/features/conversation/domain/types.ts`

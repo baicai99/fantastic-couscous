@@ -309,8 +309,10 @@ describe('MessageList', () => {
     await user.click(screen.getByRole('button', { name: /再来一次/ }))
     await user.click(screen.getByRole('button', { name: /重试失败项/ }))
 
-    expect(onReplayRun).toHaveBeenCalledWith('r1')
-    expect(onRetryRun).toHaveBeenCalledWith('r1')
+    await waitFor(() => {
+      expect(onReplayRun).toHaveBeenCalledWith('r1')
+      expect(onRetryRun).toHaveBeenCalledWith('r1')
+    })
   })
 
   it('retries all failed runs without waiting previous run to finish', async () => {
@@ -337,9 +339,11 @@ describe('MessageList', () => {
 
     await user.click(screen.getByRole('button', { name: /重试所有失败项/ }))
 
-    expect(onRetryRun).toHaveBeenCalledTimes(2)
-    expect(onRetryRun.mock.calls[0]?.[0]).toBe('r1')
-    expect(onRetryRun.mock.calls[1]?.[0]).toBe('r2')
+    await waitFor(() => {
+      expect(onRetryRun).toHaveBeenCalledTimes(2)
+      expect(onRetryRun.mock.calls[0]?.[0]).toBe('r1')
+      expect(onRetryRun.mock.calls[1]?.[0]).toBe('r2')
+    })
   })
 
   it('disables replay button while run is replaying', () => {
@@ -384,7 +388,9 @@ describe('MessageList', () => {
     )
 
     await user.click(screen.getByRole('button', { name: /下载全部/ }))
-    expect(onDownloadAllRun).toHaveBeenCalledWith('r1')
+    await waitFor(() => {
+      expect(onDownloadAllRun).toHaveBeenCalledWith('r1')
+    })
   })
 
   it('shows loading state while downloading message images', async () => {
@@ -415,8 +421,10 @@ describe('MessageList', () => {
     const button = screen.getByRole('button', { name: /下载全部/ })
     await user.click(button)
 
-    expect(onDownloadMessageImages).toHaveBeenCalledWith(['r1'])
-    expect(button).toBeDisabled()
+    await waitFor(() => {
+      expect(onDownloadMessageImages).toHaveBeenCalledWith(['r1'])
+      expect(button).toBeDisabled()
+    })
 
     deferred.resolve()
     await waitFor(() => {
@@ -449,7 +457,9 @@ describe('MessageList', () => {
     )
 
     await user.click(screen.getByRole('button', { name: /下载这张/ }))
-    expect(onDownloadSingleImage).toHaveBeenCalledWith('r1', 's1')
+    await waitFor(() => {
+      expect(onDownloadSingleImage).toHaveBeenCalledWith('r1', 's1')
+    })
   })
 
   it('shows failure reason under summary, not inside image placeholder', () => {
@@ -469,6 +479,40 @@ describe('MessageList', () => {
     const runGrid = container.querySelector('.run-grid')
     expect(runGrid).not.toBeNull()
     expect(runGrid).not.toHaveTextContent('test failure reason')
+  })
+
+  it('shows timeout progress text inside failed image placeholder', () => {
+    const conversation = makeConversation()
+    conversation.messages[0].runs = [
+      {
+        ...conversation.messages[0].runs![0],
+        images: [
+          {
+            id: 'timeout-1',
+            seq: 1,
+            status: 'failed',
+            errorCode: 'timeout',
+            error: '第1轮超时，图片已标记超时，正在等待第2轮（60s）',
+          },
+        ],
+      },
+    ]
+
+    const { container } = render(
+      <div style={{ height: 600 }}>
+        <MessageList
+          activeConversation={conversation}
+          sideView="single"
+          onOpenPreview={() => {}}
+          onRetryRun={() => {}}
+          onReplayRun={() => {}}
+        />
+      </div>,
+    )
+
+    const runGrid = container.querySelector('.run-grid')
+    expect(runGrid).not.toBeNull()
+    expect(runGrid).toHaveTextContent('正在等待第2轮')
   })
 
   it('shows final prompt summary in run title', () => {
@@ -506,8 +550,10 @@ describe('MessageList', () => {
 
     expect(screen.getByRole('button', { name: '展开' })).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: '展开' }))
-    expect(screen.getByRole('button', { name: '收起' })).toBeInTheDocument()
-    expect(screen.getByText(`Prompt: ${longPrompt}`)).toBeInTheDocument()
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: '收起' })).toBeInTheDocument()
+      expect(screen.getByText(`Prompt: ${longPrompt}`)).toBeInTheDocument()
+    })
   })
 
   it('renders distinct prompt titles for multiple runs', () => {
@@ -705,7 +751,9 @@ describe('MessageList', () => {
 
     expect(container.querySelectorAll('img.run-image')).toHaveLength(12)
     await user.click(screen.getByRole('button', { name: /加载更多图片/ }))
-    expect(container.querySelectorAll('img.run-image')).toHaveLength(24)
+    await waitFor(() => {
+      expect(container.querySelectorAll('img.run-image')).toHaveLength(24)
+    })
   })
 
   it('paginates runs in multi view and can load more', async () => {
@@ -731,7 +779,9 @@ describe('MessageList', () => {
 
     expect(screen.queryByText(/Run #9/)).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: /加载更多 Run/ }))
-    expect(screen.getByText(/Run #9/)).toBeInTheDocument()
+    await waitFor(() => {
+      expect(screen.getByText(/Run #9/)).toBeInTheDocument()
+    })
   })
 
   it('uses compact image actions in multi view to reduce node count', () => {

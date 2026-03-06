@@ -27,6 +27,17 @@ interface RawImageItem {
   base64?: unknown
 }
 
+const PER_IMAGE_TIMEOUT_MS = 60_000
+const PER_IMAGE_MAX_TIMEOUT_ROUNDS = 3
+
+function buildTimeoutProgressMessage(round: number, nextRound: number): string {
+  return `第${round}轮超时，图片已标记超时，正在等待第${nextRound}轮（60s）`
+}
+
+function buildTimeoutFinalMessage(round: number): string {
+  return `第${round}轮超时，单张图片生成失败（timeout）`
+}
+
 function normalizeBaseUrl(value: string): string {
   return value.replace(/\/+$/, '')
 }
@@ -238,7 +249,7 @@ export async function generateImages(input: GenerateImagesInput): Promise<Genera
       ? primaryUrl.replace('/image/generations', '/images/generations')
       : null
 
-  async function doRequest(url: string, requestModelId: string): Promise<string> {
+  async function doRequest(url: string, requestModelId: string, signal?: AbortSignal): Promise<string> {
     const body = buildRequestBody(requestModelId, prompt, paramValues)
     const response = await fetch(url, {
       method: 'POST',
@@ -247,6 +258,7 @@ export async function generateImages(input: GenerateImagesInput): Promise<Genera
         Authorization: `Bearer ${channel.apiKey}`,
       },
       body: JSON.stringify(body),
+      signal,
     })
 
     if (!response.ok) {
@@ -290,54 +302,105 @@ export async function generateImages(input: GenerateImagesInput): Promise<Genera
     return msg.includes('not supported model for image generation') || msg.includes('convert_request_failed')
   }
 
+  function isAbortError(error: unknown): boolean {
+    if (!error || typeof error !== 'object') {
+      return false
+    }
+    return 'name' in error && (error as { name?: unknown }).name === 'AbortError'
+  }
+
   const requests = Array.from({ length: imageCount }, (_, index) => (async (): Promise<GeneratedImageItem> => {
     const seq = index + 1
-    let lastError: unknown = null
 
-    for (const candidate of modelCandidates) {
+    for (let round = 1; round <= PER_IMAGE_MAX_TIMEOUT_ROUNDS; round += 1) {
+      let lastError: unknown = null
+      let timedOut = false
+      const requestController = new AbortController()
+      const timeoutId = setTimeout(() => {
+        timedOut = true
+        requestController.abort()
+      }, PER_IMAGE_TIMEOUT_MS)
+
       try {
-        const src = await doRequest(primaryUrl, candidate)
-        const successItem: GeneratedImageItem = { seq, src }
-        onImageCompleted?.(successItem)
-        return successItem
-      } catch (error) {
-        lastError = error
-        const message = error instanceof Error ? error.message : ''
-        const shouldTryPathFallback =
-          Boolean(fallbackUrl) && (message.includes('HTTP 404') || message.includes('HTTP 405'))
-
-        if (shouldTryPathFallback && fallbackUrl) {
+        for (const candidate of modelCandidates) {
           try {
-            const src = await doRequest(fallbackUrl, candidate)
+            const src = await doRequest(primaryUrl, candidate, requestController.signal)
             const successItem: GeneratedImageItem = { seq, src }
             onImageCompleted?.(successItem)
             return successItem
-          } catch (fallbackError) {
-            lastError = fallbackError
+          } catch (error) {
+            lastError = error
+            if (timedOut || isAbortError(error)) {
+              break
+            }
+
+            const message = error instanceof Error ? error.message : ''
+            const shouldTryPathFallback =
+              Boolean(fallbackUrl) && (message.includes('HTTP 404') || message.includes('HTTP 405'))
+
+            if (shouldTryPathFallback && fallbackUrl) {
+              try {
+                const src = await doRequest(fallbackUrl, candidate, requestController.signal)
+                const successItem: GeneratedImageItem = { seq, src }
+                onImageCompleted?.(successItem)
+                return successItem
+              } catch (fallbackError) {
+                lastError = fallbackError
+                if (timedOut || isAbortError(fallbackError)) {
+                  break
+                }
+              }
+            }
+
+            if (!isUnsupportedModelError(lastError)) {
+              const failedMessage = lastError instanceof Error ? lastError.message : 'Image generation failed.'
+              const failedItem: GeneratedImageItem = { seq, error: failedMessage }
+              onImageCompleted?.(failedItem)
+              return failedItem
+            }
           }
         }
 
-        if (!isUnsupportedModelError(lastError)) {
-          const failedMessage = lastError instanceof Error ? lastError.message : 'Image generation failed.'
-          const failedItem: GeneratedImageItem = { seq, error: failedMessage }
+        if (timedOut) {
+          if (round < PER_IMAGE_MAX_TIMEOUT_ROUNDS) {
+            const progressItem: GeneratedImageItem = {
+              seq,
+              error: buildTimeoutProgressMessage(round, round + 1),
+            }
+            onImageCompleted?.(progressItem)
+            continue
+          }
+          const failedItem: GeneratedImageItem = {
+            seq,
+            error: buildTimeoutFinalMessage(round),
+          }
           onImageCompleted?.(failedItem)
           return failedItem
         }
-      }
-    }
 
-    if (isUnsupportedModelError(lastError)) {
-      const failedItem: GeneratedImageItem = {
-        seq,
-        error: buildUnsupportedModelMessage(channel.baseUrl, modelId, modelCandidates, lastError),
+        if (isUnsupportedModelError(lastError)) {
+          const failedItem: GeneratedImageItem = {
+            seq,
+            error: buildUnsupportedModelMessage(channel.baseUrl, modelId, modelCandidates, lastError),
+          }
+          onImageCompleted?.(failedItem)
+          return failedItem
+        }
+
+        const failedItem: GeneratedImageItem = {
+          seq,
+          error: lastError instanceof Error ? lastError.message : 'Image generation failed.',
+        }
+        onImageCompleted?.(failedItem)
+        return failedItem
+      } finally {
+        clearTimeout(timeoutId)
       }
-      onImageCompleted?.(failedItem)
-      return failedItem
     }
 
     const failedItem: GeneratedImageItem = {
       seq,
-      error: lastError instanceof Error ? lastError.message : 'Image generation failed.',
+      error: buildTimeoutFinalMessage(PER_IMAGE_MAX_TIMEOUT_ROUNDS),
     }
     onImageCompleted?.(failedItem)
     return failedItem

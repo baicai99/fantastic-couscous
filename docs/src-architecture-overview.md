@@ -93,6 +93,7 @@
 - 图片生成：`services/imageGeneration.ts`
   - 目标端点规范化到 `/v1/images/generations`（含 fallback path）。
   - 支持模型别名候选重试。
+  - 单张图片采用“60 秒超时 + 最多 3 轮重试”策略；每轮超时会先回写占位提示“超时并等待下一轮”，第三轮超时后最终失败（timeout）。
   - 识别常见错误（不支持尺寸、敏感内容、不支持模型）。
   - 响应图片字段兼容 `url / b64_json / data / base64`，并先判定 URL/dataURL/合法 Base64，避免把非 Base64 内容误喂给解码流程。
 
@@ -115,11 +116,15 @@
 - `runtimeMetrics.ts`：DEV 下输出耗时日志。
 - 渐进式图片提交/渲染 + 历史消息分页加载（默认初始 100，增量 50）。
 - 左侧会话列表排序规则：按“最后一条消息时间”倒序；若会话正文尚未加载则回退用 summary 的 `updatedAt/createdAt`，确保新近对话始终靠前。
+- 左侧“新建对话”按钮现在会直接关闭当前活动对话：
+  - 若当前对话已有消息线程，先弹出确认框提示“关闭旧对话线程并新建对话”。
+  - 确认后删除旧对话记录，并进入空白新会话编辑态。
 - Workspace 使用 `ResizeObserver + debounce` 动态计算 header/composer 安全区。
 - Ant Design 升级兼容：`Space` 组件使用 `orientation`，不再使用已废弃的 `direction`，避免控制台 deprecation warning。
 - Assistant 气泡“下载全部”导出 zip 命名规则为 `模型名-时间戳.zip`（例如 `gpt-image-1-2026-03-06T10-13-49-290Z.zip`），不再使用固定前缀 `message-images-*`，且时间戳仅追加一次。
 - 高级变量“批量导入”解析错误已本地化为中文（JSON/YAML/CSV/逐行模式），避免直接透出英文异常前缀。
 - Assistant 气泡“下载全部”按钮支持进行中 loading 状态：点击后立即显示加载动画并禁用，压缩包生成完成后自动恢复。
+- Assistant 气泡内操作按钮（如重试、下载、再来一次、展开收起、加载更多）统一采用“先播放点击动画，再执行函数”的交互顺序，避免视觉反馈滞后。
 
 ## 9. 给 LLM 的快速理解结论
 

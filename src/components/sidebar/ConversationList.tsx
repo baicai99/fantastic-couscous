@@ -9,6 +9,7 @@ interface ConversationListProps {
   activeId: string | null
   isCollapsed?: boolean
   viewMode?: PanelMode
+  shouldConfirmCreateConversation?: boolean
   onToggleCollapse: () => void
   onCreateConversation: () => void
   onClearAllConversations: () => void
@@ -22,6 +23,7 @@ export function ConversationList(props: ConversationListProps) {
     activeId,
     isCollapsed,
     viewMode,
+    shouldConfirmCreateConversation = false,
     onToggleCollapse,
     onCreateConversation,
     onClearAllConversations,
@@ -80,7 +82,10 @@ export function ConversationList(props: ConversationListProps) {
       ariaLabel: 'create-conversation',
       icon: <PlusOutlined />,
       onClick: onCreateConversation,
-      withConfirm: false,
+      withConfirm: shouldConfirmCreateConversation,
+      confirmTitle: '关闭当前旧对话线程并新建对话？',
+      confirmDescription: '当前对话已有线程内容，继续后会直接关闭旧对话。',
+      confirmOkText: '关闭并新建',
     },
     {
       key: 'clear',
@@ -121,9 +126,9 @@ export function ConversationList(props: ConversationListProps) {
 
     return (
       <Popconfirm
-        title="确认清空所有对话？"
-        description="此操作不可恢复。"
-        okText="清空"
+        title={action.confirmTitle ?? '确认清空所有对话？'}
+        description={action.confirmDescription ?? '此操作不可恢复。'}
+        okText={action.confirmOkText ?? '清空'}
         okButtonProps={{ danger: true }}
         cancelText="取消"
         onConfirm={action.onClick}

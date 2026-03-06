@@ -1,4 +1,4 @@
-﻿import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+﻿import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { DownloadOutlined, ReloadOutlined, RetweetOutlined } from '@ant-design/icons'
 import { Button, Card, Collapse, Space, Tag, Typography } from 'antd'
 import type { Conversation, FailureCode, ImageItem, Message, Run, Side } from '../../types/chat'
@@ -15,6 +15,8 @@ const DEFAULT_MULTI_RUN_INITIAL_LIMIT = 24
 const DEFAULT_MULTI_RUN_PAGE_SIZE = 24
 const DEFAULT_MULTI_IMAGE_INITIAL_LIMIT = 24
 const DEFAULT_MULTI_IMAGE_PAGE_SIZE = 24
+const ASSISTANT_ACTION_ANIMATION_MS = 140
+const ASSISTANT_ACTION_ANIMATING_CLASS = 'assistant-action-btn-animating'
 
 interface MessageListProps {
   activeConversation: Conversation | null
@@ -53,6 +55,11 @@ interface PaginationControl {
   label: string
   onLoadMore: () => void
 }
+type AssistantActionTrigger = (
+  actionKey: string,
+  event: ReactMouseEvent<HTMLElement>,
+  action: () => void | Promise<void>,
+) => void
 
 const FAILURE_LABEL: Record<FailureCode, string> = {
   timeout: '超时',
@@ -131,6 +138,7 @@ function renderRunMetaTitle(input: {
   onToggle: (runId: string) => void
   showBatchDownload: boolean
   onDownloadBatchRun?: (runId: string) => void
+  onAssistantActionTrigger: AssistantActionTrigger
 }) {
   const {
     run,
@@ -140,6 +148,7 @@ function renderRunMetaTitle(input: {
     onToggle,
     showBatchDownload,
     onDownloadBatchRun,
+    onAssistantActionTrigger,
   } = input
   const promptText = run.finalPrompt.trim()
 
@@ -150,14 +159,14 @@ function renderRunMetaTitle(input: {
         <Button
           type="link"
           size="small"
-          className="run-meta-title-toggle"
+          className="run-meta-title-toggle assistant-action-btn"
           onMouseDown={(event) => {
             event.preventDefault()
             event.stopPropagation()
           }}
           onClick={(event) => {
             event.stopPropagation()
-            onDownloadBatchRun?.(run.id)
+            onAssistantActionTrigger(`run-${run.id}-download-batch`, event, () => onDownloadBatchRun?.(run.id))
           }}
         >
           下载这一批次
@@ -175,10 +184,10 @@ function renderRunMetaTitle(input: {
         <Button
           type="link"
           size="small"
-          className="run-meta-title-toggle"
+          className="run-meta-title-toggle assistant-action-btn"
           onClick={(event) => {
             event.stopPropagation()
-            onToggle(run.id)
+            onAssistantActionTrigger(`run-${run.id}-toggle-prompt`, event, () => onToggle(run.id))
           }}
         >
           {expanded ? '收起' : '展开'}
@@ -195,6 +204,7 @@ function renderImages(
   onOpenPreview: (run: Run, imageId: string, linkedRun?: Run) => void,
   onDownloadSingleImage?: (runId: string, imageId: string) => void,
   pagination?: PaginationControl,
+  onAssistantActionTrigger?: AssistantActionTrigger,
   compact = false,
 ) {
   const preferredColumns = run?.settingsSnapshot?.gridColumns
@@ -209,13 +219,15 @@ function renderImages(
       >
         {rows.map((row) => {
           const src = row.item?.thumbRef ?? row.item?.fileRef ?? row.item?.fullRef ?? row.item?.refKey
+          const failureMessage = row.item?.error?.trim()
+          const shouldShowFailureDetailInCell = Boolean(failureMessage && /(timeout|超时)/i.test(failureMessage))
           return (
             <div key={`${run?.id ?? 'none'}-${row.seq}`} className={`run-grid-item ${compact ? 'run-grid-item-compact' : ''}`}>
               {!compact ? <div className="run-image-seq-overlay">#{row.seq}</div> : null}
               {row.item?.status === 'pending' ? (
                 <div className="run-image-skeleton" />
               ) : row.item?.status === 'failed' ? (
-                <div className="run-image-fallback">生成失败</div>
+                <div className="run-image-fallback">{shouldShowFailureDetailInCell ? failureMessage : '生成失败'}</div>
               ) : row.item?.status === 'success' && src && run ? (
                 <div className={`run-image-frame ${compact ? 'compact' : ''}`}>
                   <button className="image-button" type="button" onClick={() => onOpenPreview(run, row.item!.id, linkedRun)}>
@@ -231,10 +243,14 @@ function renderImages(
                     <Button
                       size="small"
                       type="primary"
-                      className="run-image-download-btn"
+                      className="run-image-download-btn assistant-action-btn"
                       onClick={(event) => {
                         event.stopPropagation()
-                        onDownloadSingleImage?.(run.id, row.item!.id)
+                        onAssistantActionTrigger?.(
+                          `run-${run.id}-download-image-${row.item!.id}`,
+                          event,
+                          () => onDownloadSingleImage?.(run.id, row.item!.id),
+                        )
                       }}
                     >
                       下载这张
@@ -250,7 +266,17 @@ function renderImages(
       </div>
       {pagination ? (
         <div className="message-history-more">
-          <Button size="small" onClick={pagination.onLoadMore}>
+          <Button
+            size="small"
+            className="assistant-action-btn"
+            onClick={(event) => {
+              onAssistantActionTrigger?.(
+                `run-${run?.id ?? 'unknown'}-load-more-images-${pagination.current}`,
+                event,
+                pagination.onLoadMore,
+              )
+            }}
+          >
             {`${pagination.label} (${pagination.current}/${pagination.total})`}
           </Button>
         </div>
@@ -273,6 +299,7 @@ function renderRunCard(
   showBatchDownload: boolean,
   onDownloadBatchRun?: (runId: string) => void,
   imagePagination?: PaginationControl,
+  onAssistantActionTrigger?: AssistantActionTrigger,
   compact = false,
 ) {
   const failureSummary = getFailureSummary(run)
@@ -292,8 +319,14 @@ function renderRunCard(
                   <Button
                     type="link"
                     size="small"
-                    className="run-meta-title-toggle"
-                    onClick={() => onDownloadBatchRun?.(run.id)}
+                    className="run-meta-title-toggle assistant-action-btn"
+                    onClick={(event) => {
+                      onAssistantActionTrigger?.(
+                        `run-${run.id}-download-batch-compact`,
+                        event,
+                        () => onDownloadBatchRun?.(run.id),
+                      )
+                    }}
                   >
                     下载这一批次
                   </Button>
@@ -304,8 +337,14 @@ function renderRunCard(
                 <Button
                   type="link"
                   size="small"
-                  className="run-meta-title-toggle run-meta-compact-toggle"
-                  onClick={() => onTogglePrompt(run.id)}
+                  className="run-meta-title-toggle run-meta-compact-toggle assistant-action-btn"
+                  onClick={(event) => {
+                    onAssistantActionTrigger?.(
+                      `run-${run.id}-toggle-prompt-compact`,
+                      event,
+                      () => onTogglePrompt(run.id),
+                    )
+                  }}
                 >
                   {isPromptExpanded ? '收起' : '展开'}
                 </Button>
@@ -326,6 +365,7 @@ function renderRunCard(
                     onToggle: onTogglePrompt,
                     showBatchDownload,
                     onDownloadBatchRun,
+                    onAssistantActionTrigger,
                   }),
                   children: (
                     <Space orientation="vertical" size={8} className="full-width">
@@ -355,14 +395,22 @@ function renderRunCard(
           ) : null}
           {hasFailed ? (
             <Space size={8} wrap>
-              <Button size="small" type="dashed" icon={<RetweetOutlined />} onClick={() => onRetryRun(run.id)}>
+              <Button
+                size="small"
+                type="dashed"
+                icon={<RetweetOutlined />}
+                className="assistant-action-btn"
+                onClick={(event) => {
+                  onAssistantActionTrigger?.(`run-${run.id}-retry-failed`, event, () => onRetryRun(run.id))
+                }}
+              >
                 重试失败项
               </Button>
             </Space>
           ) : null}
         </Space>
       </div>
-      {renderImages(rows, run, linkedRun, onOpenPreview, onDownloadSingleImage, imagePagination, compact)}
+      {renderImages(rows, run, linkedRun, onOpenPreview, onDownloadSingleImage, imagePagination, onAssistantActionTrigger, compact)}
     </Fragment>
   )
 }
@@ -608,6 +656,29 @@ function MessageListComponent(props: MessageListProps) {
     [onDownloadAllRun, onDownloadMessageImages],
   )
 
+  const triggerAssistantAction = useCallback<AssistantActionTrigger>((actionKey, event, action) => {
+    const target = event.currentTarget
+    if (!(target instanceof HTMLElement)) {
+      void Promise.resolve(action())
+      return
+    }
+
+    if (target.dataset.assistantActionAnimating === 'true') {
+      return
+    }
+
+    target.dataset.assistantActionAnimating = 'true'
+    target.dataset.assistantActionKey = actionKey
+    target.classList.add(ASSISTANT_ACTION_ANIMATING_CLASS)
+
+    window.setTimeout(() => {
+      target.classList.remove(ASSISTANT_ACTION_ANIMATING_CLASS)
+      delete target.dataset.assistantActionAnimating
+      delete target.dataset.assistantActionKey
+      void Promise.resolve(action())
+    }, ASSISTANT_ACTION_ANIMATION_MS)
+  }, [])
+
   if (!activeConversation || activeConversation.messages.length === 0) {
     return (
       <div className="empty-state">
@@ -685,10 +756,13 @@ function MessageListComponent(props: MessageListProps) {
                               <Button
                                 size="small"
                                 type="default"
+                                className="assistant-action-btn"
                                 disabled={!hasFailedImages || isRetryingAllFailed}
                                 loading={isRetryingAllFailed}
-                                onClick={() => {
-                                  void handleRetryAllFailed(message.id, runsForMessage)
+                                onClick={(event) => {
+                                  triggerAssistantAction(`message-${message.id}-retry-all-failed`, event, () => {
+                                    void handleRetryAllFailed(message.id, runsForMessage)
+                                  })
                                 }}
                               >
                                 重试所有失败项
@@ -696,15 +770,18 @@ function MessageListComponent(props: MessageListProps) {
                               <Button
                                 size="small"
                                 type="default"
+                                className="assistant-action-btn"
                                 icon={<DownloadOutlined />}
                                 disabled={!isAllImagesCompleted || !hasDownloadableImages || isDownloadingAllImages}
                                 loading={isDownloadingAllImages}
-                                onClick={() => {
-                                  void handleDownloadAllForMessage(
-                                    message.id,
-                                    runsForMessage.map((run) => run.id),
-                                    primaryRun.id,
-                                  )
+                                onClick={(event) => {
+                                  triggerAssistantAction(`message-${message.id}-download-all`, event, () => {
+                                    void handleDownloadAllForMessage(
+                                      message.id,
+                                      runsForMessage.map((run) => run.id),
+                                      primaryRun.id,
+                                    )
+                                  })
                                 }}
                               >
                                 下载全部
@@ -712,8 +789,11 @@ function MessageListComponent(props: MessageListProps) {
                               <Button
                                 size="small"
                                 type="primary"
+                                className="assistant-action-btn"
                                 icon={<ReloadOutlined />}
-                                onClick={() => onReplayRun(primaryRun.id)}
+                                onClick={(event) => {
+                                  triggerAssistantAction(`message-${message.id}-replay-primary`, event, () => onReplayRun(primaryRun.id))
+                                }}
                                 loading={isReplaying}
                                 disabled={isReplaying}
                               >
@@ -777,6 +857,7 @@ function MessageListComponent(props: MessageListProps) {
                           isDynamicBatch,
                           onDownloadBatchRun,
                           imagePagination,
+                          triggerAssistantAction,
                           isMultiSideView,
                         )
                       })
@@ -784,7 +865,13 @@ function MessageListComponent(props: MessageListProps) {
 
                   {message.role === 'assistant' && hasMoreRuns ? (
                     <div className="message-history-more">
-                      <Button size="small" onClick={() => handleLoadMoreRuns(message.id)}>
+                      <Button
+                        size="small"
+                        className="assistant-action-btn"
+                        onClick={(event) => {
+                          triggerAssistantAction(`message-${message.id}-load-more-runs`, event, () => handleLoadMoreRuns(message.id))
+                        }}
+                      >
                         {`加载更多 Run (${visibleRuns.length}/${totalRunCount})`}
                       </Button>
                     </div>
