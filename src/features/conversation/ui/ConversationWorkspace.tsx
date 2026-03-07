@@ -98,6 +98,9 @@ export function ConversationWorkspace() {
     setComposerInset((prev) => (prev === nextInset ? prev : nextInset))
   }, 80)
 
+  const controller = useConversationController()
+  const { queries, commands } = controller
+
   const {
     summaries,
     activeConversation,
@@ -127,6 +130,13 @@ export function ConversationWorkspace() {
     activeSettingsBySide,
     modelCatalog,
     channels,
+    isSendBlocked,
+    panelBatchError,
+    panelMismatchRowIds,
+    replayingRunIds,
+  } = queries
+
+  const {
     setDraft,
     appendDraftSourceImages,
     removeDraftSourceImage,
@@ -154,17 +164,13 @@ export function ConversationWorkspace() {
     setChannels,
     sendDraft,
     loadOlderMessages,
-    isSendBlocked,
-    panelBatchError,
-    panelMismatchRowIds,
     retryRun,
     replayRunAsNewMessage,
     downloadAllRunImages,
     downloadMessageRunImages,
     downloadSingleRunImage,
     downloadBatchRunImages,
-    replayingRunIds,
-  } = useConversationController()
+  } = commands
 
   const {
     isPreviewOpen,

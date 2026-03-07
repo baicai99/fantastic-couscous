@@ -10,6 +10,9 @@
 
 - 全局会话控制（最核心）
   - `src/hooks/useConversations.ts`
+  - `src/hooks/conversations/queries.ts`
+  - `src/hooks/conversations/commands.ts`
+  - `src/hooks/conversations/backgroundJobs.ts`
   - `src/hooks/conversations/useDraftSourceImages.ts`
   - `src/hooks/conversations/sendFlowUtils.ts`
   - `src/features/conversation/state/conversationState.ts`
@@ -22,6 +25,8 @@
 
 - 三栏主界面
   - `src/features/conversation/ui/ConversationWorkspace.tsx`
+  - `src/features/conversation/ui/ConversationControllerProvider.tsx`
+  - `src/features/conversation/ui/ConversationControllerContext.ts`
   - `src/components/sidebar/*`
   - `src/components/chat/*`
   - `src/components/settings/SettingsPanel.tsx`
@@ -72,6 +77,17 @@
 - `src/hooks`：跨组件复用逻辑。
 - `src/utils`：通用工具。
 - `src/types`：核心类型定义。
+
+## Controller 契约速记（P0-A）
+
+- `useConversations` 返回固定命名空间：
+  - `queries`：只读与派生（不可写）
+  - `commands`：所有写操作和动作入口
+  - `maintenance`：后台维护入口（当前含 `flushPendingPersistence`）
+- UI 层约定：
+  - 读状态：`controller.queries.*`
+  - 发动作：`controller.commands.*`
+  - 维护任务：`controller.maintenance.*`
 
 ## 关键约束
 

@@ -1,13 +1,40 @@
 # 解耦路线图（v1 落地记录）
 
-> 更新时间：2026-03-07  
+> 更新时间：2026-03-08  
 > 范围：`src/hooks/**`、`src/features/conversation/**`、`src/services/**`
 
 ## 目标
 
 - 降低 `useConversations` / `conversationDomain` / `openaiCompatibleAdapter` 等超大模块的职责耦合。
-- 保持外部行为与 `ConversationController` 返回 API 兼容，优先“内部解耦、外部不破”。
+- 在保证业务行为不变的前提下分阶段解耦；`P0-A` 允许 `ConversationController` 对外结构升级（平铺 -> 命名空间）。
 - 通过小步重构 + 可回滚节奏，降低一次性迁移风险。
+
+## 已落地（P0-A：Controller 分组）
+
+### 1) 控制器命名空间契约升级
+
+- `useConversations` 输出由平铺字段调整为：
+  - `queries`（只读态与派生）
+  - `commands`（写操作与动作）
+  - `maintenance`（后台维护入口）
+- 新增组合模块：
+  - `src/hooks/conversations/queries.ts`
+  - `src/hooks/conversations/commands.ts`
+  - `src/hooks/conversations/backgroundJobs.ts`
+- `ConversationWorkspace` 全量迁移到命名空间消费方式，不再依赖平铺字段。
+- `useConversations` 相关测试断言与动作调用同步迁移。
+
+### 2) 行为约束
+
+- 发送、重试、回放、恢复轮询、单图与批量下载语义保持不变。
+- 本批不引入新功能，不进入 `P0-B` 的 domain 真拆分。
+
+### 3) 验收
+
+- 改造前后均执行 `npm run test`：
+  - 历史失败维持为 2 条（`src/components/preview/ImagePreviewModal.test.tsx`）
+  - 无新增失败（失败集合不扩大）
+- 执行 `npm run build`：通过
 
 ## 已落地（Phase 1~3 核心切片）
 
@@ -54,8 +81,8 @@
 
 ## 后续待做（Phase 4+）
 
+- `P0-B`：将 `useConversations` 的发送/重试/回放/恢复主流程按 domain/application 边界继续下沉，减少 hook 内部实现耦合。
 - 进一步拆分 `SettingsPanel`（容器/展示 + `useChannelManagement`）。
 - 进一步拆分 `Composer`、`MessageList` 子模块（快捷指令/动作区/图片网格）。
 - 将 `conversationDomain.ts` 从“聚合 + 历史实现”收敛为纯 re-export（或删除冗余实现）。
 - 在 Provider 层补齐更多适配器的 contract tests（异常路径、超时、重试、resume 兼容）。
-

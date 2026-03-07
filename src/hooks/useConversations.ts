@@ -43,6 +43,9 @@ import {
 } from '../features/conversation/state/conversationState'
 import { trackDuration, startMetric } from '../features/performance/runtimeMetrics'
 import { useDraftSourceImages } from './conversations/useDraftSourceImages'
+import { createConversationControllerCommands } from './conversations/commands'
+import { createConversationControllerBackgroundJobs } from './conversations/backgroundJobs'
+import { createConversationControllerQueries } from './conversations/queries'
 import { createAntdConversationNotifier } from '../features/conversation/application/conversationNotifier'
 import {
   createConversationDownloadService,
@@ -2848,7 +2851,7 @@ export function useConversations() {
     setHistoryVisibleLimit((prev) => prev + MESSAGE_HISTORY_PAGE_SIZE)
   }
 
-  return {
+  const queries = createConversationControllerQueries({
     summaries: state.summaries,
     activeConversation,
     shouldConfirmCreateConversation: conversationHasActiveImageThreads(activeConversation),
@@ -2877,6 +2880,13 @@ export function useConversations() {
     activeSettingsBySide,
     modelCatalog,
     channels: state.channels,
+    isSendBlocked: state.draft.trim().length === 0 || isPanelBatchInvalid,
+    panelBatchError: isPanelBatchInvalid ? panelBatchValidation.error : '',
+    panelMismatchRowIds: panelBatchValidation.mismatchRowIds,
+    replayingRunIds,
+  })
+
+  const commands = createConversationControllerCommands({
     setDraft: actions.setDraft,
     appendDraftSourceImages,
     removeDraftSourceImage,
@@ -2904,10 +2914,6 @@ export function useConversations() {
     setChannels,
     sendDraft,
     loadOlderMessages,
-    flushPendingPersistence,
-    isSendBlocked: state.draft.trim().length === 0 || isPanelBatchInvalid,
-    panelBatchError: isPanelBatchInvalid ? panelBatchValidation.error : '',
-    panelMismatchRowIds: panelBatchValidation.mismatchRowIds,
     retryRun,
     editRunTemplate,
     replayRunAsNewMessage,
@@ -2915,6 +2921,15 @@ export function useConversations() {
     downloadSingleRunImage,
     downloadBatchRunImages,
     downloadMessageRunImages,
-    replayingRunIds,
+  })
+
+  const maintenance = createConversationControllerBackgroundJobs({
+    flushPendingPersistence,
+  })
+
+  return {
+    queries,
+    commands,
+    maintenance,
   }
 }

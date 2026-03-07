@@ -269,8 +269,8 @@ describe('useConversations', () => {
 
     await seedConversation({ conversation: settledConversation })
     const settledHook = renderHook(() => useConversations())
-    await waitFor(() => expect(settledHook.result.current.activeConversation?.id).toBe('c1'))
-    expect(settledHook.result.current.shouldConfirmCreateConversation).toBe(false)
+    await waitFor(() => expect(settledHook.result.current.queries.activeConversation?.id).toBe('c1'))
+    expect(settledHook.result.current.queries.shouldConfirmCreateConversation).toBe(false)
     settledHook.unmount()
 
     await resetStorage()
@@ -294,8 +294,8 @@ describe('useConversations', () => {
     }
     await seedConversation({ conversation: activeConversation })
     const activeHook = renderHook(() => useConversations())
-    await waitFor(() => expect(activeHook.result.current.activeConversation?.id).toBe('c2'))
-    expect(activeHook.result.current.shouldConfirmCreateConversation).toBe(true)
+    await waitFor(() => expect(activeHook.result.current.queries.activeConversation?.id).toBe('c2'))
+    expect(activeHook.result.current.queries.shouldConfirmCreateConversation).toBe(true)
   })
 
   it('keeps draft when creating a new conversation', async () => {
@@ -303,14 +303,14 @@ describe('useConversations', () => {
     const { result } = renderHook(() => useConversations())
 
     act(() => {
-      result.current.setDraft('do not clear me')
+      result.current.commands.setDraft('do not clear me')
     })
     act(() => {
-      result.current.createNewConversation()
+      result.current.commands.createNewConversation()
     })
 
-    expect(result.current.activeId).toBeNull()
-    expect(result.current.draft).toBe('do not clear me')
+    expect(result.current.queries.activeId).toBeNull()
+    expect(result.current.queries.draft).toBe('do not clear me')
   })
 
   it('keeps empty active conversation after refresh when history exists', async () => {
@@ -320,9 +320,9 @@ describe('useConversations', () => {
     const { useConversations } = await import('./useConversations')
     const { result } = renderHook(() => useConversations())
 
-    await waitFor(() => expect(result.current.summaries).toHaveLength(1))
-    expect(result.current.activeId).toBeNull()
-    expect(result.current.activeConversation).toBeNull()
+    await waitFor(() => expect(result.current.queries.summaries).toHaveLength(1))
+    expect(result.current.queries.activeId).toBeNull()
+    expect(result.current.queries.activeConversation).toBeNull()
   })
 
   it('keeps draft when switching conversations', async () => {
@@ -352,17 +352,17 @@ describe('useConversations', () => {
     const { useConversations } = await import('./useConversations')
     const { result } = renderHook(() => useConversations())
 
-    await waitFor(() => expect(result.current.activeId).toBe(conversationA.id))
+    await waitFor(() => expect(result.current.queries.activeId).toBe(conversationA.id))
 
     act(() => {
-      result.current.setDraft('persist when switch')
+      result.current.commands.setDraft('persist when switch')
     })
     act(() => {
-      result.current.switchConversation(conversationB.id)
+      result.current.commands.switchConversation(conversationB.id)
     })
 
-    await waitFor(() => expect(result.current.activeId).toBe(conversationB.id))
-    expect(result.current.draft).toBe('persist when switch')
+    await waitFor(() => expect(result.current.queries.activeId).toBe(conversationB.id))
+    expect(result.current.queries.draft).toBe('persist when switch')
   })
 
   it('keeps background generation running after close-and-new and applies late completion to the old conversation', async () => {
@@ -381,22 +381,22 @@ describe('useConversations', () => {
     const { result } = renderHook(() => useConversations())
 
     act(() => {
-      result.current.setDraft('draw a cat')
+      result.current.commands.setDraft('draw a cat')
     })
     act(() => {
-      void result.current.sendDraft()
+      void result.current.commands.sendDraft()
     })
 
-    await waitFor(() => expect(result.current.summaries).toHaveLength(1))
-    await waitFor(() => expect(result.current.shouldConfirmCreateConversation).toBe(true))
+    await waitFor(() => expect(result.current.queries.summaries).toHaveLength(1))
+    await waitFor(() => expect(result.current.queries.shouldConfirmCreateConversation).toBe(true))
 
-    const conversationId = result.current.summaries[0]!.id
+    const conversationId = result.current.queries.summaries[0]!.id
     act(() => {
-      result.current.createNewConversation()
+      result.current.commands.createNewConversation()
     })
 
-    expect(result.current.activeId).toBeNull()
-    expect(result.current.summaries.map((item) => item.id)).toContain(conversationId)
+    expect(result.current.queries.activeId).toBeNull()
+    expect(result.current.queries.summaries.map((item) => item.id)).toContain(conversationId)
 
     act(() => {
       resolveRun({
@@ -447,9 +447,9 @@ describe('useConversations', () => {
       config?.onClick?.()
     })
 
-    await waitFor(() => expect(result.current.activeId).toBe(conversationId))
+    await waitFor(() => expect(result.current.queries.activeId).toBe(conversationId))
     await waitFor(() =>
-      expect(result.current.activeConversation?.messages[1]?.runs?.[0]?.images[0]).toMatchObject({
+      expect(result.current.queries.activeConversation?.messages[1]?.runs?.[0]?.images[0]).toMatchObject({
         status: 'success',
         threadState: 'settled',
         fileRef: '/late.png',
@@ -486,11 +486,11 @@ describe('useConversations', () => {
 
     const { result } = renderHook(() => useConversations())
     act(() => {
-      result.current.setDraft('draw a failed cat')
+      result.current.commands.setDraft('draw a failed cat')
     })
 
     await act(async () => {
-      await result.current.sendDraft()
+      await result.current.commands.sendDraft()
     })
 
     await waitFor(() =>
@@ -584,7 +584,7 @@ describe('useConversations', () => {
 
     const { result } = renderHook(() => useConversations())
     await waitFor(() =>
-      expect(result.current.activeConversation?.messages[0]?.runs?.[0]?.images[0]).toMatchObject({
+      expect(result.current.queries.activeConversation?.messages[0]?.runs?.[0]?.images[0]).toMatchObject({
         status: 'pending',
         threadState: 'active',
       }),
@@ -597,7 +597,7 @@ describe('useConversations', () => {
       await Promise.resolve()
     })
 
-    expect(result.current.activeConversation?.messages[0]?.runs?.[0]?.images[0]).toMatchObject({
+    expect(result.current.queries.activeConversation?.messages[0]?.runs?.[0]?.images[0]).toMatchObject({
       status: 'pending',
       threadState: 'active',
     })
@@ -677,7 +677,7 @@ describe('useConversations', () => {
 
     const { result } = renderHook(() => useConversations())
     await waitFor(() =>
-      expect(result.current.activeConversation?.messages[0]?.runs?.[0]?.images[0]).toMatchObject({
+      expect(result.current.queries.activeConversation?.messages[0]?.runs?.[0]?.images[0]).toMatchObject({
         status: 'failed',
         threadState: 'settled',
         error: '图片生成超时（超过 5 分钟）',
@@ -694,22 +694,22 @@ describe('useConversations', () => {
     })
     const { useConversations } = await import('./useConversations')
     const { result } = renderHook(() => useConversations())
-    const initialScrollTrigger = result.current.sendScrollTrigger
+    const initialScrollTrigger = result.current.queries.sendScrollTrigger
 
     act(() => {
-      result.current.setDraft('@gemini-2.5-flash-image')
+      result.current.commands.setDraft('@gemini-2.5-flash-image')
     })
     await act(async () => {
-      await result.current.sendDraft()
+      await result.current.commands.sendDraft()
     })
 
-    await waitFor(() => expect(result.current.activeConversation?.messages).toHaveLength(2))
-    expect(result.current.activeConversation?.messages[0]?.content).toBe('@gemini-2.5-flash-image')
-    expect(result.current.activeConversation?.messages[1]?.content).toContain('模型已切换为 gemini-2.5-flash-image')
-    expect(result.current.activeConversation?.messages[1]?.runs ?? []).toHaveLength(0)
-    expect(result.current.activeSettingsBySide.single.modelId).toBe('gemini-2.5-flash-image')
-    expect(result.current.draft).toBe('')
-    expect(result.current.sendScrollTrigger).toBe(initialScrollTrigger + 1)
+    await waitFor(() => expect(result.current.queries.activeConversation?.messages).toHaveLength(2))
+    expect(result.current.queries.activeConversation?.messages[0]?.content).toBe('@gemini-2.5-flash-image')
+    expect(result.current.queries.activeConversation?.messages[1]?.content).toContain('模型已切换为 gemini-2.5-flash-image')
+    expect(result.current.queries.activeConversation?.messages[1]?.runs ?? []).toHaveLength(0)
+    expect(result.current.queries.activeSettingsBySide.single.modelId).toBe('gemini-2.5-flash-image')
+    expect(result.current.queries.draft).toBe('')
+    expect(result.current.queries.sendScrollTrigger).toBe(initialScrollTrigger + 1)
     expect(messageSuccessSpy).toHaveBeenCalled()
   })
 
@@ -749,20 +749,20 @@ describe('useConversations', () => {
     })
     const { useConversations } = await import('./useConversations')
     const { result } = renderHook(() => useConversations())
-    const previousModelId = result.current.activeSettingsBySide.single.modelId
+    const previousModelId = result.current.queries.activeSettingsBySide.single.modelId
 
     act(() => {
-      result.current.setDraft('@gpt-image-1 draw a cat')
+      result.current.commands.setDraft('@gpt-image-1 draw a cat')
     })
     await act(async () => {
-      await result.current.sendDraft()
+      await result.current.commands.sendDraft()
     })
 
-    await waitFor(() => expect(result.current.activeConversation?.messages).toHaveLength(2))
-    expect(result.current.activeConversation?.messages[0]?.content).toBe('@gpt-image-1 draw a cat')
-    expect(result.current.activeConversation?.messages[1]?.content).toContain('已临时切换到 gpt-image-1')
-    expect(result.current.activeConversation?.messages[1]?.runs?.[0]?.modelId).toBe('gpt-image-1')
-    expect(result.current.activeSettingsBySide.single.modelId).toBe(previousModelId)
+    await waitFor(() => expect(result.current.queries.activeConversation?.messages).toHaveLength(2))
+    expect(result.current.queries.activeConversation?.messages[0]?.content).toBe('@gpt-image-1 draw a cat')
+    expect(result.current.queries.activeConversation?.messages[1]?.content).toContain('已临时切换到 gpt-image-1')
+    expect(result.current.queries.activeConversation?.messages[1]?.runs?.[0]?.modelId).toBe('gpt-image-1')
+    expect(result.current.queries.activeSettingsBySide.single.modelId).toBe(previousModelId)
     expect(messageSuccessSpy).toHaveBeenCalledWith('本次已临时切换到 gpt-image-1')
   })
 
@@ -784,13 +784,13 @@ describe('useConversations', () => {
 
     const { useConversations } = await import('./useConversations')
     const { result } = renderHook(() => useConversations())
-    const previousAspectRatio = result.current.activeSettingsBySide.single.aspectRatio
+    const previousAspectRatio = result.current.queries.activeSettingsBySide.single.aspectRatio
 
     act(() => {
-      result.current.setDraft('portrait photo --ar 16:9')
+      result.current.commands.setDraft('portrait photo --ar 16:9')
     })
     await act(async () => {
-      await result.current.sendDraft()
+      await result.current.commands.sendDraft()
     })
 
     await waitFor(() => expect(mockCreateRun).toHaveBeenCalledTimes(1))
@@ -799,7 +799,7 @@ describe('useConversations', () => {
     expect(callInput.settings.aspectRatio).toBe('16:9')
     expect(callInput.paramsSnapshot.size).toBe('1344x768')
     expect(callInput.finalPrompt).toBe('portrait photo')
-    expect(result.current.activeSettingsBySide.single.aspectRatio).toBe(previousAspectRatio)
+    expect(result.current.queries.activeSettingsBySide.single.aspectRatio).toBe(previousAspectRatio)
   })
 
   it('applies --size as one-shot override and strips command from final prompt', async () => {
@@ -820,13 +820,13 @@ describe('useConversations', () => {
 
     const { useConversations } = await import('./useConversations')
     const { result } = renderHook(() => useConversations())
-    const previousResolution = result.current.activeSettingsBySide.single.resolution
+    const previousResolution = result.current.queries.activeSettingsBySide.single.resolution
 
     act(() => {
-      result.current.setDraft('poster concept --size 4K')
+      result.current.commands.setDraft('poster concept --size 4K')
     })
     await act(async () => {
-      await result.current.sendDraft()
+      await result.current.commands.sendDraft()
     })
 
     await waitFor(() => expect(mockCreateRun).toHaveBeenCalledTimes(1))
@@ -835,7 +835,7 @@ describe('useConversations', () => {
     expect(callInput.settings.resolution).toBe('4K')
     expect(callInput.paramsSnapshot.size).toBe('4096x4096')
     expect(callInput.finalPrompt).toBe('poster concept')
-    expect(result.current.activeSettingsBySide.single.resolution).toBe(previousResolution)
+    expect(result.current.queries.activeSettingsBySide.single.resolution).toBe(previousResolution)
   })
 
   it('applies --wh as one-shot custom size override', async () => {
@@ -858,10 +858,10 @@ describe('useConversations', () => {
     const { result } = renderHook(() => useConversations())
 
     act(() => {
-      result.current.setDraft('draw skyline --wh 640x960')
+      result.current.commands.setDraft('draw skyline --wh 640x960')
     })
     await act(async () => {
-      await result.current.sendDraft()
+      await result.current.commands.sendDraft()
     })
 
     await waitFor(() => expect(mockCreateRun).toHaveBeenCalledTimes(1))
@@ -878,14 +878,14 @@ describe('useConversations', () => {
     const { result } = renderHook(() => useConversations())
 
     act(() => {
-      result.current.setDraft('draw city --size 2K --wh 1024x1536')
+      result.current.commands.setDraft('draw city --size 2K --wh 1024x1536')
     })
     await act(async () => {
-      await result.current.sendDraft()
+      await result.current.commands.sendDraft()
     })
 
     expect(mockCreateRun).not.toHaveBeenCalled()
-    expect(result.current.sendError).toContain('不能同时使用 --size 和 --wh')
+    expect(result.current.queries.sendError).toContain('不能同时使用 --size 和 --wh')
   })
 
   it('applies @model with --wh together and keeps command text in user message', async () => {
@@ -910,13 +910,13 @@ describe('useConversations', () => {
 
     const { useConversations } = await import('./useConversations')
     const { result } = renderHook(() => useConversations())
-    const previousModelId = result.current.activeSettingsBySide.single.modelId
+    const previousModelId = result.current.queries.activeSettingsBySide.single.modelId
 
     act(() => {
-      result.current.setDraft('@gpt-image-1 draw a cat --wh 640x960')
+      result.current.commands.setDraft('@gpt-image-1 draw a cat --wh 640x960')
     })
     await act(async () => {
-      await result.current.sendDraft()
+      await result.current.commands.sendDraft()
     })
 
     await waitFor(() => expect(mockCreateRun).toHaveBeenCalledTimes(1))
@@ -926,8 +926,8 @@ describe('useConversations', () => {
     expect(callInput.settings.customWidth).toBe(640)
     expect(callInput.settings.customHeight).toBe(960)
     expect(callInput.finalPrompt).toBe('draw a cat')
-    expect(result.current.activeConversation?.messages[0]?.content).toBe('@gpt-image-1 draw a cat --wh 640x960')
-    expect(result.current.activeSettingsBySide.single.modelId).toBe(previousModelId)
+    expect(result.current.queries.activeConversation?.messages[0]?.content).toBe('@gpt-image-1 draw a cat --wh 640x960')
+    expect(result.current.queries.activeSettingsBySide.single.modelId).toBe(previousModelId)
     expect(messageSuccessSpy).toHaveBeenCalledWith('本次已临时切换到 gpt-image-1')
   })
 
@@ -951,11 +951,11 @@ describe('useConversations', () => {
     const { result } = renderHook(() => useConversations())
 
     act(() => {
-      result.current.updateSideMode('multi')
-      result.current.setDraft('wide shot --ar 16:9')
+      result.current.commands.updateSideMode('multi')
+      result.current.commands.setDraft('wide shot --ar 16:9')
     })
     await act(async () => {
-      await result.current.sendDraft()
+      await result.current.commands.sendDraft()
     })
 
     await waitFor(() => expect(mockCreateRun).toHaveBeenCalledTimes(2))
@@ -987,21 +987,21 @@ describe('useConversations', () => {
     const { result } = renderHook(() => useConversations())
 
     act(() => {
-      result.current.setDraft('draw a cat')
+      result.current.commands.setDraft('draw a cat')
     })
     await act(async () => {
-      await result.current.sendDraft()
+      await result.current.commands.sendDraft()
     })
 
-    await waitFor(() => expect(result.current.activeConversation?.messages).toHaveLength(2))
+    await waitFor(() => expect(result.current.queries.activeConversation?.messages).toHaveLength(2))
     expect(mockCreateRun).not.toHaveBeenCalled()
-    expect(result.current.activeConversation?.messages[0]?.content).toBe('draw a cat')
-    expect(result.current.activeConversation?.title).toBe('draw a cat')
-    expect(result.current.activeConversation?.messages[1]?.content).toContain('当前还没有选择模型')
-    expect(result.current.activeConversation?.messages[1]?.actions).toEqual([
+    expect(result.current.queries.activeConversation?.messages[0]?.content).toBe('draw a cat')
+    expect(result.current.queries.activeConversation?.title).toBe('draw a cat')
+    expect(result.current.queries.activeConversation?.messages[1]?.content).toContain('当前还没有选择模型')
+    expect(result.current.queries.activeConversation?.messages[1]?.actions).toEqual([
       expect.objectContaining({ type: 'select-model', label: '选择模型' }),
     ])
-    expect(result.current.draft).toBe('')
+    expect(result.current.queries.draft).toBe('')
   })
 
   it('keeps new conversation title unchanged when auto-rename is disabled', async () => {
@@ -1024,26 +1024,26 @@ describe('useConversations', () => {
     const first = renderHook(() => useConversations())
 
     act(() => {
-      first.result.current.setAutoRenameConversationTitle(false)
-      first.result.current.setDraft('this title should not be auto renamed')
+      first.result.current.commands.setAutoRenameConversationTitle(false)
+      first.result.current.commands.setDraft('this title should not be auto renamed')
     })
     await act(async () => {
-      await first.result.current.sendDraft()
+      await first.result.current.commands.sendDraft()
     })
 
-    await waitFor(() => expect(first.result.current.activeConversation?.messages).toHaveLength(2))
-    const createdConversationId = first.result.current.activeConversation?.id
+    await waitFor(() => expect(first.result.current.queries.activeConversation?.messages).toHaveLength(2))
+    const createdConversationId = first.result.current.queries.activeConversation?.id
     expect(createdConversationId).toBeTruthy()
-    expect(first.result.current.autoRenameConversationTitle).toBe(false)
-    expect(first.result.current.activeConversation?.title).toBe('未命名')
+    expect(first.result.current.queries.autoRenameConversationTitle).toBe(false)
+    expect(first.result.current.queries.activeConversation?.title).toBe('未命名')
 
     first.unmount()
     const second = renderHook(() => useConversations())
     await waitFor(() =>
-      expect(second.result.current.summaries.some((item) => item.id === createdConversationId)).toBe(true),
+      expect(second.result.current.queries.summaries.some((item) => item.id === createdConversationId)).toBe(true),
     )
-    expect(second.result.current.autoRenameConversationTitle).toBe(false)
-    expect(second.result.current.summaries.find((item) => item.id === createdConversationId)?.title).toBe('未命名')
+    expect(second.result.current.queries.autoRenameConversationTitle).toBe(false)
+    expect(second.result.current.queries.summaries.find((item) => item.id === createdConversationId)?.title).toBe('未命名')
   })
 
   it('appends assistant guidance when model exists but api is not configured', async () => {
@@ -1066,19 +1066,19 @@ describe('useConversations', () => {
     const { result } = renderHook(() => useConversations())
 
     act(() => {
-      result.current.setDraft('draw a dog')
+      result.current.commands.setDraft('draw a dog')
     })
     await act(async () => {
-      await result.current.sendDraft()
+      await result.current.commands.sendDraft()
     })
 
-    await waitFor(() => expect(result.current.activeConversation?.messages).toHaveLength(2))
+    await waitFor(() => expect(result.current.queries.activeConversation?.messages).toHaveLength(2))
     expect(mockCreateRun).not.toHaveBeenCalled()
-    expect(result.current.activeConversation?.messages[1]?.content).toContain('还没有可用的 API 配置')
-    expect(result.current.activeConversation?.messages[1]?.actions).toEqual([
+    expect(result.current.queries.activeConversation?.messages[1]?.content).toContain('还没有可用的 API 配置')
+    expect(result.current.queries.activeConversation?.messages[1]?.actions).toEqual([
       expect.objectContaining({ type: 'add-api', label: '添加 API' }),
     ])
-    expect(result.current.draft).toBe('')
+    expect(result.current.queries.draft).toBe('')
   })
 
   it('sends successfully after selecting api channel in a fresh conversation', async () => {
@@ -1123,16 +1123,16 @@ describe('useConversations', () => {
     const { result } = renderHook(() => useConversations())
 
     act(() => {
-      result.current.setDraft('draw with selected api')
+      result.current.commands.setDraft('draw with selected api')
     })
 
     await act(async () => {
-      result.current.updateSideSettings('single', { channelId: 'ch' })
-      await result.current.sendDraft()
+      result.current.commands.updateSideSettings('single', { channelId: 'ch' })
+      await result.current.commands.sendDraft()
     })
 
     await waitFor(() => expect(mockCreateRun).toHaveBeenCalledTimes(1))
-    expect(result.current.activeConversation?.messages[1]?.content).not.toContain('还没有可用的 API 配置')
+    expect(result.current.queries.activeConversation?.messages[1]?.content).not.toContain('还没有可用的 API 配置')
   })
 
   it('clears draft source images right after message bubble is appended', async () => {
@@ -1165,25 +1165,25 @@ describe('useConversations', () => {
     const file = new File(['ref-image'], 'ref.png', { type: 'image/png' })
 
     act(() => {
-      result.current.appendDraftSourceImages([file])
-      result.current.setDraft('draw a cat')
+      result.current.commands.appendDraftSourceImages([file])
+      result.current.commands.setDraft('draw a cat')
     })
-    expect(result.current.draftSourceImages).toHaveLength(1)
+    expect(result.current.queries.draftSourceImages).toHaveLength(1)
 
     act(() => {
-      void result.current.sendDraft()
+      void result.current.commands.sendDraft()
     })
 
-    await waitFor(() => expect(result.current.activeConversation?.messages).toHaveLength(2))
-    expect(result.current.draftSourceImages).toHaveLength(0)
-    expect(result.current.activeConversation?.messages[0]?.sourceImages).toHaveLength(1)
+    await waitFor(() => expect(result.current.queries.activeConversation?.messages).toHaveLength(2))
+    expect(result.current.queries.draftSourceImages).toHaveLength(0)
+    expect(result.current.queries.activeConversation?.messages[0]?.sourceImages).toHaveLength(1)
 
     act(() => {
       resolveRun()
     })
 
     await waitFor(() =>
-      expect(result.current.activeConversation?.messages[1]?.runs?.[0]?.images[0]).toMatchObject({
+      expect(result.current.queries.activeConversation?.messages[1]?.runs?.[0]?.images[0]).toMatchObject({
         status: 'success',
         threadState: 'settled',
       }),
@@ -1208,15 +1208,15 @@ describe('useConversations', () => {
     const { result } = renderHook(() => useConversations())
 
     act(() => {
-      result.current.setDraft('介绍一下你自己')
+      result.current.commands.setDraft('介绍一下你自己')
     })
 
     act(() => {
-      void result.current.sendDraft()
+      void result.current.commands.sendDraft()
     })
 
     await waitFor(() => {
-      const assistant = result.current.activeConversation?.messages[1]
+      const assistant = result.current.queries.activeConversation?.messages[1]
       expect(assistant?.role).toBe('assistant')
       expect(assistant?.content).toBe('你好，我是流式回复。')
       expect(assistant?.runs ?? []).toHaveLength(0)
@@ -1231,15 +1231,15 @@ describe('useConversations', () => {
     const first = renderHook(() => useConversations())
 
     act(() => {
-      first.result.current.setFavoriteModelIds(['gpt-image-1', 'gemini-2.5-flash-image'])
+      first.result.current.commands.setFavoriteModelIds(['gpt-image-1', 'gemini-2.5-flash-image'])
     })
 
-    expect(first.result.current.favoriteModelIds).toEqual(['gpt-image-1', 'gemini-2.5-flash-image'])
+    expect(first.result.current.queries.favoriteModelIds).toEqual(['gpt-image-1', 'gemini-2.5-flash-image'])
     first.unmount()
 
     const second = renderHook(() => useConversations())
     await waitFor(() => {
-      expect(second.result.current.favoriteModelIds).toEqual(['gpt-image-1', 'gemini-2.5-flash-image'])
+      expect(second.result.current.queries.favoriteModelIds).toEqual(['gpt-image-1', 'gemini-2.5-flash-image'])
     })
   })
 
@@ -1278,17 +1278,17 @@ describe('useConversations', () => {
     const first = renderHook(() => useConversations())
 
     act(() => {
-      first.result.current.renameConversation('rename-c1', '  新标题  ')
+      first.result.current.commands.renameConversation('rename-c1', '  新标题  ')
     })
 
     await waitFor(() => {
-      expect(first.result.current.summaries.find((item) => item.id === 'rename-c1')?.title).toBe('新标题')
+      expect(first.result.current.queries.summaries.find((item) => item.id === 'rename-c1')?.title).toBe('新标题')
     })
     first.unmount()
 
     const second = renderHook(() => useConversations())
     await waitFor(() => {
-      expect(second.result.current.summaries.find((item) => item.id === 'rename-c1')?.title).toBe('新标题')
+      expect(second.result.current.queries.summaries.find((item) => item.id === 'rename-c1')?.title).toBe('新标题')
     })
   })
 
@@ -1349,18 +1349,18 @@ describe('useConversations', () => {
     const first = renderHook(() => useConversations())
 
     act(() => {
-      first.result.current.togglePinConversation('pin-c1')
+      first.result.current.commands.togglePinConversation('pin-c1')
     })
     await waitFor(() => {
-      expect(first.result.current.summaries[0]?.id).toBe('pin-c1')
-      expect(first.result.current.summaries[0]?.pinnedAt).toBeTruthy()
+      expect(first.result.current.queries.summaries[0]?.id).toBe('pin-c1')
+      expect(first.result.current.queries.summaries[0]?.pinnedAt).toBeTruthy()
     })
     first.unmount()
 
     const second = renderHook(() => useConversations())
     await waitFor(() => {
-      expect(second.result.current.summaries[0]?.id).toBe('pin-c1')
-      expect(second.result.current.summaries[0]?.pinnedAt).toBeTruthy()
+      expect(second.result.current.queries.summaries[0]?.id).toBe('pin-c1')
+      expect(second.result.current.queries.summaries[0]?.pinnedAt).toBeTruthy()
     })
   })
 })
