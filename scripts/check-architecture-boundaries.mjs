@@ -9,7 +9,7 @@ const __dirname = dirname(__filename)
 const repoRoot = resolve(__dirname, '..')
 
 function listSourceFiles() {
-  const output = execSync('rg --files src/features/conversation -g "*.ts" -g "*.tsx"', {
+  const output = execSync('rg --files src/features/conversation src/hooks -g "*.ts" -g "*.tsx"', {
     cwd: repoRoot,
     encoding: 'utf8',
   })
@@ -34,6 +34,14 @@ function isDomainFile(pathValue) {
 
 function isApplicationFile(pathValue) {
   return normalizePath(pathValue).startsWith('src/features/conversation/application/')
+}
+
+function isUseCaseFile(pathValue) {
+  return normalizePath(pathValue).startsWith('src/features/conversation/application/useCases/')
+}
+
+function isHooksFile(pathValue) {
+  return normalizePath(pathValue).startsWith('src/hooks/')
 }
 
 function toViolation(file, importPath, reason) {
@@ -63,6 +71,31 @@ function checkApplicationBoundary(importPath) {
   return null
 }
 
+function checkHooksBoundary(importPath) {
+  if (
+    importPath.includes('/components/') ||
+    importPath.startsWith('../components/') ||
+    importPath.startsWith('./components/')
+  ) {
+    return 'hooks must not depend on components layer'
+  }
+  return null
+}
+
+function checkUseCaseImplementation(file, content) {
+  if (!isUseCaseFile(file)) {
+    return null
+  }
+  const compact = content.replace(/\s+/g, ' ').trim()
+  if (compact.includes('return input')) {
+    return 'useCases must not return input directly (pure passthrough)'
+  }
+  if (/return\s*\{[^}]*:\s*deps\.[A-Za-z0-9_]+[^}]*\}/.test(compact)) {
+    return 'useCases must not map methods directly to deps.* without behavior boundary'
+  }
+  return null
+}
+
 function main() {
   const files = listSourceFiles()
   const violations = []
@@ -88,6 +121,17 @@ function main() {
           violations.push(toViolation(file, importPath, reason))
         }
       }
+      if (isHooksFile(file)) {
+        const reason = checkHooksBoundary(importPath)
+        if (reason) {
+          violations.push(toViolation(file, importPath, reason))
+        }
+      }
+    }
+
+    const useCaseReason = checkUseCaseImplementation(file, content)
+    if (useCaseReason) {
+      violations.push(toViolation(file, '(self)', useCaseReason))
     }
   }
 

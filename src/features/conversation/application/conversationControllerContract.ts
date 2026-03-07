@@ -130,7 +130,7 @@ export interface ConversationReadModel {
   isSendBlocked: boolean
   panelBatchError: string
   panelMismatchRowIds: string[]
-  replayingRunIds: Set<string>
+  replayingRunIds: string[]
 }
 
 export type ConversationControllerResult<ReadModel> =

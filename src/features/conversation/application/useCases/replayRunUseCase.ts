@@ -6,6 +6,8 @@ export function createReplayRunUseCase(deps: {
   replayRunAsNewMessage: (runId: string) => Promise<void>
 }): ReplayRunUseCase {
   return {
-    execute: deps.replayRunAsNewMessage,
+    execute: async (runId: string) => {
+      await deps.replayRunAsNewMessage(runId)
+    },
   }
 }

@@ -31,5 +31,32 @@ export interface ConversationLifecycleUseCase {
 }
 
 export function createConversationLifecycleUseCase(input: ConversationLifecycleUseCase): ConversationLifecycleUseCase {
-  return input
+  return {
+    setDraft: (value) => input.setDraft(value),
+    appendDraftSourceImages: (files) => input.appendDraftSourceImages(files),
+    removeDraftSourceImage: (imageId) => input.removeDraftSourceImage(imageId),
+    clearDraftSourceImages: () => input.clearDraftSourceImages(),
+    setShowAdvancedVariables: (value) => input.setShowAdvancedVariables(value),
+    setDynamicPromptEnabled: (value) => input.setDynamicPromptEnabled(value),
+    setAutoRenameConversationTitle: (value) => input.setAutoRenameConversationTitle(value),
+    setPanelValueFormat: (value) => input.setPanelValueFormat(value),
+    setPanelVariables: (value) => input.setPanelVariables(value),
+    setFavoriteModelIds: (value) => input.setFavoriteModelIds(value),
+    setRunConcurrency: (value) => input.setRunConcurrency(value),
+    createNewConversation: () => input.createNewConversation(),
+    clearAllConversations: () => input.clearAllConversations(),
+    removeConversation: (conversationId) => input.removeConversation(conversationId),
+    renameConversation: (conversationId, title) => input.renameConversation(conversationId, title),
+    togglePinConversation: (conversationId) => input.togglePinConversation(conversationId),
+    switchConversation: (conversationId) => input.switchConversation(conversationId),
+    updateSideMode: (mode) => input.updateSideMode(mode),
+    updateSideCount: (count) => input.updateSideCount(count),
+    updateSideSettings: (side, patch) => input.updateSideSettings(side, patch),
+    setGenerationMode: (mode) => input.setGenerationMode(mode),
+    setSideModel: (side, modelId) => input.setSideModel(side, modelId),
+    applyModelShortcut: (modelId) => input.applyModelShortcut(modelId),
+    setSideModelParam: (side, paramKey, value) => input.setSideModelParam(side, paramKey, value),
+    setChannels: (channels) => input.setChannels(channels),
+    loadOlderMessages: () => input.loadOlderMessages(),
+  }
 }

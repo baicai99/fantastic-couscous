@@ -6,6 +6,8 @@ export function createResumePendingUseCase(deps: {
   flushPendingPersistence: () => Promise<void>
 }): ResumePendingUseCase {
   return {
-    execute: deps.flushPendingPersistence,
+    execute: async () => {
+      await deps.flushPendingPersistence()
+    },
   }
 }

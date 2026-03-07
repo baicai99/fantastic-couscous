@@ -12,9 +12,17 @@ export function createDownloadRunsUseCase(deps: {
   downloadMessageRunImages: (runIds: string[]) => Promise<void>
 }): DownloadRunsUseCase {
   return {
-    downloadAll: deps.downloadAllRunImages,
-    downloadSingle: deps.downloadSingleRunImage,
-    downloadBatch: deps.downloadBatchRunImages,
-    downloadMessage: deps.downloadMessageRunImages,
+    downloadAll: (runId: string) => {
+      deps.downloadAllRunImages(runId)
+    },
+    downloadSingle: (runId: string, imageId: string) => {
+      deps.downloadSingleRunImage(runId, imageId)
+    },
+    downloadBatch: (runId: string) => {
+      deps.downloadBatchRunImages(runId)
+    },
+    downloadMessage: async (runIds: string[]) => {
+      await deps.downloadMessageRunImages(runIds)
+    },
   }
 }

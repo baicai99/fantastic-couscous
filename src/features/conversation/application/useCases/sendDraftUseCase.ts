@@ -6,6 +6,8 @@ export function createSendDraftUseCase(deps: {
   sendDraft: () => Promise<void>
 }): SendDraftUseCase {
   return {
-    execute: deps.sendDraft,
+    execute: async () => {
+      await deps.sendDraft()
+    },
   }
 }

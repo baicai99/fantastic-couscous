@@ -1,26 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { streamTextByProvider } from '../services/providerGateway'
 import { getModelCatalogFromChannels } from '../services/modelCatalog'
-import { getAspectRatioOptions } from '../services/imageSizing'
 import type {
-  ApiChannel,
   Conversation,
-  MessageAction,
   ConversationSummary,
-  Message,
-  ModelSpec,
   Run,
-  RunSourceImageRef,
   Side,
   SideMode,
   SingleSideSettings,
 } from '../types/chat'
-import { createConversation, makeId, summarizePromptAsTitle, toSummary } from '../utils/chat'
-import { buildImageFileName } from '../utils/fileName'
-import { isDownloadableImageRef, resolveImageSourceForDownload } from '../services/imageRef'
+import { makeId } from '../utils/chat'
 import {
   clearImageTasks,
-  loadImageTasks,
   makeImageTaskId,
   removeImageTasksForConversation,
   replaceImageTasksForConversation,
@@ -31,9 +21,7 @@ import { buildPanelVariableBatches } from '../features/conversation/domain/panel
 import {
   getMultiSideIds,
   normalizeConversation,
-  normalizeSettingsBySide,
 } from '../features/conversation/domain/settingsNormalization'
-import { inferModelShortcutTokens } from '../features/conversation/domain/modelShortcuts'
 import type { PanelValueFormat, PanelVariableRow } from '../features/conversation/domain/types'
 import { createConversationRepository } from '../features/conversation/infra/conversationRepository'
 import {
@@ -44,442 +32,31 @@ import {
 import { trackDuration, startMetric } from '../features/performance/runtimeMetrics'
 import { useDraftSourceImages } from './conversations/useDraftSourceImages'
 import { createAntdConversationNotifier } from '../features/conversation/ui/antdConversationNotifier'
-import {
-  createConversationDownloadService,
-  type BulkDownloadItem,
-} from '../features/conversation/application/conversationDownloadService'
+import { createConversationDownloadService } from '../features/conversation/application/conversationDownloadService'
 import { createConversationTaskResumeService } from '../features/conversation/application/conversationTaskResumeService'
-import { classifyFailure } from '../features/conversation/domain/failureClassifier'
-import { buildTextRequestMessages, resolveSendGenerationMode } from './conversations/sendFlowUtils'
-
-const PROGRESS_PERSIST_DEBOUNCE_MS = 250
-const GLOBAL_RESUME_POLL_VISIBLE_MS = 5_000
-const GLOBAL_RESUME_POLL_HIDDEN_MS = 20_000
-const RESUME_POLL_INTERVAL_MS = 5_000
-const RESUME_RETRY_COOLDOWN_MS = 4_000
-const IMAGE_PENDING_TIMEOUT_MS = 5 * 60_000
-const MESSAGE_HISTORY_INITIAL_LIMIT = 100
-const MESSAGE_HISTORY_PAGE_SIZE = 50
-const MAX_IN_MEMORY_CONVERSATIONS = 5
-const ARCHIVE_ILLEGAL_FILE_CHAR_PATTERN = /[<>:"/\\|?*\x00-\x1F]/g
-const ARCHIVE_TRAILING_DOT_SPACE_PATTERN = /[.\s]+$/g
-const ONE_SHOT_CUSTOM_SIZE_MIN = 256
-const ONE_SHOT_CUSTOM_SIZE_MAX = 8192
-const ONE_SHOT_SIZE_TIER_SET = new Set(['0.5K', '1K', '2K', '4K'])
-const ONE_SHOT_ASPECT_RATIO_SET = new Set(getAspectRatioOptions())
-const ONE_SHOT_COMMAND_PATTERN = /(^|[\t \n])(--ar|--size|--wh)\s+([^\t \n]+)/gi
-
-interface OneShotSizeOverrides {
-  mode: 'preset' | 'custom'
-  aspectRatio?: string
-  resolution?: string
-  customWidth?: number
-  customHeight?: number
-}
-
-interface OneShotSizeCommandParseResult {
-  cleanedPrompt: string
-  overrides: OneShotSizeOverrides | null
-  error?: string
-}
-
-function toEpoch(value: string | null | undefined): number {
-  if (typeof value !== 'string' || value.trim().length === 0) {
-    return 0
-  }
-  const epoch = Date.parse(value)
-  return Number.isFinite(epoch) ? epoch : 0
-}
-
-function getConversationLastMessageEpoch(conversation: Conversation | undefined): number {
-  if (!conversation) {
-    return 0
-  }
-
-  const lastMessageEpoch = conversation.messages.reduce((maxEpoch, message) => {
-    const messageEpoch = toEpoch(message.createdAt)
-    return messageEpoch > maxEpoch ? messageEpoch : maxEpoch
-  }, 0)
-  if (lastMessageEpoch > 0) {
-    return lastMessageEpoch
-  }
-  return toEpoch(conversation.updatedAt)
-}
-
-function hasConfiguredApiChannel(channels: ApiChannel[]): boolean {
-  return channels.some((channel) => channel.baseUrl.trim() && channel.apiKey.trim())
-}
-
-function buildSendBlockedAssistantActions(kind: 'missing-model' | 'missing-api'): MessageAction[] {
-  if (kind === 'missing-model') {
-    return [{ id: makeId(), type: 'select-model', label: '选择模型' }]
-  }
-
-  return [{ id: makeId(), type: 'add-api', label: '添加 API' }]
-}
-
-export function sortConversationSummariesByLastMessageTime(
-  summaries: ConversationSummary[],
-  contents: Record<string, Conversation>,
-): ConversationSummary[] {
-  return [...summaries]
-    .map((summary, index) => ({
-      summary,
-      index,
-      pinnedEpoch: Math.max(toEpoch(summary.pinnedAt), toEpoch(contents[summary.id]?.pinnedAt)),
-      lastMessageEpoch: Math.max(
-        getConversationLastMessageEpoch(contents[summary.id]),
-        toEpoch(summary.updatedAt),
-        toEpoch(summary.createdAt),
-      ),
-      createdAtEpoch: toEpoch(summary.createdAt),
-    }))
-    .sort((left, right) => {
-      const leftPinned = left.pinnedEpoch > 0
-      const rightPinned = right.pinnedEpoch > 0
-      if (leftPinned !== rightPinned) {
-        return leftPinned ? -1 : 1
-      }
-      if (leftPinned && rightPinned && right.pinnedEpoch !== left.pinnedEpoch) {
-        return right.pinnedEpoch - left.pinnedEpoch
-      }
-      if (right.lastMessageEpoch !== left.lastMessageEpoch) {
-        return right.lastMessageEpoch - left.lastMessageEpoch
-      }
-      if (right.createdAtEpoch !== left.createdAtEpoch) {
-        return right.createdAtEpoch - left.createdAtEpoch
-      }
-      return left.index - right.index
-    })
-    .map((item) => item.summary)
-}
-
-function upsertConversationState(
-  summaries: ConversationSummary[],
-  contents: Record<string, Conversation>,
-  conversation: Conversation,
-  activeId: string | null,
-  lruOrder: string[],
-): { nextSummaries: ConversationSummary[]; nextContents: Record<string, Conversation> } {
-  const cachedIds = [conversation.id, ...lruOrder.filter((id) => id !== conversation.id)]
-  const keepIds = new Set(cachedIds.slice(0, MAX_IN_MEMORY_CONVERSATIONS))
-  if (activeId) {
-    keepIds.add(activeId)
-  }
-
-  const nextContents = {
-    ...contents,
-    [conversation.id]: conversation,
-  }
-  for (const existingId of Object.keys(nextContents)) {
-    if (!keepIds.has(existingId)) {
-      delete nextContents[existingId]
-    }
-  }
-
-  const summary = toSummary(conversation)
-  const hasExisting = summaries.some((item) => item.id === conversation.id)
-  const nextSummaries = hasExisting
-    ? summaries.map((item) => (item.id === conversation.id ? summary : item))
-    : [summary, ...summaries]
-
-  return { nextSummaries, nextContents }
-}
-
-function conversationHasActiveImageThreads(conversation: Conversation | null | undefined): boolean {
-  if (!conversation) {
-    return false
-  }
-
-  return conversation.messages.some((message) =>
-    (message.runs ?? []).some((run) =>
-      run.images.some((image) => image.status === 'pending' && image.threadState === 'active'),
-    ),
-  )
-}
-
-function getRunCompletionStats(run: Run): { pendingCount: number; successCount: number; failedCount: number } {
-  return run.images.reduce(
-    (acc, image) => {
-      if (image.status === 'pending') {
-        acc.pendingCount += 1
-      } else if (image.status === 'success') {
-        acc.successCount += 1
-      } else {
-        acc.failedCount += 1
-      }
-      return acc
-    },
-    { pendingCount: 0, successCount: 0, failedCount: 0 },
-  )
-}
-
-function isAbortLikeError(error: unknown): boolean {
-  if (!error || typeof error !== 'object') {
-    return false
-  }
-  return 'name' in error && (error as { name?: unknown }).name === 'AbortError'
-}
-
-function isPendingImageTimedOut(run: Run): boolean {
-  const createdAtEpoch = toEpoch(run.createdAt)
-  if (createdAtEpoch <= 0) {
-    return false
-  }
-  return Date.now() - createdAtEpoch >= IMAGE_PENDING_TIMEOUT_MS
-}
-
-function parseModelCommandDraft(
-  draft: string,
-  models: ModelSpec[],
-): { model: ModelSpec; scope: 'permanent' | 'temporary'; cleanedPrompt: string } | null {
-  const trimmed = draft.trim()
-  if (!trimmed.startsWith('@')) {
-    return null
-  }
-
-  const commandMatch = trimmed.match(/^@(\S+)(?:\s+([\s\S]*))?$/)
-  if (!commandMatch) {
-    return null
-  }
-
-  const query = commandMatch[1]?.trim().toLowerCase() ?? ''
-  const cleanedPrompt = commandMatch[2]?.trim() ?? ''
-  if (!query) {
-    return null
-  }
-
-  const matches = models.filter((model) =>
-    inferModelShortcutTokens(model).some((token) => token.includes(query)),
-  )
-  if (matches.length === 0) {
-    return null
-  }
-
-  const exactMatch =
-    matches.find((model) => inferModelShortcutTokens(model).some((token) => token === query)) ??
-    matches[0]
-
-  return {
-    model: exactMatch,
-    scope: cleanedPrompt.length > 0 ? 'temporary' : 'permanent',
-    cleanedPrompt,
-  }
-}
-
-function gcd(a: number, b: number): number {
-  let left = Math.abs(a)
-  let right = Math.abs(b)
-  while (right !== 0) {
-    const next = left % right
-    left = right
-    right = next
-  }
-  return left || 1
-}
-
-function normalizeAspectRatio(input: string): string | null {
-  const match = input.trim().match(/^(\d+)\s*:\s*(\d+)$/)
-  if (!match) {
-    return null
-  }
-  const width = Number(match[1])
-  const height = Number(match[2])
-  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
-    return null
-  }
-  const divisor = gcd(width, height)
-  return `${Math.floor(width / divisor)}:${Math.floor(height / divisor)}`
-}
-
-function normalizeOneShotSizeTier(input: string): string | null {
-  const normalized = input.trim().toUpperCase()
-  return ONE_SHOT_SIZE_TIER_SET.has(normalized) ? normalized : null
-}
-
-function normalizePromptAfterCommandStrip(value: string): string {
-  return value
-    .replace(/[ \t]+/g, ' ')
-    .replace(/[ \t]*\n[ \t]*/g, '\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim()
-}
-
-function parseOneShotSizeCommands(draft: string): OneShotSizeCommandParseResult {
-  const values: { aspectRatio?: string; resolution?: string; customWidth?: number; customHeight?: number } = {}
-  let hasWh = false
-  let hasSize = false
-  let parseError = ''
-
-  const stripped = draft.replace(ONE_SHOT_COMMAND_PATTERN, (_full, prefix, command, rawValue: string) => {
-    const nextPrefix = typeof prefix === 'string' ? prefix : ''
-    if (parseError) {
-      return nextPrefix
-    }
-
-    const commandKey = String(command).toLowerCase()
-    if (commandKey === '--ar') {
-      const normalizedRatio = normalizeAspectRatio(rawValue)
-      if (!normalizedRatio || !ONE_SHOT_ASPECT_RATIO_SET.has(normalizedRatio)) {
-        parseError = `无效比例命令：${rawValue}。支持示例：1:1、16:9、9:16。`
-        return nextPrefix
-      }
-      values.aspectRatio = normalizedRatio
-      return nextPrefix
-    }
-
-    if (commandKey === '--size') {
-      const normalizedTier = normalizeOneShotSizeTier(rawValue)
-      if (!normalizedTier) {
-        parseError = `无效尺寸命令：${rawValue}。仅支持 0.5K / 1K / 2K / 4K。`
-        return nextPrefix
-      }
-      hasSize = true
-      values.resolution = normalizedTier
-      return nextPrefix
-    }
-
-    const sizeMatch = rawValue.trim().match(/^(\d+)x(\d+)$/i)
-    if (!sizeMatch) {
-      parseError = `无效宽高命令：${rawValue}。请使用 --wh 1024x1536。`
-      return nextPrefix
-    }
-
-    const width = Number(sizeMatch[1])
-    const height = Number(sizeMatch[2])
-    if (
-      !Number.isFinite(width) ||
-      !Number.isFinite(height) ||
-      width < ONE_SHOT_CUSTOM_SIZE_MIN ||
-      width > ONE_SHOT_CUSTOM_SIZE_MAX ||
-      height < ONE_SHOT_CUSTOM_SIZE_MIN ||
-      height > ONE_SHOT_CUSTOM_SIZE_MAX
-    ) {
-      parseError = `宽高范围需在 ${ONE_SHOT_CUSTOM_SIZE_MIN}-${ONE_SHOT_CUSTOM_SIZE_MAX} 像素之间。`
-      return nextPrefix
-    }
-
-    hasWh = true
-    values.customWidth = Math.floor(width)
-    values.customHeight = Math.floor(height)
-    return nextPrefix
-  })
-
-  if (parseError) {
-    return {
-      cleanedPrompt: normalizePromptAfterCommandStrip(stripped),
-      overrides: null,
-      error: parseError,
-    }
-  }
-
-  if (hasWh && hasSize) {
-    return {
-      cleanedPrompt: normalizePromptAfterCommandStrip(stripped),
-      overrides: null,
-      error: '不能同时使用 --size 和 --wh，请保留一个尺寸命令。',
-    }
-  }
-
-  if (!values.aspectRatio && !values.resolution && !values.customWidth && !values.customHeight) {
-    return {
-      cleanedPrompt: normalizePromptAfterCommandStrip(draft),
-      overrides: null,
-    }
-  }
-
-  if (hasWh) {
-    return {
-      cleanedPrompt: normalizePromptAfterCommandStrip(stripped),
-      overrides: {
-        mode: 'custom',
-        customWidth: values.customWidth,
-        customHeight: values.customHeight,
-      },
-    }
-  }
-
-  return {
-    cleanedPrompt: normalizePromptAfterCommandStrip(stripped),
-    overrides: {
-      mode: 'preset',
-      aspectRatio: values.aspectRatio,
-      resolution: values.resolution,
-    },
-  }
-}
-
-function applyOneShotSizeOverridesToSettings(
-  settingsBySide: Record<Side, SingleSideSettings>,
-  targetSides: Side[],
-  overrides: OneShotSizeOverrides | null,
-): Record<Side, SingleSideSettings> {
-  if (!overrides) {
-    return settingsBySide
-  }
-
-  const nextSettings = { ...settingsBySide }
-  for (const side of targetSides) {
-    const current = nextSettings[side]
-    if (!current) {
-      continue
-    }
-    if (overrides.mode === 'custom' && overrides.customWidth && overrides.customHeight) {
-      nextSettings[side] = {
-        ...current,
-        sizeMode: 'custom',
-        customWidth: overrides.customWidth,
-        customHeight: overrides.customHeight,
-      }
-      continue
-    }
-    nextSettings[side] = {
-      ...current,
-      sizeMode: 'preset',
-      ...(overrides.aspectRatio ? { aspectRatio: overrides.aspectRatio } : {}),
-      ...(overrides.resolution ? { resolution: overrides.resolution } : {}),
-    }
-  }
-  return nextSettings
-}
-
-function isDownloadableImage(image: Run['images'][number]): boolean {
-  return isDownloadableImageRef(image)
-}
-
-function sanitizeArchiveSegment(value: string | null | undefined, fallback: string): string {
-  const normalized = String(value ?? '')
-    .replace(ARCHIVE_ILLEGAL_FILE_CHAR_PATTERN, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .replace(ARCHIVE_TRAILING_DOT_SPACE_PATTERN, '')
-  return normalized || fallback
-}
-
-export function buildMessageArchivePrefix(runs: Run[]): string {
-  const modelName =
-    runs
-      .map((run) => run.modelName ?? run.modelId ?? '')
-      .find((value) => value.trim().length > 0) ?? 'model'
-  const safeModelName = sanitizeArchiveSegment(modelName, 'model')
-  return safeModelName
-}
-
-export function collectBatchDownloadImagesByRunId(
-  allRuns: Run[],
-  runId: string,
-): Array<{ run: Run; image: Run['images'][number] }> {
-  const sourceRun = allRuns.find((item) => item.id === runId)
-  if (!sourceRun) {
-    return []
-  }
-
-  return sourceRun.images
-    .filter((item) => isDownloadableImage(item))
-    .map((image) => ({ run: sourceRun, image }))
-}
-
-export type { PanelVariableRow }
+import { persistStagedSettings } from './useConversationsEngine/stagedSettingsPersistence'
+import { createDownloadFlow } from './useConversationsEngine/downloadFlow'
+import { createConversationSettingsModule } from './useConversationsEngine/conversationSettings'
+import { createRunMutationModule } from './useConversationsEngine/runMutation'
+import { useResumeFlow } from './useConversationsEngine/useResumeFlow'
+import { createSendFlowModule } from './useConversationsEngine/sendFlow'
+import {
+  conversationHasActiveImageThreads,
+  getRunCompletionStats,
+  MAX_IN_MEMORY_CONVERSATIONS,
+  MESSAGE_HISTORY_INITIAL_LIMIT,
+  MESSAGE_HISTORY_PAGE_SIZE,
+  PROGRESS_PERSIST_DEBOUNCE_MS,
+  sortConversationSummariesByLastMessageTime,
+  toEpoch,
+  upsertConversationState,
+} from './useConversationsEngine/helpers'
+export {
+  buildMessageArchivePrefix,
+  collectBatchDownloadImagesByRunId,
+  sortConversationSummariesByLastMessageTime,
+} from './useConversationsEngine/helpers'
+export type { PanelVariableRow } from './useConversationsEngine/helpers'
 
 export function useConversationsEngine() {
   const repository = useMemo(() => createConversationRepository(), [])
@@ -883,106 +460,96 @@ export function useConversationsEngine() {
     }
   }
 
-  const saveStagedSettings = (
-    mode: SideMode,
-    sideCount: number,
-    settingsBySide: Record<Side, SingleSideSettings>,
-    runConcurrency: number,
-    dynamicPromptEnabled: boolean,
-    autoRenameConversationTitle: boolean,
-    panelValueFormat: PanelValueFormat,
-    panelVariables: PanelVariableRow[],
-    favoriteModelIds: string[],
-  ) => {
-    repository.saveStagedSettings({
-      sideMode: mode,
-      sideCount,
-      settingsBySide,
-      runConcurrency,
-      dynamicPromptEnabled,
-      autoRenameConversationTitle,
-      panelValueFormat,
-      panelVariables,
-      favoriteModelIds,
+  const saveStagedSettings = (input: {
+    mode: SideMode
+    sideCount: number
+    settingsBySide: Record<Side, SingleSideSettings>
+    overrides?: Partial<{
+      runConcurrency: number
+      dynamicPromptEnabled: boolean
+      autoRenameConversationTitle: boolean
+      panelValueFormat: PanelValueFormat
+      panelVariables: PanelVariableRow[]
+      favoriteModelIds: string[]
+    }>
+  }) => {
+    persistStagedSettings({
+      repository,
+      sideMode: input.mode,
+      sideCount: input.sideCount,
+      settingsBySide: input.settingsBySide,
+      snapshot: stateRef.current,
+      overrides: input.overrides,
     })
 
     stateRef.current = {
       ...stateRef.current,
-      stagedSideMode: mode,
-      stagedSideCount: sideCount,
-      stagedSettingsBySide: settingsBySide,
+      stagedSideMode: input.mode,
+      stagedSideCount: input.sideCount,
+      stagedSettingsBySide: input.settingsBySide,
     }
 
     dispatch({
       type: 'settings/updateSide',
       payload: {
-        sideMode: mode,
-        sideCount,
-        settingsBySide,
+        sideMode: input.mode,
+        sideCount: input.sideCount,
+        settingsBySide: input.settingsBySide,
       },
     })
   }
 
-  const updateConversationState = (
-    mode: SideMode,
-    sideCount: number,
-    settingsBySide: Record<Side, SingleSideSettings>,
-  ) => {
-    const normalizedCount = Math.max(2, Math.floor(sideCount))
-    const normalizedSettings = normalizeSettingsBySide(settingsBySide, state.channels, modelCatalog, normalizedCount)
+  const conversationSettings = useMemo(
+    () =>
+      createConversationSettingsModule({
+        state,
+        stateRef,
+        dispatch,
+        actions,
+        repository,
+        modelCatalog,
+        activeSideMode,
+        activeSideCount,
+        activeSides,
+        activeSettingsBySide,
+        isSideConfigLocked,
+        saveStagedSettings,
+        persistConversation,
+        setActiveConversation,
+        clearDraftSourceImages,
+      }),
+    [
+      actions,
+      activeSettingsBySide,
+      activeSideCount,
+      activeSideMode,
+      activeSides,
+      isSideConfigLocked,
+      modelCatalog,
+      repository,
+      state,
+    ],
+  )
 
-    saveStagedSettings(
-      mode,
-      normalizedCount,
-      normalizedSettings,
-      stateRef.current.runConcurrency,
-      stateRef.current.dynamicPromptEnabled,
-      stateRef.current.autoRenameConversationTitle,
-      stateRef.current.panelValueFormat,
-      stateRef.current.panelVariables,
-      stateRef.current.favoriteModelIds,
-    )
+  const {
+    createNewConversation,
+    updateSideMode,
+    updateSideCount,
+    updateSideSettings,
+    setSideModel,
+    setGenerationMode,
+    applyModelShortcut,
+    setSideModelParam,
+    setFavoriteModelIds,
+    setChannels,
+    setRunConcurrency,
+    setDynamicPromptEnabled,
+    setAutoRenameConversationTitle,
+    setPanelValueFormat,
+    setPanelVariables,
+  } = conversationSettings
 
-    const current = stateRef.current
-    const currentActive = current.activeId ? current.contents[current.activeId] ?? null : null
-    if (!currentActive) {
-      return
-    }
-
-    persistConversation({
-      ...currentActive,
-      updatedAt: new Date().toISOString(),
-      sideMode: mode,
-      sideCount: normalizedCount,
-      settingsBySide: normalizedSettings,
-    })
-  }
-
-  const createNewConversation = () => {
-    const seedMode = activeSideMode
-    const seedSideCount = activeSideCount
-    const seedSettings = normalizeSettingsBySide(activeSettingsBySide, state.channels, modelCatalog, seedSideCount)
-
-    saveStagedSettings(
-      seedMode,
-      seedSideCount,
-      seedSettings,
-      stateRef.current.runConcurrency,
-      stateRef.current.dynamicPromptEnabled,
-      stateRef.current.autoRenameConversationTitle,
-      stateRef.current.panelValueFormat,
-      stateRef.current.panelVariables,
-      stateRef.current.favoriteModelIds,
-    )
-
-    setActiveConversation(null)
-    dispatch({ type: 'send/clearError' })
-    dispatch({ type: 'send/succeed' })
-  }
-
-  const switchConversation = (conversationId: string) => {
-    setActiveConversation(conversationId)
-  }
+  const switchConversation = (conversationId: string) => setActiveConversation(conversationId)
 
   const clearAllConversations = () => {
     void flushPendingPersistence()
@@ -1095,571 +662,26 @@ export function useConversationsEngine() {
     })
   }
 
-  const updateSideMode = (mode: SideMode) => {
-    if (isSideConfigLocked && mode !== activeSideMode) {
-      return
-    }
-    const nextSideCount = mode === 'multi' && activeSideMode === 'single' ? 2 : activeSideCount
-    const normalized = normalizeSettingsBySide(activeSettingsBySide, state.channels, modelCatalog, nextSideCount)
-    updateConversationState(mode, nextSideCount, normalized)
-  }
+  const runMutation = useMemo(
+    () =>
+      createRunMutationModule({
+        stateRef,
+        runLocationByConversationRef,
+        persistConversation,
+        scheduleConversationPersistence,
+        notifyRunCompleted,
+      }),
+    [notifyRunCompleted, persistConversation],
+  )
 
-  const updateSideCount = (count: number) => {
-    if (isSideConfigLocked || activeSideMode !== 'multi') {
-      return
-    }
-
-    const nextCount = Math.max(2, Math.floor(count))
-    const normalized = normalizeSettingsBySide(activeSettingsBySide, state.channels, modelCatalog, nextCount)
-    updateConversationState(activeSideMode, nextCount, normalized)
-  }
-
-  const updateSideSettings = (side: Side, patch: Partial<SingleSideSettings>) => {
-    const merged = normalizeSettingsBySide(
-      {
-        ...activeSettingsBySide,
-        [side]: {
-          ...activeSettingsBySide[side],
-          ...patch,
-        },
-      },
-      state.channels,
-      modelCatalog,
-      activeSideCount,
-    )
-
-    updateConversationState(activeSideMode, activeSideCount, merged)
-    if (patch.generationMode === 'text') {
-      const modeResolution = resolveSendGenerationMode({
-        sideMode: activeSideMode,
-        sideCount: activeSideCount,
-        settingsBySide: merged,
-      })
-      if (!('error' in modeResolution) && modeResolution.mode === 'text') {
-        clearDraftSourceImages()
-      }
-    }
-  }
-
-  const setSideModel = (side: Side, modelId: string) => {
-    const current = activeSettingsBySide[side]
-    const merged = normalizeSettingsBySide(
-      {
-        ...activeSettingsBySide,
-        [side]: {
-          ...current,
-          modelId,
-          paramValues: {},
-        },
-      },
-      state.channels,
-      modelCatalog,
-      activeSideCount,
-    )
-
-    updateConversationState(activeSideMode, activeSideCount, merged)
-  }
-
-  const setGenerationMode = (mode: 'image' | 'text') => {
-    const targetSides = activeSideMode === 'single' ? (['single'] as Side[]) : activeSides
-    const nextSettings = { ...activeSettingsBySide }
-    for (const side of targetSides) {
-      const current = nextSettings[side]
-      if (!current) {
-        continue
-      }
-      nextSettings[side] = {
-        ...current,
-        generationMode: mode,
-      }
-    }
-    const merged = normalizeSettingsBySide(nextSettings, state.channels, modelCatalog, activeSideCount)
-    updateConversationState(activeSideMode, activeSideCount, merged)
-    if (mode === 'text') {
-      clearDraftSourceImages()
-    }
-  }
-
-  const applyModelShortcut = (modelId: string): Record<Side, SingleSideSettings> => {
-    const targetSides = activeSideMode === 'single' ? (['single'] as Side[]) : activeSides
-    const nextSettings = { ...activeSettingsBySide }
-
-    for (const side of targetSides) {
-      const current = nextSettings[side]
-      if (!current) {
-        continue
-      }
-      nextSettings[side] = {
-        ...current,
-        modelId,
-        paramValues: {},
-      }
-    }
-
-    const merged = normalizeSettingsBySide(nextSettings, state.channels, modelCatalog, activeSideCount)
-    updateConversationState(activeSideMode, activeSideCount, merged)
-    return merged
-  }
-
-  const setSideModelParam = (side: Side, paramKey: string, value: string | number | boolean) => {
-    const current = activeSettingsBySide[side]
-    const merged = normalizeSettingsBySide(
-      {
-        ...activeSettingsBySide,
-        [side]: {
-          ...current,
-          paramValues: {
-            ...current.paramValues,
-            [paramKey]: value,
-          },
-        },
-      },
-      state.channels,
-      modelCatalog,
-      activeSideCount,
-    )
-
-    updateConversationState(activeSideMode, activeSideCount, merged)
-  }
-
-  const setFavoriteModelIds = (value: string[]) => {
-    const nextFavoriteModelIds = Array.from(
-      new Set(value.filter((modelId) => modelCatalog.models.some((model) => model.id === modelId))),
-    )
-    dispatch({ type: 'settings/setFavoriteModels', payload: nextFavoriteModelIds })
-
-    const snapshot = stateRef.current
-    repository.saveStagedSettings({
-      sideMode: activeSideMode,
-      sideCount: activeSideCount,
-      settingsBySide: activeSettingsBySide,
-      runConcurrency: snapshot.runConcurrency,
-      dynamicPromptEnabled: snapshot.dynamicPromptEnabled,
-      autoRenameConversationTitle: snapshot.autoRenameConversationTitle,
-      panelValueFormat: snapshot.panelValueFormat,
-      panelVariables: snapshot.panelVariables,
-      favoriteModelIds: nextFavoriteModelIds,
-    })
-
-    stateRef.current = {
-      ...snapshot,
-      favoriteModelIds: nextFavoriteModelIds,
-    }
-  }
-
-  const setChannels = (nextChannels: typeof state.channels) => {
-    dispatch({ type: 'channels/set', payload: nextChannels })
-    repository.saveChannels(nextChannels)
-
-    const nextCatalog = getModelCatalogFromChannels(nextChannels)
-    const normalized = normalizeSettingsBySide(activeSettingsBySide, nextChannels, nextCatalog, activeSideCount)
-    const filteredFavoriteModelIds = stateRef.current.favoriteModelIds.filter((modelId) =>
-      nextCatalog.models.some((model) => model.id === modelId),
-    )
-
-    repository.saveStagedSettings({
-      sideMode: activeSideMode,
-      sideCount: activeSideCount,
-      settingsBySide: normalized,
-      runConcurrency: stateRef.current.runConcurrency,
-      dynamicPromptEnabled: stateRef.current.dynamicPromptEnabled,
-      autoRenameConversationTitle: stateRef.current.autoRenameConversationTitle,
-      panelValueFormat: stateRef.current.panelValueFormat,
-      panelVariables: stateRef.current.panelVariables,
-      favoriteModelIds: filteredFavoriteModelIds,
-    })
-
-    dispatch({ type: 'settings/setFavoriteModels', payload: filteredFavoriteModelIds })
-    stateRef.current = {
-      ...stateRef.current,
-      channels: nextChannels,
-      favoriteModelIds: filteredFavoriteModelIds,
-      stagedSideMode: activeSideMode,
-      stagedSideCount: activeSideCount,
-      stagedSettingsBySide: normalized,
-    }
-
-    dispatch({
-      type: 'settings/updateSide',
-      payload: {
-        sideMode: activeSideMode,
-        sideCount: activeSideCount,
-        settingsBySide: normalized,
-      },
-    })
-
-    const current = stateRef.current
-    const currentActive = current.activeId ? current.contents[current.activeId] ?? null : null
-    if (currentActive) {
-      persistConversation({
-        ...currentActive,
-        updatedAt: new Date().toISOString(),
-        sideMode: activeSideMode,
-        sideCount: activeSideCount,
-        settingsBySide: normalized,
-      })
-    }
-  }
-
-
-  const setRunConcurrency = (value: number) => {
-    const next = Math.max(1, Math.floor(value))
-    dispatch({ type: 'settings/setRunConcurrency', payload: next })
-
-    const snapshot = stateRef.current
-    repository.saveStagedSettings({
-      sideMode: activeSideMode,
-      sideCount: activeSideCount,
-      settingsBySide: activeSettingsBySide,
-      runConcurrency: next,
-      dynamicPromptEnabled: snapshot.dynamicPromptEnabled,
-      autoRenameConversationTitle: snapshot.autoRenameConversationTitle,
-      panelValueFormat: snapshot.panelValueFormat,
-      panelVariables: snapshot.panelVariables,
-      favoriteModelIds: snapshot.favoriteModelIds,
-    })
-
-    stateRef.current = {
-      ...snapshot,
-      runConcurrency: next,
-    }
-  }
-
-  const setDynamicPromptEnabled = (value: boolean) => {
-    actions.setDynamicPromptEnabled(value)
-
-    const snapshot = stateRef.current
-    repository.saveStagedSettings({
-      sideMode: activeSideMode,
-      sideCount: activeSideCount,
-      settingsBySide: activeSettingsBySide,
-      runConcurrency: snapshot.runConcurrency,
-      dynamicPromptEnabled: value,
-      autoRenameConversationTitle: snapshot.autoRenameConversationTitle,
-      panelValueFormat: snapshot.panelValueFormat,
-      panelVariables: snapshot.panelVariables,
-      favoriteModelIds: snapshot.favoriteModelIds,
-    })
-
-    stateRef.current = {
-      ...snapshot,
-      dynamicPromptEnabled: value,
-    }
-  }
-
-  const setAutoRenameConversationTitle = (value: boolean) => {
-    actions.setAutoRenameConversationTitle(value)
-
-    const snapshot = stateRef.current
-    repository.saveStagedSettings({
-      sideMode: activeSideMode,
-      sideCount: activeSideCount,
-      settingsBySide: activeSettingsBySide,
-      runConcurrency: snapshot.runConcurrency,
-      dynamicPromptEnabled: snapshot.dynamicPromptEnabled,
-      autoRenameConversationTitle: value,
-      panelValueFormat: snapshot.panelValueFormat,
-      panelVariables: snapshot.panelVariables,
-      favoriteModelIds: snapshot.favoriteModelIds,
-    })
-
-    stateRef.current = {
-      ...snapshot,
-      autoRenameConversationTitle: value,
-    }
-  }
-
-  const setPanelValueFormat = (value: PanelValueFormat) => {
-    actions.setPanelValueFormat(value)
-
-    const snapshot = stateRef.current
-    repository.saveStagedSettings({
-      sideMode: activeSideMode,
-      sideCount: activeSideCount,
-      settingsBySide: activeSettingsBySide,
-      runConcurrency: snapshot.runConcurrency,
-      dynamicPromptEnabled: snapshot.dynamicPromptEnabled,
-      autoRenameConversationTitle: snapshot.autoRenameConversationTitle,
-      panelValueFormat: value,
-      panelVariables: snapshot.panelVariables,
-      favoriteModelIds: snapshot.favoriteModelIds,
-    })
-
-    stateRef.current = {
-      ...snapshot,
-      panelValueFormat: value,
-    }
-  }
-
-  const setPanelVariables = (value: PanelVariableRow[]) => {
-    actions.setPanelVariables(value)
-
-    const snapshot = stateRef.current
-    repository.saveStagedSettings({
-      sideMode: activeSideMode,
-      sideCount: activeSideCount,
-      settingsBySide: activeSettingsBySide,
-      runConcurrency: snapshot.runConcurrency,
-      dynamicPromptEnabled: snapshot.dynamicPromptEnabled,
-      autoRenameConversationTitle: snapshot.autoRenameConversationTitle,
-      panelValueFormat: snapshot.panelValueFormat,
-      panelVariables: value,
-      favoriteModelIds: snapshot.favoriteModelIds,
-    })
-
-    stateRef.current = {
-      ...snapshot,
-      panelVariables: value,
-    }
-  }
-
-  const appendConversationEntry = (
-    conversation: Conversation,
-    userContent: string,
-    assistantContent: string,
-    runs: Run[] = [],
-    titleSource?: string,
-    userSourceImages: RunSourceImageRef[] = [],
-    assistantActions?: MessageAction[],
-  ): Conversation => {
-    const now = new Date().toISOString()
-    const userMessage: Message = {
-      id: makeId(),
-      createdAt: now,
-      role: 'user',
-      content: userContent,
-      sourceImages: userSourceImages,
-    }
-    const assistantMessage: Message = {
-      id: makeId(),
-      createdAt: now,
-      role: 'assistant',
-      content: assistantContent,
-      runs,
-      actions: assistantActions,
-    }
-    const hadUserMessage = conversation.messages.some((message) => message.role === 'user')
-    const shouldAutoRenameTitle = stateRef.current.autoRenameConversationTitle
-    const nextTitle =
-      !hadUserMessage && shouldAutoRenameTitle ? summarizePromptAsTitle(titleSource ?? userContent) : conversation.title
-
-    return {
-      ...conversation,
-      title: nextTitle,
-      updatedAt: now,
-      messages: [...conversation.messages, userMessage, assistantMessage],
-    }
-  }
-
-  const updateAssistantMessageContent = (
-    conversationId: string,
-    messageId: string,
-    content: string,
-    options?: { immediateStorage?: boolean },
-  ) => {
-    const snapshot = stateRef.current
-    const currentConversation = snapshot.contents[conversationId]
-    if (!currentConversation) {
-      return
-    }
-
-    const messageIndex = currentConversation.messages.findIndex((item) => item.id === messageId)
-    if (messageIndex < 0) {
-      return
-    }
-
-    const target = currentConversation.messages[messageIndex]
-    if (target.role !== 'assistant' || target.content === content) {
-      return
-    }
-
-    const nextMessages = [...currentConversation.messages]
-    nextMessages[messageIndex] = {
-      ...target,
-      content,
-    }
-
-    persistConversation({
-      ...currentConversation,
-      updatedAt: new Date().toISOString(),
-      messages: nextMessages,
-    }, {
-      saveStorage: options?.immediateStorage ?? false,
-      saveIndex: options?.immediateStorage ?? false,
-    })
-
-    if (!(options?.immediateStorage ?? false)) {
-      scheduleConversationPersistence(conversationId)
-    }
-  }
-
-  const replaceRunsInConversation = (conversationId: string, nextRunsById: Map<string, Run>) => {
-    const snapshot = stateRef.current
-    const currentConversation = snapshot.contents[conversationId]
-    if (!currentConversation) {
-      return
-    }
-
-    const locationMap =
-      runLocationByConversationRef.current[conversationId] ??
-      (() => {
-        const rebuilt = new Map<string, { messageIndex: number; runIndex: number }>()
-        currentConversation.messages.forEach((message, messageIndex) => {
-          ;(message.runs ?? []).forEach((run, runIndex) => {
-            rebuilt.set(run.id, { messageIndex, runIndex })
-          })
-        })
-        runLocationByConversationRef.current[conversationId] = rebuilt
-        return rebuilt
-      })()
-
-    let changed = false
-    const nextMessages = [...currentConversation.messages]
-    nextRunsById.forEach((replacement, runId) => {
-      const loc = locationMap.get(runId)
-      if (!loc) {
-        return
-      }
-      const message = nextMessages[loc.messageIndex]
-      const runs = message.runs ?? []
-      if (!runs[loc.runIndex] || runs[loc.runIndex].id !== runId) {
-        return
-      }
-      const nextRuns = [...runs]
-      nextRuns[loc.runIndex] = replacement
-      nextMessages[loc.messageIndex] = {
-        ...message,
-        runs: nextRuns,
-      }
-      changed = true
-    })
-
-    if (!changed) {
-      return
-    }
-
-    const updatedConversation: Conversation = {
-      ...currentConversation,
-      updatedAt: new Date().toISOString(),
-      messages: nextMessages,
-    }
-
-    persistConversation(updatedConversation)
-    nextRunsById.forEach((run) => {
-      notifyRunCompleted(conversationId, run)
-    })
-  }
-
-  const updateRunImageInConversation = (
-    conversationId: string,
-    input: {
-      runId: string
-      seq: number
-      status?: 'pending' | 'success' | 'failed'
-      requestUrl?: string
-      threadState?: Run['images'][number]['threadState']
-      fileRef?: string
-      thumbRef?: string
-      fullRef?: string
-      refKind?: Run['images'][number]['refKind']
-      refKey?: Run['images'][number]['refKey']
-      serverTaskId?: Run['images'][number]['serverTaskId']
-      serverTaskMeta?: Run['images'][number]['serverTaskMeta']
-      bytes?: number
-      error?: string
-      errorCode?: Run['images'][number]['errorCode']
-      detachedAt?: string
-      lastResumeAttemptAt?: string
-    },
-  ) => {
-    const snapshot = stateRef.current
-    const currentConversation = snapshot.contents[conversationId]
-    if (!currentConversation) {
-      return
-    }
-
-    const locationMap = runLocationByConversationRef.current[conversationId]
-    const location = locationMap?.get(input.runId)
-    if (!location) {
-      return
-    }
-
-    const message = currentConversation.messages[location.messageIndex]
-    const runs = message.runs ?? []
-    const run = runs[location.runIndex]
-    if (!run || run.id !== input.runId) {
-      return
-    }
-
-    const imageIndex = run.images.findIndex((item) => item.seq === input.seq)
-    if (imageIndex < 0) {
-      return
-    }
-    const targetImage = run.images[imageIndex]
-    const nextStatus = input.status ?? targetImage.status
-    const nextImage = {
-      ...targetImage,
-      status: nextStatus,
-      requestUrl: 'requestUrl' in input ? input.requestUrl : targetImage.requestUrl,
-      threadState: 'threadState' in input ? input.threadState : targetImage.threadState,
-      fileRef: 'fileRef' in input ? input.fileRef : targetImage.fileRef,
-      thumbRef: 'thumbRef' in input ? input.thumbRef : targetImage.thumbRef,
-      fullRef: 'fullRef' in input ? input.fullRef : targetImage.fullRef,
-      refKind: 'refKind' in input ? input.refKind : targetImage.refKind,
-      refKey: 'refKey' in input ? input.refKey : targetImage.refKey,
-      serverTaskId: 'serverTaskId' in input ? input.serverTaskId : targetImage.serverTaskId,
-      serverTaskMeta: 'serverTaskMeta' in input ? input.serverTaskMeta : targetImage.serverTaskMeta,
-      bytes: 'bytes' in input ? input.bytes : targetImage.bytes,
-      error: 'error' in input ? input.error : targetImage.error,
-      errorCode: 'errorCode' in input ? input.errorCode : targetImage.errorCode,
-      detachedAt: 'detachedAt' in input ? input.detachedAt : targetImage.detachedAt,
-      lastResumeAttemptAt: 'lastResumeAttemptAt' in input ? input.lastResumeAttemptAt : targetImage.lastResumeAttemptAt,
-    }
-    if (
-      nextImage.status === targetImage.status &&
-      nextImage.requestUrl === targetImage.requestUrl &&
-      nextImage.threadState === targetImage.threadState &&
-      nextImage.fileRef === targetImage.fileRef &&
-      nextImage.thumbRef === targetImage.thumbRef &&
-      nextImage.fullRef === targetImage.fullRef &&
-      nextImage.refKind === targetImage.refKind &&
-      nextImage.refKey === targetImage.refKey &&
-      nextImage.serverTaskId === targetImage.serverTaskId &&
-      JSON.stringify(nextImage.serverTaskMeta ?? null) === JSON.stringify(targetImage.serverTaskMeta ?? null) &&
-      nextImage.bytes === targetImage.bytes &&
-      nextImage.error === targetImage.error &&
-      nextImage.errorCode === targetImage.errorCode &&
-      nextImage.detachedAt === targetImage.detachedAt &&
-      nextImage.lastResumeAttemptAt === targetImage.lastResumeAttemptAt
-    ) {
-      return
-    }
-
-    const nextImages = [...run.images]
-    nextImages[imageIndex] = nextImage
-    const nextRun: Run = {
-      ...run,
-      images: nextImages,
-    }
-    const nextRuns = [...runs]
-    nextRuns[location.runIndex] = nextRun
-    const nextMessages = [...currentConversation.messages]
-    nextMessages[location.messageIndex] = {
-      ...message,
-      runs: nextRuns,
-    }
-
-    persistConversation({
-      ...currentConversation,
-      updatedAt: new Date().toISOString(),
-      messages: nextMessages,
-    }, {
-      saveStorage: false,
-      saveIndex: false,
-    })
-    notifyRunCompleted(conversationId, nextRun)
-    scheduleConversationPersistence(conversationId)
-  }
+  const {
+    updateAssistantMessageContent,
+    replaceRunsInConversation,
+    updateRunImageInConversation,
+    findRunInConversation,
+    mergeRetryResultIntoRun,
+    markFailedImagesPending,
+  } = runMutation
 
   const syncTaskRegistryForConversation = (conversation: Conversation) => {
     const nextTasks = conversation.messages.flatMap((message) =>
@@ -1684,1169 +706,93 @@ export function useConversationsEngine() {
     replaceImageTasksForConversation(conversation.id, nextTasks)
   }
 
-  const detachConversationImageThreads = (conversationId: string) => {
-    const snapshot = stateRef.current
-    const currentConversation = snapshot.contents[conversationId]
-    if (!currentConversation) {
-      return
-    }
-
-    const detachedAt = new Date().toISOString()
-    let changed = false
-    const nextMessages = currentConversation.messages.map((message) => {
-      const nextRuns = (message.runs ?? []).map((run) => {
-        let runChanged = false
-        const nextImages = run.images.map((image) => {
-          if (image.status !== 'pending' || image.threadState !== 'active') {
-            return image
-          }
-          runChanged = true
-          changed = true
-          const canResume = Boolean(image.serverTaskId || image.serverTaskMeta)
-          if (!canResume) {
-            return {
-              ...image,
-              status: 'failed' as const,
-              threadState: 'settled' as const,
-              error: '图片生成已中断，请重试',
-              errorCode: 'unknown' as const,
-              detachedAt,
-            }
-          }
-          return {
-            ...image,
-            threadState: 'detached' as const,
-            detachedAt,
-          }
-        })
-        return runChanged ? { ...run, images: nextImages } : run
-      })
-      return message.runs ? { ...message, runs: nextRuns } : message
-    })
-
-    if (!changed) {
-      return
-    }
-
-    persistConversation({
-      ...currentConversation,
-      updatedAt: detachedAt,
-      messages: nextMessages,
-    })
-  }
-
-  const resumePendingImagesForConversation = async (conversationId: string) => {
-    const snapshot = stateRef.current
-    const conversation = snapshot.contents[conversationId]
-    if (!conversation) {
-      return
-    }
-
-    const resumable = conversation.messages.flatMap((message) =>
-      (message.runs ?? []).flatMap((run) =>
-        run.images
-          .filter((image) =>
-            image.status === 'pending' &&
-            Boolean(image.serverTaskId || image.serverTaskMeta),
-          )
-          .map((image) => ({ run, image })),
-      ),
-    )
-
-    for (const entry of resumable) {
-      if (isPendingImageTimedOut(entry.run)) {
-        updateRunImageInConversation(conversationId, {
-          runId: entry.run.id,
-          seq: entry.image.seq,
-          status: 'failed',
-          threadState: 'settled',
-          error: '图片生成超时（超过 5 分钟）',
-          errorCode: 'timeout',
-          lastResumeAttemptAt: new Date().toISOString(),
-        })
-        continue
-      }
-
-      const imageKey = `${conversationId}:${entry.run.id}:${entry.image.id}`
-      if (resumingImageIdsRef.current.has(imageKey)) {
-        continue
-      }
-      const lastAttemptEpoch = toEpoch(entry.image.lastResumeAttemptAt)
-      if (Date.now() - lastAttemptEpoch < RESUME_RETRY_COOLDOWN_MS) {
-        continue
-      }
-
-      const channel = snapshot.channels.find((item) => item.id === entry.run.channelId) as ApiChannel | undefined
-      if (!channel) {
-        updateRunImageInConversation(conversationId, {
-          runId: entry.run.id,
-          seq: entry.image.seq,
-          status: 'failed',
-          threadState: 'settled',
-          error: '图片生成失败',
-          errorCode: 'unknown',
-          lastResumeAttemptAt: new Date().toISOString(),
-        })
-        continue
-      }
-
-      resumingImageIdsRef.current.add(imageKey)
-      const attemptedAt = new Date().toISOString()
-      updateRunImageInConversation(conversationId, {
-        runId: entry.run.id,
-        seq: entry.image.seq,
-        lastResumeAttemptAt: attemptedAt,
-      })
-
-      try {
-        const resumed = await taskResumeService.resumeTask({
-          channel,
-          taskId: entry.image.serverTaskId,
-          taskMeta: entry.image.serverTaskMeta,
-        })
-        if (resumed.state === 'pending') {
-          updateRunImageInConversation(conversationId, {
-            runId: entry.run.id,
-            seq: entry.image.seq,
-            status: 'pending',
-            threadState: 'active',
-            serverTaskId: resumed.serverTaskId ?? entry.image.serverTaskId,
-            serverTaskMeta: resumed.serverTaskMeta ?? entry.image.serverTaskMeta,
-            lastResumeAttemptAt: attemptedAt,
-          })
-          continue
-        }
-        if (resumed.state === 'failed') {
-          updateRunImageInConversation(conversationId, {
-            runId: entry.run.id,
-            seq: entry.image.seq,
-            status: 'failed',
-            threadState: 'settled',
-            error: resumed.error?.trim() ? resumed.error : '图片生成失败',
-            errorCode: classifyFailure(resumed.error?.trim() ? resumed.error : '图片生成失败'),
-            serverTaskId: resumed.serverTaskId ?? entry.image.serverTaskId,
-            serverTaskMeta: resumed.serverTaskMeta ?? entry.image.serverTaskMeta,
-            lastResumeAttemptAt: attemptedAt,
-          })
-          continue
-        }
-        updateRunImageInConversation(conversationId, {
-          runId: entry.run.id,
-          seq: entry.image.seq,
-          status: 'success',
-          threadState: 'settled',
-          fileRef: resumed.src,
-          thumbRef: resumed.src,
-          refKind: /^data:image\//i.test(resumed.src) ? 'inline' : 'url',
-          refKey: /^data:image\//i.test(resumed.src) ? undefined : resumed.src,
-          serverTaskId: resumed.serverTaskId ?? entry.image.serverTaskId,
-          serverTaskMeta: resumed.serverTaskMeta ?? entry.image.serverTaskMeta,
-          error: undefined,
-          errorCode: undefined,
-          lastResumeAttemptAt: attemptedAt,
-        })
-      } finally {
-        resumingImageIdsRef.current.delete(imageKey)
-      }
-    }
-  }
-
-  const pollBackgroundPendingTasks = async () => {
-    const registeredTasks = loadImageTasks()
-    if (registeredTasks.length === 0) {
-      return
-    }
-
-    const conversationIds = Array.from(new Set(registeredTasks.map((item) => item.conversationId)))
-    for (const conversationId of conversationIds) {
-      await ensureConversationLoaded(conversationId)
-      await resumePendingImagesForConversation(conversationId)
-    }
-  }
-
-  useEffect(() => {
-    if (!state.activeId) {
-      return
-    }
-
-    void resumePendingImagesForConversation(state.activeId)
-
-    if (resumePollTimerRef.current !== null) {
-      window.clearInterval(resumePollTimerRef.current)
-    }
-    resumePollTimerRef.current = window.setInterval(() => {
-      const activeId = stateRef.current.activeId
-      if (!activeId) {
-        return
-      }
-      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
-        return
-      }
-      void resumePendingImagesForConversation(activeId)
-    }, RESUME_POLL_INTERVAL_MS)
-
-    const handleVisible = () => {
-      const activeId = stateRef.current.activeId
-      if (!activeId) {
-        return
-      }
-      void resumePendingImagesForConversation(activeId)
-    }
-
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        handleVisible()
-      }
-    }
-
-    const handlePageHide = () => {
-      const activeId = stateRef.current.activeId
-      if (!activeId) {
-        return
-      }
-      detachConversationImageThreads(activeId)
-      void flushPendingPersistence()
-    }
-
-    window.addEventListener('pageshow', handleVisible)
-    window.addEventListener('focus', handleVisible)
-    window.addEventListener('pagehide', handlePageHide)
-    window.addEventListener('beforeunload', handlePageHide)
-    document.addEventListener('visibilitychange', handleVisibilityChange)
-
-    return () => {
-      if (resumePollTimerRef.current !== null) {
-        window.clearInterval(resumePollTimerRef.current)
-        resumePollTimerRef.current = null
-      }
-      window.removeEventListener('pageshow', handleVisible)
-      window.removeEventListener('focus', handleVisible)
-      window.removeEventListener('pagehide', handlePageHide)
-      window.removeEventListener('beforeunload', handlePageHide)
-      document.removeEventListener('visibilitychange', handleVisibilityChange)
-    }
-  }, [state.activeId])
-
-  useEffect(() => {
-    const scheduleBackgroundPolling = () => {
-      if (backgroundResumePollTimerRef.current !== null) {
-        window.clearInterval(backgroundResumePollTimerRef.current)
-      }
-      const intervalMs =
-        typeof document !== 'undefined' && document.visibilityState === 'hidden'
-          ? GLOBAL_RESUME_POLL_HIDDEN_MS
-          : GLOBAL_RESUME_POLL_VISIBLE_MS
-      backgroundResumePollTimerRef.current = window.setInterval(() => {
-        void pollBackgroundPendingTasks()
-      }, intervalMs)
-    }
-
-    const handleVisibilityChange = () => {
-      scheduleBackgroundPolling()
-      if (document.visibilityState === 'visible') {
-        void pollBackgroundPendingTasks()
-      }
-    }
-
-    const handleVisible = () => {
-      void pollBackgroundPendingTasks()
-    }
-
-    scheduleBackgroundPolling()
-    void pollBackgroundPendingTasks()
-    window.addEventListener('pageshow', handleVisible)
-    window.addEventListener('focus', handleVisible)
-    document.addEventListener('visibilitychange', handleVisibilityChange)
-
-    return () => {
-      if (backgroundResumePollTimerRef.current !== null) {
-        window.clearInterval(backgroundResumePollTimerRef.current)
-        backgroundResumePollTimerRef.current = null
-      }
-      window.removeEventListener('pageshow', handleVisible)
-      window.removeEventListener('focus', handleVisible)
-      document.removeEventListener('visibilitychange', handleVisibilityChange)
-    }
-  }, [])
-
-  const findRunInConversation = (conversation: Conversation, runId: string): Run | null => {
-    for (const message of conversation.messages) {
-      const target = (message.runs ?? []).find((item) => item.id === runId)
-      if (target) {
-        return target
-      }
-    }
-    return null
-  }
-
-  const getLoadedActiveConversation = async (): Promise<Conversation | null> => {
-    const snapshot = stateRef.current
-    if (!snapshot.activeId) {
-      return null
-    }
-
-    const existing = snapshot.contents[snapshot.activeId] ?? null
-    if (existing) {
-      return existing
-    }
-
-    await ensureConversationLoaded(snapshot.activeId)
-    const refreshed = stateRef.current
-    if (!refreshed.activeId) {
-      return null
-    }
-    return refreshed.contents[refreshed.activeId] ?? null
-  }
-
-  const mergeRetryResultIntoRun = (sourceRun: Run, retryRun: Run): Run => {
-    const failedIndexes = sourceRun.images
-      .map((item, index) => ({ item, index }))
-      .filter(({ item }) => item.status === 'failed')
-      .map(({ index }) => index)
-
-    if (failedIndexes.length === 0) {
-      return sourceRun
-    }
-
-    const nextImages = sourceRun.images.map((item) => ({ ...item }))
-    failedIndexes.forEach((targetIndex, retryIndex) => {
-      const retryImage = retryRun.images[retryIndex]
-      if (!retryImage) {
-        return
-      }
-
-      const current = nextImages[targetIndex]
-      nextImages[targetIndex] = {
-        ...current,
-        status: retryImage.status,
-        threadState: retryImage.threadState,
-        fileRef: retryImage.fileRef,
-        thumbRef: retryImage.thumbRef,
-        fullRef: retryImage.fullRef,
-        refKind: retryImage.refKind,
-        refKey: retryImage.refKey,
-        serverTaskId: retryImage.serverTaskId,
-        serverTaskMeta: retryImage.serverTaskMeta,
-        bytes: retryImage.bytes,
-        error: retryImage.error,
-        errorCode: retryImage.errorCode,
-        detachedAt: retryImage.detachedAt,
-        lastResumeAttemptAt: retryImage.lastResumeAttemptAt,
-      }
-    })
-
-    return {
-      ...sourceRun,
-      channelId: retryRun.channelId,
-      channelName: retryRun.channelName,
-      modelId: retryRun.modelId,
-      modelName: retryRun.modelName,
-      paramsSnapshot: retryRun.paramsSnapshot,
-      settingsSnapshot: retryRun.settingsSnapshot,
-      retryAttempt: retryRun.retryAttempt,
-      images: nextImages,
-    }
-  }
-
-  const markFailedImagesPending = (run: Run): Run => {
-    const nextImages = run.images.map((item) => {
-      if (item.status !== 'failed') {
-        return item
-      }
-      return {
-        ...item,
-        status: 'pending' as const,
-        threadState: 'active' as const,
-        fileRef: undefined,
-        thumbRef: undefined,
-        fullRef: undefined,
-        refKind: undefined,
-        refKey: undefined,
-        serverTaskId: undefined,
-        serverTaskMeta: undefined,
-        bytes: undefined,
-        error: undefined,
-        errorCode: undefined,
-        detachedAt: undefined,
-        lastResumeAttemptAt: undefined,
-      }
-    })
-
-    return {
-      ...run,
-      images: nextImages,
-    }
-  }
-
-  const resolveSendBlockedReason = (
-    snapshot: typeof stateRef.current,
-    activeState: ReturnType<typeof conversationSelectors.selectActiveSettings>,
-  ): { kind: 'missing-model' | 'missing-api'; assistantContent: string; actions: MessageAction[] } | null => {
-    const targetSides = activeState.activeSideMode === 'single'
-      ? (['single'] as Side[])
-      : getMultiSideIds(activeState.activeSideCount)
-    const selectedSettings = targetSides
-      .map((side) => activeState.activeSettingsBySide[side])
-      .filter((settings): settings is SingleSideSettings => Boolean(settings))
-    const modelIds = selectedSettings.map((settings) => {
-      const mode = settings.generationMode ?? 'text'
-      const selectedModelId = mode === 'text' ? (settings.textModelId ?? settings.modelId) : settings.modelId
-      return selectedModelId.trim()
-    })
-    const hasAvailableModels = modelCatalog.models.length > 0
-    const hasAnyConfiguredApi = hasConfiguredApiChannel(snapshot.channels)
-    const isModelMissing = modelIds.some((modelId) => !modelId || !modelCatalog.models.some((model) => model.id === modelId))
-
-    if (!hasAvailableModels && !hasAnyConfiguredApi) {
-      return {
-        kind: 'missing-api',
-        assistantContent: '当前还没有可用的 API 配置，请先添加 API，再重新发送这条消息。',
-        actions: buildSendBlockedAssistantActions('missing-api'),
-      }
-    }
-
-    if (isModelMissing) {
-      return {
-        kind: 'missing-model',
-        assistantContent: '当前还没有选择模型，请先选择模型，再重新发送这条消息。',
-        actions: buildSendBlockedAssistantActions('missing-model'),
-      }
-    }
-
-    const hasInvalidChannel = selectedSettings.some((settings) => {
-      const channel = snapshot.channels.find((item) => item.id === settings.channelId)
-      return !channel || !channel.baseUrl.trim() || !channel.apiKey.trim()
-    })
-
-    if (hasInvalidChannel) {
-      return {
-        kind: 'missing-api',
-        assistantContent: '当前模型已选中，但还没有可用的 API 配置，请先添加 API，再重新发送这条消息。',
-        actions: buildSendBlockedAssistantActions('missing-api'),
-      }
-    }
-
-    return null
-  }
-
-  const appendDraftSourceImages = (files: File[]) => {
-    if (files.length === 0) {
-      return
-    }
-    const snapshot = stateRef.current
-    const activeState = conversationSelectors.selectActiveSettings(snapshot)
-    const modeResolution = resolveSendGenerationMode({
-      sideMode: activeState.activeSideMode,
-      sideCount: activeState.activeSideCount,
-      settingsBySide: activeState.activeSettingsBySide,
-    })
-    if (!('error' in modeResolution) && modeResolution.mode === 'text') {
-      notifier.info('当前为文本模式，不支持上传参考图。')
-      return
-    }
-    const current = draftSourceImagesRef.current
-    const remaining = Math.max(0, maxSourceImages - current.length)
-    if (remaining <= 0) {
-      notifier.warning(`最多只能上传 ${maxSourceImages} 张参考图`)
-      return
-    }
-
-    const appendResult = appendSourceImageFiles(files)
-
-    if (appendResult.invalidNames.length > 0) {
-      notifier.warning(`以下文件格式不支持：${appendResult.invalidNames.join('、')}`)
-    }
-
-    if (appendResult.droppedValidCount > 0) {
-      notifier.info(`超出上限，已仅保留前 ${remaining} 张可用参考图`)
-    }
-  }
-
-  const sendDraft = async () => {
-    const snapshot = stateRef.current
-    const currentActive = await getLoadedActiveConversation()
-    const activeState = conversationSelectors.selectActiveSettings(snapshot)
-    const draftSourceImageSnapshot = [...draftSourceImagesRef.current]
-    const targetSides = activeState.activeSideMode === 'single' ? (['single'] as Side[]) : getMultiSideIds(activeState.activeSideCount)
-    const modelCommand = parseModelCommandDraft(snapshot.draft, modelCatalog.models)
-
-    if (modelCommand?.scope === 'permanent') {
-      const mergedSettingsBySide = applyModelShortcut(modelCommand.model.id)
-      const baseConversation =
-        currentActive ??
-        createConversation(mergedSettingsBySide, activeState.activeSideMode, activeState.activeSideCount)
-      const conversationWithLatestSettings = {
-        ...baseConversation,
-        sideMode: activeState.activeSideMode,
-        sideCount: activeState.activeSideCount,
-        settingsBySide: mergedSettingsBySide,
-      }
-      const updatedConversation = appendConversationEntry(
-        conversationWithLatestSettings,
-        snapshot.draft,
-        `模型已切换为 ${modelCommand.model.name}，后续请求将默认使用该模型。`,
-        [],
-        modelCommand.model.name,
-        [],
-      )
-      persistConversation(updatedConversation)
-      setActiveConversation(updatedConversation.id)
-      setSendScrollTrigger((prev) => prev + 1)
-      actions.setDraft('')
-      clearDraftSourceImages()
-      notifier.success(`已切换到 ${modelCommand.model.name}`)
-      return
-    }
-
-    const draftAfterModelCommand = modelCommand?.cleanedPrompt?.length ? modelCommand.cleanedPrompt : snapshot.draft
-    const oneShotParseResult = parseOneShotSizeCommands(draftAfterModelCommand)
-    if (oneShotParseResult.error) {
-      dispatch({ type: 'send/fail', payload: oneShotParseResult.error })
-      return
-    }
-
-    const effectiveDraft = oneShotParseResult.cleanedPrompt
-    const modelAdjustedSettingsBySide = modelCommand?.scope === 'temporary'
-      ? (() => {
-          const nextSettings = { ...activeState.activeSettingsBySide }
-          for (const side of targetSides) {
-            const current = nextSettings[side]
-            if (!current) {
-              continue
-            }
-            nextSettings[side] = {
-              ...current,
-              modelId: modelCommand.model.id,
-              textModelId: modelCommand.model.id,
-              paramValues: {},
-            }
-          }
-          return nextSettings
-        })()
-      : activeState.activeSettingsBySide
-    const effectiveSettingsBySide = applyOneShotSizeOverridesToSettings(
-      modelAdjustedSettingsBySide,
-      targetSides,
-      oneShotParseResult.overrides,
-    )
-
-    const blockedReason = resolveSendBlockedReason(snapshot, {
-      ...activeState,
-      activeSettingsBySide: effectiveSettingsBySide,
-    })
-    if (blockedReason) {
-      const baseConversation =
-        currentActive ??
-        createConversation(activeState.activeSettingsBySide, activeState.activeSideMode, activeState.activeSideCount)
-      const updatedConversation = appendConversationEntry(
-        baseConversation,
-        snapshot.draft,
-        blockedReason.assistantContent,
-        [],
-        effectiveDraft,
-        [],
-        blockedReason.actions,
-      )
-      persistConversation(updatedConversation)
-      setActiveConversation(updatedConversation.id)
-      setSendScrollTrigger((prev) => prev + 1)
-      actions.setDraft('')
-      clearDraftSourceImages()
-      dispatch({ type: 'send/clearError' })
-      return
-    }
-
-    const sendModeResolution = resolveSendGenerationMode({
-      sideMode: activeState.activeSideMode,
-      sideCount: activeState.activeSideCount,
-      settingsBySide: effectiveSettingsBySide,
-    })
-    if ('error' in sendModeResolution) {
-      dispatch({ type: 'send/fail', payload: sendModeResolution.error })
-      return
-    }
-
-    dispatch({ type: 'send/start' })
-    setSendScrollTrigger((prev) => prev + 1)
-
-    if (sendModeResolution.mode === 'text') {
-      const primarySide = targetSides[0] ?? 'single'
-      const textSettings = effectiveSettingsBySide[primarySide]
-      const textChannel = snapshot.channels.find((item) => item.id === textSettings?.channelId)
-      if (!textSettings || !textChannel) {
-        dispatch({ type: 'send/fail', payload: '当前文本模式未找到可用渠道配置。' })
-        return
-      }
-
-      if (draftSourceImageSnapshot.length > 0) {
-        notifier.info('文本模式下不会携带参考图，已自动忽略。')
-      }
-
-      const textMessages = buildTextRequestMessages(currentActive, effectiveDraft)
-      const baseConversation =
-        currentActive ??
-        createConversation(activeState.activeSettingsBySide, activeState.activeSideMode, activeState.activeSideCount)
-      const conversationWithLatestSettings = {
-        ...baseConversation,
-        sideMode: activeState.activeSideMode,
-        sideCount: activeState.activeSideCount,
-        settingsBySide: effectiveSettingsBySide,
-      }
-      const assistantInitialContent = modelCommand?.scope === 'temporary'
-        ? `已临时切换到 ${modelCommand.model.name} 执行本次文本请求。\n\n`
-        : ''
-      const updatedConversation = appendConversationEntry(
-        conversationWithLatestSettings,
-        snapshot.draft,
-        assistantInitialContent,
-        [],
-        effectiveDraft,
-        [],
-      )
-      persistConversation(updatedConversation)
-      if (!currentActive) {
-        setActiveConversation(updatedConversation.id)
-      }
-
-      const assistantMessageId = updatedConversation.messages[updatedConversation.messages.length - 1]?.id
-      const targetConversationId = updatedConversation.id
-
-      actions.setDraft('')
-      clearDraftSourceImages()
-      if (modelCommand?.scope === 'temporary') {
-        notifier.success(`本次已临时切换到 ${modelCommand.model.name}`)
-      }
-
-      if (!assistantMessageId) {
-        dispatch({ type: 'send/fail', payload: '助手消息初始化失败。' })
-        return
-      }
-
-      let streamedText = assistantInitialContent
-      try {
-        await streamTextByProvider({
-          channel: textChannel,
-          request: {
-            modelId: textSettings.textModelId ?? textSettings.modelId,
-            messages: textMessages,
-          },
-          onDelta: (chunk) => {
-            streamedText += chunk
-            updateAssistantMessageContent(targetConversationId, assistantMessageId, streamedText)
-          },
-        })
-
-        const finalText = streamedText.trim().length > 0 ? streamedText : '（未返回文本内容）'
-        updateAssistantMessageContent(targetConversationId, assistantMessageId, finalText, {
-          immediateStorage: true,
-        })
-        dispatch({ type: 'send/succeed' })
-      } catch (error) {
-        const reason = error instanceof Error ? error.message : '文本生成失败'
-        const fallbackText = streamedText.trim().length > 0 ? streamedText : `文本生成失败：${reason}`
-        updateAssistantMessageContent(targetConversationId, assistantMessageId, fallbackText, {
-          immediateStorage: true,
-        })
-        if (isAbortLikeError(error)) {
-          dispatch({ type: 'send/succeed' })
-          return
-        }
-        dispatch({ type: 'send/fail', payload: reason })
-      }
-      return
-    }
-
-    let sourceImageRefs: RunSourceImageRef[] = []
-    if (draftSourceImageSnapshot.length > 0) {
-      try {
-        sourceImageRefs = await persistDraftSourceImages(draftSourceImageSnapshot)
-      } catch (error) {
-        const reason = error instanceof Error ? error.message : '参考图写入失败'
-        dispatch({ type: 'send/fail', payload: reason })
-        return
-      }
-    }
-
-    const planned = orchestrator.planSendDraft({
-      ...snapshot,
-      draft: effectiveDraft,
-    }, {
-      mode: activeState.activeSideMode,
-      sideCount: activeState.activeSideCount,
-      settingsBySide: effectiveSettingsBySide,
-      modelCatalog,
-      sourceImages: sourceImageRefs,
-    })
-
-    if (!planned.ok) {
-      dispatch({ type: 'send/fail', payload: planned.error })
-      return
-    }
-
-    const plan = planned.value
-    let targetConversationId: string
-
-    if (!currentActive) {
-      const conversation = createConversation(
-        activeState.activeSettingsBySide,
-        activeState.activeSideMode,
-        activeState.activeSideCount,
-      )
-      const assistantContent = modelCommand?.scope === 'temporary'
-        ? `已临时切换到 ${modelCommand.model.name} 执行本次请求，点击图片可预览。`
-        : '已完成生成请求，点击图片可预览。'
-      const updatedConversation = appendConversationEntry(
-        conversation,
-        snapshot.draft,
-        assistantContent,
-        plan.pendingRuns,
-        effectiveDraft,
-        sourceImageRefs,
-      )
-      persistConversation(updatedConversation)
-      setActiveConversation(updatedConversation.id)
-      targetConversationId = updatedConversation.id
-    } else {
-      const assistantContent = modelCommand?.scope === 'temporary'
-        ? `已临时切换到 ${modelCommand.model.name} 执行本次请求，点击图片可预览。`
-        : '已完成生成请求，点击图片可预览。'
-      const updatedConversation = appendConversationEntry(
-        currentActive,
-        snapshot.draft,
-        assistantContent,
-        plan.pendingRuns,
-        effectiveDraft,
-        sourceImageRefs,
-      )
-      persistConversation(updatedConversation)
-      targetConversationId = updatedConversation.id
-    }
-
-    actions.setDraft('')
-    clearDraftSourceImages()
-    if (modelCommand?.scope === 'temporary') {
-      notifier.success(`本次已临时切换到 ${modelCommand.model.name}`)
-    }
-
-    try {
-      const adaptiveConcurrency = resolveAdaptiveRunConcurrency(snapshot.runConcurrency)
-      const runControllers = new Map(plan.runPlans.map((runPlan) => [runPlan.pendingRun.id, new AbortController()]))
-      runControllers.forEach((controller, runId) => registerActiveRun(targetConversationId, runId, controller))
-      const completedRuns = await orchestrator.executeRunPlans(
-        plan.runPlans.map((runPlan) => ({
-          batchId: plan.batchId,
-          sideMode: plan.mode,
-          side: runPlan.side,
-          settings: runPlan.settings,
-          templatePrompt: runPlan.pendingRun.templatePrompt,
-          finalPrompt: runPlan.pendingRun.finalPrompt,
-          variablesSnapshot: runPlan.pendingRun.variablesSnapshot,
-          modelId: runPlan.modelId,
-          modelName: runPlan.modelName,
-          paramsSnapshot: runPlan.paramsSnapshot,
-          sourceImages: runPlan.sourceImages,
-          channel: runPlan.channel,
-          pendingRunId: runPlan.pendingRun.id,
-          pendingCreatedAt: runPlan.pendingRun.createdAt,
-          signal: runControllers.get(runPlan.pendingRun.id)?.signal,
-        })),
-        adaptiveConcurrency,
-        {
-          onRunImageProgress: (progress) => {
-            if (!isRunStillActive(targetConversationId, progress.runId)) {
-              return
-            }
-            updateRunImageInConversation(targetConversationId, progress)
-          },
-        },
-      )
-
-      const activeCompletedRuns = completedRuns.filter((run) => isRunStillActive(targetConversationId, run.id))
-      const map = new Map(activeCompletedRuns.map((run) => [run.id, run]))
-      replaceRunsInConversation(targetConversationId, map)
-      activeCompletedRuns.forEach((run) => unregisterActiveRun(targetConversationId, run.id))
-      dispatch({ type: 'send/succeed' })
-    } catch (error) {
-      plan.runPlans.forEach((runPlan) => unregisterActiveRun(targetConversationId, runPlan.pendingRun.id))
-      if (isAbortLikeError(error)) {
-        dispatch({ type: 'send/succeed' })
-        return
-      }
-      const message = error instanceof Error ? error.message : 'Unknown error'
-      dispatch({ type: 'send/fail', payload: message })
-    }
-  }
-
-  const retryRun = async (runId: string) => {
-    const snapshot = stateRef.current
-    const currentActive = await getLoadedActiveConversation()
-    const plan = orchestrator.planRetry(currentActive, runId, {
-      channels: snapshot.channels,
-      modelCatalog,
-    })
-
-    if (!plan || !currentActive) {
-      return
-    }
-
-    const sourceRun = findRunInConversation(currentActive, runId)
-    if (!sourceRun) {
-      return
-    }
-
-    const failedCount = sourceRun.images.filter((item) => item.status === 'failed').length
-    if (failedCount === 0) {
-      return
-    }
-
-    const pendingRun = markFailedImagesPending(sourceRun)
-    replaceRunsInConversation(currentActive.id, new Map([[sourceRun.id, pendingRun]]))
-
-    const retrySettings = {
-      ...plan.settings,
-      imageCount: failedCount,
-    }
-
-    const controller = new AbortController()
-    registerActiveRun(currentActive.id, sourceRun.id, controller)
-    try {
-      const retry = await orchestrator.executeRetry({
-        batchId: plan.sourceRun.batchId,
-        sideMode: plan.sourceRun.sideMode,
-        side: plan.sourceRun.side,
-        settings: retrySettings,
-        templatePrompt: plan.sourceRun.templatePrompt,
-        finalPrompt: plan.sourceRun.finalPrompt,
-        variablesSnapshot: { ...plan.sourceRun.variablesSnapshot },
-        modelId: plan.modelId,
-        modelName: plan.modelName,
-        paramsSnapshot: { ...plan.paramsSnapshot },
-        sourceImages: plan.sourceImages,
-        channel: plan.channel,
-        retryOfRunId: plan.rootRunId,
-        retryAttempt: plan.nextRetryAttempt,
-        signal: controller.signal,
-        onImageProgress: (progress) => {
-          if (!isRunStillActive(currentActive.id, progress.runId)) {
-            return
-          }
-          updateRunImageInConversation(currentActive.id, progress)
-        },
-      })
-
-      if (!isRunStillActive(currentActive.id, sourceRun.id)) {
-        return
-      }
-      const mergedRun = mergeRetryResultIntoRun(sourceRun, retry)
-      replaceRunsInConversation(currentActive.id, new Map([[sourceRun.id, mergedRun]]))
-    } catch (error) {
-      if (!isAbortLikeError(error)) {
-        throw error
-      }
-    } finally {
-      unregisterActiveRun(currentActive.id, sourceRun.id)
-    }
-  }
-
-  const editRunTemplate = async (runId: string) => {
-    const currentActive = await getLoadedActiveConversation()
-    if (!currentActive) {
-      return
-    }
-
-    const sourceRun = findRunInConversation(currentActive, runId)
-    if (!sourceRun) {
-      return
-    }
-
-    actions.setDraft(sourceRun.templatePrompt)
-    dispatch({ type: 'send/clearError' })
-  }
-
-  const replayRunAsNewMessage = async (runId: string) => {
-    if (replayingRunIdsRef.current.has(runId)) {
-      return
-    }
-    replayingRunIdsRef.current.add(runId)
-    setReplayingRunIds((prev) => [...prev, runId])
-
-    try {
-      const snapshot = stateRef.current
-      const currentActive = await getLoadedActiveConversation()
-      const plan = orchestrator.planReplay(currentActive, runId, {
-        channels: snapshot.channels,
+  const { resumePendingImagesForConversation } = useResumeFlow({
+    stateActiveId: state.activeId,
+    stateRef,
+    resumePollTimerRef,
+    backgroundResumePollTimerRef,
+    resumingImageIdsRef,
+    taskResumeService,
+    ensureConversationLoaded,
+    updateRunImageInConversation,
+    persistConversation: (conversation) => {
+      persistConversation(conversation)
+    },
+    flushPendingPersistence,
+  })
+
+  const sendFlow = useMemo(
+    () =>
+      createSendFlowModule({
+        stateRef,
         modelCatalog,
-      })
-
-      if (!plan || !currentActive) {
-        return
-      }
-
-      const now = new Date().toISOString()
-      const pendingRun: Run = {
-        id: makeId(),
-        batchId: plan.batchId,
-        createdAt: now,
-        sideMode: plan.sourceRun.sideMode,
-        side: plan.sourceRun.side,
-        prompt: plan.sourceRun.finalPrompt,
-        imageCount: plan.settings.imageCount,
-        channelId: plan.channel?.id ?? null,
-        channelName: plan.channel?.name ?? plan.sourceRun.channelName ?? null,
-        modelId: plan.modelId,
-        modelName: plan.modelName,
-        templatePrompt: plan.sourceRun.templatePrompt,
-        finalPrompt: plan.sourceRun.finalPrompt,
-        variablesSnapshot: { ...plan.sourceRun.variablesSnapshot },
-        paramsSnapshot: { ...plan.paramsSnapshot },
-        sourceImages: plan.sourceImages,
-        settingsSnapshot: {
-          ...plan.sourceRun.settingsSnapshot,
-          imageCount: plan.settings.imageCount,
+        orchestrator,
+        dispatch,
+        actions,
+        notifier,
+        ensureConversationLoaded,
+        persistConversation: (conversation) => {
+          persistConversation(conversation)
         },
-        retryAttempt: 0,
-        images: Array.from({ length: plan.settings.imageCount }, (_, index) => ({
-          id: makeId(),
-          seq: index + 1,
-          status: 'pending' as const,
-          threadState: 'active' as const,
-        })),
-      }
+        setActiveConversation,
+        setSendScrollTrigger,
+        clearDraftSourceImages,
+        draftSourceImagesRef,
+        appendSourceImageFiles,
+        persistDraftSourceImages,
+        maxSourceImages,
+        applyModelShortcut,
+        resolveAdaptiveRunConcurrency,
+        registerActiveRun,
+        unregisterActiveRun,
+        isRunStillActive,
+        updateRunImageInConversation,
+        replaceRunsInConversation,
+        findRunInConversation,
+        mergeRetryResultIntoRun,
+        markFailedImagesPending,
+        replayingRunIdsRef,
+        setReplayingRunIds,
+        updateAssistantMessageContent,
+      }),
+    [
+      actions,
+      applyModelShortcut,
+      findRunInConversation,
+      markFailedImagesPending,
+      mergeRetryResultIntoRun,
+      modelCatalog,
+      notifier,
+      orchestrator,
+      replaceRunsInConversation,
+      resolveAdaptiveRunConcurrency,
+      updateAssistantMessageContent,
+      updateRunImageInConversation,
+    ],
+  )
 
-      const replayMessage: Message = {
-        id: makeId(),
-        createdAt: now,
-        role: 'assistant',
-        content: 'Replay request submitted. Click images to preview.',
-        runs: [pendingRun],
-      }
+  const {
+    appendDraftSourceImages,
+    sendDraft,
+    retryRun,
+    editRunTemplate,
+    replayRunAsNewMessage,
+  } = sendFlow
 
-      persistConversation({
-        ...currentActive,
-        updatedAt: now,
-        messages: [...currentActive.messages, replayMessage],
-      })
+  const downloadFlow = useMemo(
+    () =>
+      createDownloadFlow({
+        getActiveConversation: () => {
+          const snapshot = stateRef.current
+          return snapshot.activeId ? snapshot.contents[snapshot.activeId] ?? null : null
+        },
+        findRunInConversation,
+        downloadService,
+      }),
+    [downloadService, findRunInConversation],
+  )
 
-      const controller = new AbortController()
-      registerActiveRun(currentActive.id, pendingRun.id, controller)
-      try {
-        const completedRun = await orchestrator.executeReplay({
-          batchId: plan.batchId,
-          sideMode: plan.sourceRun.sideMode,
-          side: plan.sourceRun.side,
-          settings: plan.settings,
-          templatePrompt: plan.sourceRun.templatePrompt,
-          finalPrompt: plan.sourceRun.finalPrompt,
-          variablesSnapshot: { ...plan.sourceRun.variablesSnapshot },
-          modelId: plan.modelId,
-          modelName: plan.modelName,
-          paramsSnapshot: { ...plan.paramsSnapshot },
-          sourceImages: plan.sourceImages,
-          channel: plan.channel,
-          signal: controller.signal,
-          onImageProgress: (progress) => {
-            if (!isRunStillActive(currentActive.id, progress.runId)) {
-              return
-            }
-            updateRunImageInConversation(currentActive.id, progress)
-          },
-        })
-
-        if (!isRunStillActive(currentActive.id, pendingRun.id)) {
-          return
-        }
-        const stableRun: Run = {
-          ...completedRun,
-          id: pendingRun.id,
-          createdAt: pendingRun.createdAt,
-        }
-        replaceRunsInConversation(currentActive.id, new Map([[pendingRun.id, stableRun]]))
-      } catch (error) {
-        if (!isAbortLikeError(error)) {
-          throw error
-        }
-      } finally {
-        unregisterActiveRun(currentActive.id, pendingRun.id)
-      }
-    } finally {
-      replayingRunIdsRef.current.delete(runId)
-      setReplayingRunIds((prev) => prev.filter((id) => id !== runId))
-    }
-  }
-
-  const downloadAllRunImages = (runId: string) => {
-    const snapshot = stateRef.current
-    const currentActive = snapshot.activeId ? snapshot.contents[snapshot.activeId] ?? null : null
-    if (!currentActive || typeof document === 'undefined') {
-      return
-    }
-
-    const sourceRun = findRunInConversation(currentActive, runId)
-    if (!sourceRun) {
-      return
-    }
-
-    const successfulImages = sourceRun.images.filter((item) => isDownloadableImage(item))
-    if (successfulImages.length === 0) {
-      return
-    }
-
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
-    void (async () => {
-      const downloadItems: BulkDownloadItem[] = []
-      for (const image of successfulImages) {
-        const resolved = await resolveImageSourceForDownload(image)
-        if (!resolved) {
-          continue
-        }
-        const ext = downloadService.inferImageExtension(resolved.src)
-        const filename = buildImageFileName({
-          modelName: sourceRun.modelName,
-          prompt: sourceRun.finalPrompt,
-          seq: image.seq,
-          ext,
-          timestamp,
-        })
-        downloadItems.push({ src: resolved.src, filename, sourceKind: resolved.sourceKind, cleanup: resolved.revoke })
-      }
-      await downloadService.downloadZipArchive({
-        items: downloadItems,
-        archivePrefix: 'run-images',
-      })
-    })()
-  }
-
-  const downloadSingleRunImage = (runId: string, imageId: string) => {
-    const snapshot = stateRef.current
-    const currentActive = snapshot.activeId ? snapshot.contents[snapshot.activeId] ?? null : null
-    if (!currentActive) {
-      return
-    }
-
-    const sourceRun = findRunInConversation(currentActive, runId)
-    if (!sourceRun) {
-      return
-    }
-
-    const target = sourceRun.images.find((item) => item.id === imageId && isDownloadableImage(item))
-    if (!target) {
-      return
-    }
-    void (async () => {
-      const resolved = await resolveImageSourceForDownload(target)
-      if (!resolved) {
-        return
-      }
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
-      const ext = downloadService.inferImageExtension(resolved.src)
-      const filename = buildImageFileName({
-        modelName: sourceRun.modelName,
-        prompt: sourceRun.finalPrompt,
-        seq: target.seq,
-        ext,
-        timestamp,
-      })
-      await downloadService.downloadSingleImage({
-        src: resolved.src,
-        filename,
-        cleanup: resolved.revoke,
-      })
-    })()
-  }
-
-  const downloadBatchRunImages = (runId: string) => {
-    const snapshot = stateRef.current
-    const currentActive = snapshot.activeId ? snapshot.contents[snapshot.activeId] ?? null : null
-    if (!currentActive) {
-      return
-    }
-
-    const allRuns = currentActive.messages.flatMap((message) => message.runs ?? [])
-    const successImages = collectBatchDownloadImagesByRunId(allRuns, runId)
-
-    if (successImages.length === 0) {
-      return
-    }
-
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
-    let seqCounter = 0
-    void (async () => {
-      const downloadItems: BulkDownloadItem[] = []
-      for (const { run, image } of successImages) {
-        const resolved = await resolveImageSourceForDownload(image)
-        if (!resolved) {
-          continue
-        }
-        seqCounter += 1
-        const ext = downloadService.inferImageExtension(resolved.src)
-        const filename = buildImageFileName({
-          modelName: run.modelName,
-          prompt: run.finalPrompt,
-          seq: seqCounter,
-          ext,
-          timestamp,
-        })
-        downloadItems.push({ src: resolved.src, filename, sourceKind: resolved.sourceKind, cleanup: resolved.revoke })
-      }
-      await downloadService.downloadZipArchive({
-        items: downloadItems,
-        archivePrefix: 'batch-images',
-      })
-    })()
-  }
-
-  const downloadMessageRunImages = async (runIds: string[]) => {
-    const snapshot = stateRef.current
-    const currentActive = snapshot.activeId ? snapshot.contents[snapshot.activeId] ?? null : null
-    if (!currentActive || runIds.length === 0) {
-      return
-    }
-
-    const runIdSet = new Set(runIds)
-    const targetRuns = currentActive.messages
-      .flatMap((message) => message.runs ?? [])
-      .filter((run) => runIdSet.has(run.id))
-
-    if (targetRuns.length === 0) {
-      return
-    }
-
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
-    let seqCounter = 0
-    const downloadItems: BulkDownloadItem[] = []
-    for (const run of targetRuns) {
-      const successfulImages = run.images.filter((item) => isDownloadableImage(item))
-      for (const image of successfulImages) {
-        const resolved = await resolveImageSourceForDownload(image)
-        if (!resolved) {
-          continue
-        }
-        seqCounter += 1
-        const ext = downloadService.inferImageExtension(resolved.src)
-        const filename = buildImageFileName({
-          modelName: run.modelName,
-          prompt: run.finalPrompt,
-          seq: seqCounter,
-          ext,
-          timestamp,
-        })
-        downloadItems.push({ src: resolved.src, filename, sourceKind: resolved.sourceKind, cleanup: resolved.revoke })
-      }
-    }
-
-    if (downloadItems.length === 0) {
-      return
-    }
-    const archivePrefix = buildMessageArchivePrefix(targetRuns)
-    await downloadService.downloadZipArchive({
-      items: downloadItems,
-      archivePrefix,
-    })
-  }
-
-  const loadOlderMessages = () => {
-    setHistoryVisibleLimit((prev) => prev + MESSAGE_HISTORY_PAGE_SIZE)
-  }
+  const loadOlderMessages = () => setHistoryVisibleLimit((prev) => prev + MESSAGE_HISTORY_PAGE_SIZE)
 
   const queries = {
     summaries: state.summaries,
@@ -2914,15 +860,13 @@ export function useConversationsEngine() {
     retryRun,
     editRunTemplate,
     replayRunAsNewMessage,
-    downloadAllRunImages,
-    downloadSingleRunImage,
-    downloadBatchRunImages,
-    downloadMessageRunImages,
+    downloadAllRunImages: downloadFlow.downloadAllRunImages,
+    downloadSingleRunImage: downloadFlow.downloadSingleRunImage,
+    downloadBatchRunImages: downloadFlow.downloadBatchRunImages,
+    downloadMessageRunImages: downloadFlow.downloadMessageRunImages,
   }
 
-  const maintenance = {
-    flushPendingPersistence,
-  }
+  const maintenance = { flushPendingPersistence }
 
   return {
     queries,
