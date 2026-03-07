@@ -3,13 +3,13 @@ import {
   buildPanelVariableBatches,
   reformatRowsForPanelFormat,
   buildSyncPreview,
-  classifyFailure,
   collectVariables,
-  normalizeSettingsBySide,
   parseBulkVariables,
-  planRunBatch,
   serializeBulkVariables,
-} from '../conversationDomain'
+} from '../panelVariableParsing'
+import { classifyFailure } from '../failureClassifier'
+import { normalizeSettingsBySide } from '../settingsNormalization'
+import { planRunBatch } from '../runPlanning'
 import type { ApiChannel, ModelCatalog, Side, SingleSideSettings } from '../../../../types/chat'
 
 const catalog: ModelCatalog = {

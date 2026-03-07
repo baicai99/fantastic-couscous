@@ -164,7 +164,7 @@
 
 如果你要改这个项目，优先遵循这条路径：
 1. 改业务规则：先看 `features/conversation/domain/*`。
-2. 改发送/重试/回放执行链：看 `application/*` + `hooks/useConversations.ts` + `hooks/conversations/*`。
+2. 改发送/重试/回放执行链：看 `application/*` + `hooks/useConversationsEngine.ts` + `hooks/useConversations.ts`（命令分发层）。
 3. 改存储格式：看 `services/conversationStorage.ts` 与 `infra/conversationRepository.ts`。
 4. 改 UI 交互：看 `features/conversation/ui/ConversationWorkspace.tsx` 与 `components/*`。
 

@@ -10,9 +10,9 @@
 
 - 全局会话控制（最核心）
   - `src/hooks/useConversations.ts`
-  - `src/hooks/conversations/queries.ts`
-  - `src/hooks/conversations/commands.ts`
-  - `src/hooks/conversations/backgroundJobs.ts`
+  - `src/hooks/useConversationsEngine.ts`
+  - `src/features/conversation/application/conversationControllerContract.ts`
+  - `src/features/conversation/application/useCases/*`
   - `src/hooks/conversations/useDraftSourceImages.ts`
   - `src/hooks/conversations/sendFlowUtils.ts`
   - `src/features/conversation/state/conversationState.ts`
@@ -78,16 +78,14 @@
 - `src/utils`：通用工具。
 - `src/types`：核心类型定义。
 
-## Controller 契约速记（P0-A）
+## Controller 契约速记（V2）
 
-- `useConversations` 返回固定命名空间：
-  - `queries`：只读与派生（不可写）
-  - `commands`：所有写操作和动作入口
-  - `maintenance`：后台维护入口（当前含 `flushPendingPersistence`）
-- UI 层约定：
-  - 读状态：`controller.queries.*`
-  - 发动作：`controller.commands.*`
-  - 维护任务：`controller.maintenance.*`
+- `useConversations` 返回统一控制器：
+  - `read`：只读与派生状态
+  - `dispatch(command)`：命令式写操作入口
+  - `runSystemJob(job)`：后台维护任务入口
+- 兼容字段（过渡期）：
+  - `queries` / `commands` / `maintenance` 仍保留，但新代码默认使用 `read/dispatch/runSystemJob`。
 
 ## 关键约束
 
@@ -103,5 +101,5 @@
 1. `docs/src-architecture-overview.md`
 2. `src/types/chat.ts`
 3. `src/hooks/useConversations.ts`
-4. `src/features/conversation/domain/settingsNormalization.ts`
+4. `src/hooks/useConversationsEngine.ts`
 5. 对应任务再看 `components/settings/*` 或 `services/*`

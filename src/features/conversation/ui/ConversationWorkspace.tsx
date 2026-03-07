@@ -12,7 +12,7 @@ import { SidebarShell } from '../../../components/sidebar/SidebarShell'
 import { useImagePreview } from '../../../hooks/useImagePreview'
 import { useDebouncedCallback } from '../../../hooks/useDebouncedCallback'
 import { usePersistentPanelMode } from '../../../hooks/usePersistentPanelMode'
-import type { MessageAction } from '../../../types/chat'
+import type { MessageAction, Side, SingleSideSettings } from '../../../types/chat'
 import { extractImageFilesFromTransfer, hasImageFileInTransfer } from '../../../utils/imageTransfer'
 import { useConversationController } from './useConversationController'
 
@@ -99,7 +99,7 @@ export function ConversationWorkspace() {
   }, 80)
 
   const controller = useConversationController()
-  const { queries, commands } = controller
+  const { read, dispatch } = controller
 
   const {
     summaries,
@@ -134,43 +134,57 @@ export function ConversationWorkspace() {
     panelBatchError,
     panelMismatchRowIds,
     replayingRunIds,
-  } = queries
+  } = read
 
-  const {
-    setDraft,
-    appendDraftSourceImages,
-    removeDraftSourceImage,
-    clearDraftSourceImages,
-    setShowAdvancedVariables,
-    setDynamicPromptEnabled,
-    setAutoRenameConversationTitle,
-    setPanelValueFormat,
-    setPanelVariables,
-    setFavoriteModelIds,
-    setRunConcurrency,
-    createNewConversation,
-    clearAllConversations,
-    removeConversation,
-    renameConversation,
-    togglePinConversation,
-    switchConversation,
-    updateSideMode,
-    updateSideCount,
-    updateSideSettings,
-    setGenerationMode,
-    setSideModel,
-    applyModelShortcut,
-    setSideModelParam,
-    setChannels,
-    sendDraft,
-    loadOlderMessages,
-    retryRun,
-    replayRunAsNewMessage,
-    downloadAllRunImages,
-    downloadMessageRunImages,
-    downloadSingleRunImage,
-    downloadBatchRunImages,
-  } = commands
+  const setDraft = (value: string) => { void dispatch({ type: 'draft/set', value }) }
+  const appendDraftSourceImages = (files: File[]) => { void dispatch({ type: 'draft/source-images/append', files }) }
+  const removeDraftSourceImage = (imageId: string) => { void dispatch({ type: 'draft/source-images/remove', imageId }) }
+  const clearDraftSourceImages = () => { void dispatch({ type: 'draft/source-images/clear' }) }
+  const setShowAdvancedVariables = (value: boolean) => { void dispatch({ type: 'ui/advanced-variables/set', value }) }
+  const setDynamicPromptEnabled = (value: boolean) => { void dispatch({ type: 'ui/dynamic-prompt/set', value }) }
+  const setAutoRenameConversationTitle = (value: boolean) => { void dispatch({ type: 'ui/auto-rename-title/set', value }) }
+  const setPanelValueFormat = (value: typeof panelValueFormat) => {
+    void dispatch({ type: 'variables/panel-format/set', value })
+  }
+  const setPanelVariables = (value: typeof panelVariables) => { void dispatch({ type: 'variables/panel-rows/set', value }) }
+  const setFavoriteModelIds = (value: string[]) => { void dispatch({ type: 'settings/favorite-models/set', value }) }
+  const setRunConcurrency = (value: number) => { void dispatch({ type: 'settings/run-concurrency/set', value }) }
+  const createNewConversation = () => { void dispatch({ type: 'conversation/create' }) }
+  const clearAllConversations = () => { void dispatch({ type: 'conversation/clear-all' }) }
+  const removeConversation = (conversationId: string) => { void dispatch({ type: 'conversation/remove', conversationId }) }
+  const renameConversation = (conversationId: string, title: string) => {
+    void dispatch({ type: 'conversation/rename', conversationId, title })
+  }
+  const togglePinConversation = (conversationId: string) => {
+    void dispatch({ type: 'conversation/toggle-pin', conversationId })
+  }
+  const switchConversation = (conversationId: string) => { void dispatch({ type: 'conversation/switch', conversationId }) }
+  const updateSideMode = (mode: 'single' | 'multi') => { void dispatch({ type: 'settings/side-mode/update', mode }) }
+  const updateSideCount = (count: number) => { void dispatch({ type: 'settings/side-count/update', count }) }
+  const updateSideSettings = (side: Side, patch: Partial<SingleSideSettings>) => {
+    void dispatch({ type: 'settings/side/update', side, patch })
+  }
+  const setGenerationMode = (mode: 'image' | 'text') => { void dispatch({ type: 'settings/generation-mode/set', mode }) }
+  const setSideModel = (side: Side, modelId: string) => {
+    void dispatch({ type: 'settings/side-model/set', side, modelId })
+  }
+  const applyModelShortcut = (modelId: string) => {
+    void dispatch({ type: 'settings/model-shortcut/apply', modelId })
+  }
+  const setSideModelParam = (side: Side, paramKey: string, value: string | number | boolean) => {
+    void dispatch({ type: 'settings/side-param/set', side, paramKey, value })
+  }
+  const setChannels = (channelsValue: typeof channels) => { void dispatch({ type: 'settings/channels/set', channels: channelsValue }) }
+  const sendDraft = async () => { await dispatch({ type: 'send/execute' }) }
+  const loadOlderMessages = () => { void dispatch({ type: 'history/load-older' }) }
+  const retryRun = async (runId: string) => { await dispatch({ type: 'run/retry', runId }) }
+  const replayRunAsNewMessage = async (runId: string) => { await dispatch({ type: 'run/replay', runId }) }
+  const downloadAllRunImages = (runId: string) => { void dispatch({ type: 'download/run/all', runId }) }
+  const downloadMessageRunImages = async (runIds: string[]) => { await dispatch({ type: 'download/message', runIds }) }
+  const downloadSingleRunImage = (runId: string, imageId: string) => {
+    void dispatch({ type: 'download/run/single', runId, imageId })
+  }
+  const downloadBatchRunImages = (runId: string) => { void dispatch({ type: 'download/run/batch', runId }) }
 
   const {
     isPreviewOpen,

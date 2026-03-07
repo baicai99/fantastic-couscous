@@ -203,6 +203,23 @@ describe('useConversations', () => {
     seedChannels()
   })
 
+  it('supports controller v2 read/dispatch contract', async () => {
+    const { useConversations } = await import('./useConversations')
+    const { result } = renderHook(() => useConversations())
+
+    expect(result.current.read.draft).toBe('')
+
+    await act(async () => {
+      await result.current.dispatch({ type: 'draft/set', value: 'hello' })
+    })
+
+    expect(result.current.read.draft).toBe('hello')
+
+    await act(async () => {
+      await result.current.runSystemJob({ type: 'persistence/flush-pending' })
+    })
+  })
+
   it('only confirms create-new when the active conversation has active image threads', async () => {
     const { useConversations } = await import('./useConversations')
 

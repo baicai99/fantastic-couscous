@@ -4,7 +4,7 @@ import { makeId } from '../../../utils/chat'
 import {
   getUnusedVariableKeys,
   previewTemplate,
-} from '../domain/conversationDomain'
+} from '../domain/templatePreview'
 import { clampSideCount, normalizeConversation, normalizeSettingsBySide } from '../domain/settingsNormalization'
 import { collectVariables } from '../domain/panelVariableParsing'
 import type { PanelValueFormat, PanelVariableRow } from '../domain/types'

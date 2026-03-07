@@ -31,17 +31,11 @@ import type {
   SideMode,
   SingleSideSettings,
 } from '../../types/chat'
-import { fetchChannelModelEntries, fetchChannelModels, type ChannelModelEntry } from '../../services/channelModels'
-import { resolveProviderId } from '../../services/providers/providerId'
 import {
-  applyChannelImport,
-  buildChannelImportPreview,
-  parseApiChannelsFromText,
+  settingsPanelService,
   type ChannelImportPreviewItem,
-} from '../../services/channelImport'
-import { getAspectRatioOptions, getComputedPresetResolution, getSizeTierOptions, normalizeSizeTier } from '../../services/imageSizing'
-import { isSaveDirectoryReady, pickSaveDirectory } from '../../services/imageSave'
-import { makeId } from '../../utils/chat'
+  type ChannelModelEntry,
+} from '../../features/conversation/application/settingsPanelService'
 
 const { Text } = Typography
 const ALL_MODEL_TAG = '__all__'
@@ -84,6 +78,21 @@ const DOUBAO_VIDEO_MODEL_ALLOWLIST_KEYWORDS = ['seeddance', 'seedance']
 const DOUBAO_TEXT_MODEL_BLOCKLIST_KEYWORDS = ['seedream', 'seeddance', 'seedance']
 const KLING_KEYWORD = 'kling'
 const KLING_VENDOR_TAG = '可灵'
+const {
+  fetchChannelModelEntries,
+  fetchChannelModels,
+  resolveProviderId,
+  applyChannelImport,
+  buildChannelImportPreview,
+  parseApiChannelsFromText,
+  getAspectRatioOptions,
+  getComputedPresetResolution,
+  getSizeTierOptions,
+  normalizeSizeTier,
+  isSaveDirectoryReady,
+  pickSaveDirectory,
+  makeId,
+} = settingsPanelService
 
 interface SettingsPanelProps {
   sideMode: SideMode

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildReplayPlan, buildRetryPlan } from '../conversationDomain'
+import { buildReplayPlan, buildRetryPlan } from '../runPlanning'
 import type { Conversation, ModelCatalog } from '../../../../types/chat'
 
 const catalog: ModelCatalog = {
