@@ -5,6 +5,7 @@ import { resolveProviderId } from './providers/providerId'
 
 const STORAGE_INDEX_KEY = 'm1:conversation-index'
 const STORAGE_ACTIVE_KEY = 'm1:active-conversation-id'
+const EMPTY_ACTIVE_CONVERSATION_SENTINEL = '__EMPTY_ACTIVE_CONVERSATION__'
 const STORAGE_CONTENT_PREFIX = 'm1:conversation:'
 const STORAGE_CHANNELS_KEY = 'm3:channels'
 const STORAGE_STAGED_SETTINGS_KEY = 'm3:staged-settings'
@@ -157,7 +158,12 @@ export function loadConversationIndexFromStorage(): {
     const parsedIndex = JSON.parse(rawIndex) as ConversationSummary[]
     const summaries = parsedIndex.filter((item) => typeof item.id === 'string')
     const summaryIds = new Set(summaries.map((item) => item.id))
-    const activeId = rawActiveId && summaryIds.has(rawActiveId) ? rawActiveId : summaries[0]?.id ?? null
+    if (rawActiveId === EMPTY_ACTIVE_CONVERSATION_SENTINEL || rawActiveId === '') {
+      return { summaries, activeId: null }
+    }
+
+    const activeId =
+      rawActiveId === null ? summaries[0]?.id ?? null : summaryIds.has(rawActiveId) ? rawActiveId : summaries[0]?.id ?? null
     return { summaries, activeId }
   } catch {
     return { summaries: [], activeId: null }
@@ -212,7 +218,11 @@ function safeParseConversation(raw: string, fallbackTitle = '未命名'): Conver
   }
 }
 
-export function saveActiveConversationId(conversationId: string): void {
+export function saveActiveConversationId(conversationId: string | null): void {
+  if (conversationId === null) {
+    localStorage.setItem(STORAGE_ACTIVE_KEY, EMPTY_ACTIVE_CONVERSATION_SENTINEL)
+    return
+  }
   localStorage.setItem(STORAGE_ACTIVE_KEY, conversationId)
 }
 

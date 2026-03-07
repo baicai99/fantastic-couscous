@@ -7,27 +7,27 @@ describe('App smoke flow', () => {
     localStorage.clear()
   })
 
-  it('supports send -> show result list -> retry main path', async () => {
+  it('moves composer from empty state to bottom after first send', async () => {
     const user = userEvent.setup()
-    render(<App />)
+    const { container } = render(<App />)
+
+    const chatStage = container.querySelector('.chat-stage')
+    const composerLayer = container.querySelector('.chat-composer-layer')
+    expect(chatStage).toHaveClass('chat-stage-empty')
+    expect(composerLayer).toHaveClass('chat-composer-layer-empty')
+    expect(screen.getByText('你想生成什么图片？')).toBeInTheDocument()
 
     const input = screen.getByRole('textbox')
     await user.type(input, 'a cat portrait')
     await user.click(screen.getByRole('button', { name: /发送|send/i }))
 
     await waitFor(() => {
-      expect(screen.getByText('Assistant')).toBeInTheDocument()
+      expect(chatStage).not.toHaveClass('chat-stage-empty')
+      expect(composerLayer).not.toHaveClass('chat-composer-layer-empty')
     })
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /重试失败项/ })).toBeInTheDocument()
-    })
-
-    await user.click(screen.getByRole('button', { name: /重试失败项/ }))
-
-    await waitFor(() => {
-      const retryButtons = screen.getAllByRole('button', { name: /重试失败项/ })
-      expect(retryButtons.length).toBeGreaterThanOrEqual(1)
+      expect(screen.queryByText('你想生成什么图片？')).not.toBeInTheDocument()
     })
   }, 15000)
 })

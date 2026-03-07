@@ -46,7 +46,7 @@ async function seedConversation(input: { conversation: Conversation; activeId?: 
       lastMessagePreview: input.conversation.messages[0]?.content ?? '',
     },
   ])
-  repo.saveActiveId(input.activeId ?? input.conversation.id)
+  repo.saveActiveId('activeId' in input ? (input.activeId ?? null) : input.conversation.id)
 }
 
 function seedChannels(input?: {
@@ -305,6 +305,18 @@ describe('useConversations', () => {
 
     expect(result.current.activeId).toBeNull()
     expect(result.current.draft).toBe('do not clear me')
+  })
+
+  it('keeps empty active conversation after refresh when history exists', async () => {
+    const conversation = createSeedConversation({ id: 'history-1', title: 'History 1' })
+    await seedConversation({ conversation, activeId: null })
+
+    const { useConversations } = await import('./useConversations')
+    const { result } = renderHook(() => useConversations())
+
+    await waitFor(() => expect(result.current.summaries).toHaveLength(1))
+    expect(result.current.activeId).toBeNull()
+    expect(result.current.activeConversation).toBeNull()
   })
 
   it('keeps draft when switching conversations', async () => {

@@ -62,7 +62,7 @@ export function createConversationRepository(): ConversationRepository {
     saveConversation: saveConversationContent,
     removeConversation: removeConversationContentFromStorage,
     clearConversations: clearConversationsFromStorage,
-    saveActiveId: (conversationId) => saveActiveConversationId(conversationId ?? ''),
+    saveActiveId: (conversationId) => saveActiveConversationId(conversationId),
     saveChannels: saveChannelsToStorage,
     saveStagedSettings: ({
       sideMode,

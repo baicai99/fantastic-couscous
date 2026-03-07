@@ -434,13 +434,46 @@
   position: absolute;
   left: 50%;
   transform: translateX(-50%);
-  bottom: 18px;
+  top: calc(100% - var(--chat-composer-safe-area, 170px) + 6px);
   width: min(var(--chat-composer-target-width, 920px), calc(100% - 32px));
   min-width: min(var(--chat-composer-min-width, 460px), calc(100% - 32px));
   max-width: min(var(--chat-composer-max-width, 920px), calc(100% - 32px));
   z-index: 16;
   pointer-events: none;
-  transition: width 0.24s ease, min-width 0.24s ease, max-width 0.24s ease;
+  transition:
+    top 0.52s cubic-bezier(0.22, 1, 0.36, 1),
+    width 0.24s ease,
+    min-width 0.24s ease,
+    max-width 0.24s ease;
+}
+
+.chat-composer-layer.chat-composer-layer-empty {
+  top: var(--chat-composer-empty-top, clamp(468px, 56vh, 640px));
+}
+
+.chat-stage.chat-stage-empty {
+  --chat-composer-empty-top: clamp(336px, 40vh, 472px);
+  --chat-empty-text-gap: 56px;
+}
+
+.chat-stage.chat-stage-empty .empty-state {
+  position: absolute;
+  left: 50%;
+  top: calc(var(--chat-composer-empty-top) - var(--chat-empty-text-gap));
+  transform: translateX(-50%);
+  height: auto;
+  width: max-content;
+  max-width: calc(100% - 32px);
+  justify-content: center;
+  gap: 0;
+  z-index: 12;
+  pointer-events: none;
+}
+
+.chat-stage.chat-stage-empty .empty-state .ant-typography {
+  font-size: 24px;
+  line-height: 1.25;
+  font-weight: 400;
 }
 
 .chat-input {
@@ -718,9 +751,9 @@
   left: 0;
   bottom: calc(100% + 8px);
   width: min(300px, 100%);
-  max-height: min(360px, 50vh);
+  max-height: min(260px, 34vh);
   overflow-y: auto;
-  padding: 6px;
+  padding: 5px;
   border: 1px solid #d9d9d9;
   border-radius: 14px;
   background: #fff;
@@ -738,9 +771,9 @@
   border-radius: 10px;
   background: transparent;
   text-align: left;
-  padding: 10px 12px;
-  font-size: 15px;
-  line-height: 1.35;
+  padding: 9px 12px;
+  font-size: 14px;
+  line-height: 1.3;
   cursor: pointer;
   overflow-wrap: anywhere;
 }
@@ -758,9 +791,9 @@
 }
 
 .composer-quick-picker-empty {
-  padding: 10px 12px;
+  padding: 8px 10px;
   color: #8c8c8c;
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .composer-action-col {
@@ -867,7 +900,20 @@
 
   .chat-composer-layer {
     width: calc(100% - 20px);
-    bottom: 10px;
+    top: calc(100% - var(--chat-composer-safe-area, 200px) + 14px);
+  }
+
+  .chat-composer-layer.chat-composer-layer-empty {
+    top: var(--chat-composer-empty-top, clamp(396px, 50vh, 540px));
+  }
+
+  .chat-stage.chat-stage-empty {
+    --chat-composer-empty-top: clamp(284px, 35vh, 376px);
+    --chat-empty-text-gap: 44px;
+  }
+
+  .chat-stage.chat-stage-empty .empty-state .ant-typography {
+    font-size: 24px;
   }
 
   .composer-card {
@@ -904,6 +950,10 @@
     min-width: 40px;
     height: 40px;
     align-self: flex-end;
+  }
+
+  .composer-quick-picker {
+    max-height: min(220px, 30vh);
   }
 
   .composer-plus-btn.ant-btn {
@@ -1607,17 +1657,6 @@
   gap: 8px;
 }
 
-.logo-placeholder {
-  width: 72px;
-  height: 72px;
-  border-radius: 16px;
-  background: #fff;
-  border: 1px solid #f0f0f0;
-  display: grid;
-  place-items: center;
-  overflow: hidden;
-}
-
 .run-image-seq-overlay {
   position: absolute;
   top: 8px;
@@ -1642,13 +1681,6 @@
     width: 100%;
     justify-content: flex-start;
   }
-}
-
-.logo-placeholder-image {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
 }
 
 .preview-modal .ant-modal-body {

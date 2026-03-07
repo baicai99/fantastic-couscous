@@ -106,6 +106,7 @@
   - `m1:conversation:<id>`
   - `m3:channels`
   - `m3:staged-settings`
+- 活动会话为“空白新对话”时，`active-conversation-id` 会持久化为专用哨兵值（而非空字符串），刷新后保持空白态，不会自动回退到历史首条会话。
 - 超大 payload 压缩策略：
   - 会话过大时，对较早消息仅保留缩略引用，移除 `fullRef` 降低体积。
 - 渐进进度写入：

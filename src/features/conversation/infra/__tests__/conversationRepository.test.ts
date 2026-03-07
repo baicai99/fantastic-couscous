@@ -65,6 +65,25 @@ describe('conversationRepository', () => {
     expect(channels[0].id).toBe('ch1')
   })
 
+  it('keeps empty active conversation when active id is null', () => {
+    const repo = createConversationRepository()
+
+    repo.saveIndex([
+      {
+        id: 'c1',
+        title: 'conversation 1',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+        lastMessagePreview: 'has history',
+      },
+    ])
+    repo.saveActiveId(null)
+
+    const loaded = repo.load()
+    expect(loaded.activeId).toBeNull()
+    expect(loaded.summaries).toHaveLength(1)
+  })
+
   it('persists staged panel variables', () => {
     const repo = createConversationRepository()
     const panelVariables: PanelVariableRow[] = [

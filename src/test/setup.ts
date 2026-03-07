@@ -1,5 +1,13 @@
 import '@testing-library/jest-dom/vitest'
 
+if (!('__APP_VERSION__' in globalThis)) {
+  Object.defineProperty(globalThis, '__APP_VERSION__', {
+    value: 'test',
+    configurable: true,
+    writable: true,
+  })
+}
+
 if (!window.matchMedia) {
   Object.defineProperty(window, 'matchMedia', {
     writable: true,

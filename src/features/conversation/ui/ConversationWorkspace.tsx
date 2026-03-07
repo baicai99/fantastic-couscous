@@ -204,6 +204,7 @@ export function ConversationWorkspace() {
     const primarySide = activeSideMode === 'single' ? 'single' : activeSides[0]
     return primarySide ? activeSettingsBySide[primarySide]?.modelId ?? '' : ''
   }, [activeSettingsBySide, activeSideMode, activeSides])
+  const isEmptyConversation = !activeConversation || activeConversation.messages.length === 0
   const chatStageStyle = useMemo(
     () =>
       ({
@@ -373,7 +374,7 @@ export function ConversationWorkspace() {
       />
 
       <Layout className="panel-center">
-        <div className="chat-stage" style={chatStageStyle}>
+        <div className={`chat-stage ${isEmptyConversation ? 'chat-stage-empty' : ''}`} style={chatStageStyle}>
           {isGlobalImageDragging ? (
             <div className="chat-image-drop-overlay" role="status" aria-live="polite">
               <div className="chat-image-drop-overlay-card">拖拽图片到任意位置即可上传（最多 6 张）</div>
@@ -448,7 +449,10 @@ export function ConversationWorkspace() {
             )}
           </Content>
 
-          <div ref={composerLayerRef} className="chat-composer-layer">
+          <div
+            ref={composerLayerRef}
+            className={`chat-composer-layer ${isEmptyConversation ? 'chat-composer-layer-empty' : ''}`}
+          >
             <Composer
               draft={draft}
               sourceImages={draftSourceImages}

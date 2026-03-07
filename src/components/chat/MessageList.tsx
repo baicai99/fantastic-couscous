@@ -944,10 +944,7 @@ function MessageListComponent(props: MessageListProps) {
   if (!activeConversation || activeConversation.messages.length === 0) {
     return (
       <div className="empty-state">
-        <div className="logo-placeholder">
-          <img className="logo-placeholder-image" src="/logo.webp" alt="Project logo" />
-        </div>
-        <Text type="secondary">暂无消息，先输入一条 prompt。</Text>
+        <Text type="secondary">你想生成什么图片？</Text>
       </div>
     )
   }
