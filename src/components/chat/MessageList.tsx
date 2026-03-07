@@ -7,6 +7,7 @@ import { gridColumnCount, sortImagesBySeq } from '../../utils/chat'
 import { ENABLE_MESSAGE_WINDOWING } from '../../features/performance/flags'
 import { startMetric, trackDuration } from '../../features/performance/runtimeMetrics'
 import { useDebouncedCallback } from '../../hooks/useDebouncedCallback'
+import { getImageBlob } from '../../services/imageAssetStore'
 
 const { Paragraph, Text } = Typography
 const DEFAULT_ESTIMATED_MESSAGE_HEIGHT = 220
@@ -56,6 +57,11 @@ interface PaginationControl {
   total: number
   label: string
   onLoadMore: () => void
+}
+interface UserSourceImagePreview {
+  id: string
+  src: string
+  fileName: string
 }
 type AssistantActionTrigger = (
   actionKey: string,
@@ -670,6 +676,8 @@ function MessageListComponent(props: MessageListProps) {
   const downloadingMessageIdsRef = useRef<Set<string>>(new Set())
   const [paramModalMessageId, setParamModalMessageId] = useState<string | null>(null)
   const [showScrollToBottom, setShowScrollToBottom] = useState(false)
+  const [userSourceImageMap, setUserSourceImageMap] = useState<Record<string, UserSourceImagePreview[]>>({})
+  const userSourceImageUrlsRef = useRef<string[]>([])
   const debouncedSetViewportHeight = useDebouncedCallback((nextHeight: number) => {
     setViewportHeight((prev) => (prev === nextHeight ? prev : nextHeight))
   }, 80)
@@ -859,6 +867,62 @@ function MessageListComponent(props: MessageListProps) {
   const handleLoadOlderMessages = () => {
     onLoadOlderMessages?.()
   }
+
+  useEffect(() => {
+    let cancelled = false
+
+    const resolveUserSourceImages = async () => {
+      const nextMap: Record<string, UserSourceImagePreview[]> = {}
+      const nextUrlsToRevoke: string[] = []
+
+      for (const message of visibleMessages) {
+        if (message.role !== 'user' || !Array.isArray(message.sourceImages) || message.sourceImages.length === 0) {
+          continue
+        }
+
+        const previews: UserSourceImagePreview[] = []
+        for (const sourceImage of message.sourceImages) {
+          const blob = await getImageBlob(sourceImage.assetKey)
+          if (!blob) {
+            continue
+          }
+          const src = URL.createObjectURL(blob)
+          nextUrlsToRevoke.push(src)
+          previews.push({
+            id: sourceImage.id,
+            src,
+            fileName: sourceImage.fileName || '参考图',
+          })
+        }
+
+        if (previews.length > 0) {
+          nextMap[message.id] = previews
+        }
+      }
+
+      if (cancelled) {
+        nextUrlsToRevoke.forEach((url) => URL.revokeObjectURL(url))
+        return
+      }
+
+      userSourceImageUrlsRef.current.forEach((url) => URL.revokeObjectURL(url))
+      userSourceImageUrlsRef.current = nextUrlsToRevoke
+      setUserSourceImageMap(nextMap)
+    }
+
+    void resolveUserSourceImages()
+
+    return () => {
+      cancelled = true
+    }
+  }, [visibleMessages])
+
+  useEffect(() => {
+    return () => {
+      userSourceImageUrlsRef.current.forEach((url) => URL.revokeObjectURL(url))
+      userSourceImageUrlsRef.current = []
+    }
+  }, [])
 
   const handleRetryAllFailed = useCallback(
     async (messageId: string, runs: Run[]) => {
@@ -1105,12 +1169,29 @@ function MessageListComponent(props: MessageListProps) {
                   </Space>
                 )
               : null
+            const userSourceImages = message.role === 'user' ? (userSourceImageMap[message.id] ?? []) : []
 
             return (
               <div key={message.id} className={`message-card-shell ${message.role}`}>
                 <Card size="small" className={`message-card ${message.role}`}>
                   <Space orientation="vertical" size={8} className="full-width">
-                    <Paragraph style={{ marginBottom: 0 }}>{message.content}</Paragraph>
+                    {message.role === 'user' && userSourceImages.length > 0 ? (
+                      <div className="message-user-source-image-list" aria-label="用户发送参考图">
+                        {userSourceImages.map((item) => (
+                          <img
+                            key={item.id}
+                            src={item.src}
+                            alt={item.fileName || '参考图'}
+                            className="message-user-source-image"
+                            loading="lazy"
+                            decoding="async"
+                          />
+                        ))}
+                      </div>
+                    ) : null}
+                    <Paragraph style={{ marginBottom: 0, textAlign: message.role === 'user' ? 'right' : 'left' }}>
+                      {message.content}
+                    </Paragraph>
                     {message.role === 'assistant' && message.actions?.length ? (
                       <Space size={8} wrap className="message-inline-actions">
                         {message.actions.map((action) => (

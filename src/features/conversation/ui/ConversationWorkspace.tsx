@@ -85,6 +85,18 @@ function resolveMultiRenderProfile(sideCount: number): MultiRenderProfile {
   }
 }
 
+function isSourceImageFeatureEnabled(input: {
+  sideMode: 'single' | 'multi'
+  sideCount: number
+  settingsBySide: Record<string, { generationMode?: 'image' | 'text' } | undefined>
+}): boolean {
+  if (input.sideMode === 'single') {
+    return input.settingsBySide.single?.generationMode !== 'text'
+  }
+  const sides = Array.from({ length: Math.max(2, input.sideCount) }, (_, index) => `win-${index + 1}`)
+  return sides.every((side) => input.settingsBySide[side]?.generationMode !== 'text')
+}
+
 export function ConversationWorkspace() {
   const { mode: leftPanelMode, setMode: setLeftPanelMode, toggleMode: toggleLeftPanelMode } = usePersistentPanelMode({
     storageKey: LEFT_PANEL_COLLAPSED_STORAGE_KEY,
@@ -151,6 +163,7 @@ export function ConversationWorkspace() {
     updateSideMode,
     updateSideCount,
     updateSideSettings,
+    setGenerationMode,
     setSideModel,
     applyModelShortcut,
     setSideModelParam,
@@ -205,6 +218,16 @@ export function ConversationWorkspace() {
     return primarySide ? activeSettingsBySide[primarySide]?.modelId ?? '' : ''
   }, [activeSettingsBySide, activeSideMode, activeSides])
   const isEmptyConversation = !activeConversation || activeConversation.messages.length === 0
+  const sourceImagesEnabled = useMemo(
+    () =>
+      isSourceImageFeatureEnabled({
+        sideMode: activeSideMode,
+        sideCount: activeSideCount,
+        settingsBySide: activeSettingsBySide as Record<string, { generationMode?: 'image' | 'text' } | undefined>,
+      }),
+    [activeSettingsBySide, activeSideCount, activeSideMode],
+  )
+  const activeGenerationMode = sourceImagesEnabled ? 'image' : 'text'
   const chatStageStyle = useMemo(
     () =>
       ({
@@ -466,6 +489,7 @@ export function ConversationWorkspace() {
               isSideConfigLocked={isSideConfigLocked}
               showAdvancedVariables={showAdvancedVariables}
               dynamicPromptEnabled={dynamicPromptEnabled}
+              generationMode={activeGenerationMode}
               panelValueFormat={panelValueFormat}
               panelVariables={panelVariables}
               resolvedVariables={resolvedVariables}
@@ -479,7 +503,9 @@ export function ConversationWorkspace() {
               onPanelValueFormatChange={setPanelValueFormat}
               onPanelVariablesChange={setPanelVariables}
               onDynamicPromptEnabledChange={setDynamicPromptEnabled}
+              onGenerationModeChange={setGenerationMode}
               onSideModeChange={updateSideMode}
+              sourceImagesEnabled={sourceImagesEnabled}
               isAtMaxWidth={composerPreferredWidth >= COMPOSER_MAX_WIDTH_PX}
               onPreferredWidthChange={(nextWidth) => {
                 const clampedWidth = Math.max(COMPOSER_MIN_WIDTH_PX, Math.min(COMPOSER_MAX_WIDTH_PX, nextWidth))

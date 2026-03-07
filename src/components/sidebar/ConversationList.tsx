@@ -1,4 +1,4 @@
-﻿import { DeleteOutlined, EditOutlined, HistoryOutlined, MoreOutlined, PushpinOutlined, MessageOutlined, PlusOutlined } from '@ant-design/icons'
+﻿import { DeleteOutlined, EditOutlined, EllipsisOutlined, HistoryOutlined, PushpinOutlined, MessageOutlined, PlusOutlined } from '@ant-design/icons'
 import { Button, Dropdown, Input, Menu, Modal, Popconfirm, Tooltip, message } from 'antd'
 import type { MenuProps } from 'antd'
 import { useRef, useState } from 'react'
@@ -167,7 +167,7 @@ export function ConversationList(props: ConversationListProps) {
             <Button
               type="text"
               size="small"
-              icon={<MoreOutlined />}
+              icon={<EllipsisOutlined />}
               className="conversation-menu-item-more"
               aria-label={`更多操作${item.title}`}
               onClick={(event) => event.stopPropagation()}

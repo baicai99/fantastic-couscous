@@ -119,6 +119,25 @@ function buildEditUrl(baseUrl: string): string {
   return `${normalized}/v1/images/edits`
 }
 
+function buildChatCompletionsUrl(baseUrl: string): string {
+  const normalized = normalizeBaseUrl(baseUrl)
+  const lower = normalized.toLowerCase()
+
+  if (lower.endsWith('/v1/chat/completions')) {
+    return normalized
+  }
+  if (lower.endsWith('/chat/completions')) {
+    return normalized
+  }
+  if (lower.endsWith('/v1/chat')) {
+    return `${normalized}/completions`
+  }
+  if (lower.endsWith('/v1')) {
+    return `${normalized}/chat/completions`
+  }
+  return `${normalized}/v1/chat/completions`
+}
+
 function buildGenerationUrlCandidates(baseUrl: string): string[] {
   const normalized = normalizeBaseUrl(baseUrl)
   const lower = normalized.toLowerCase()
@@ -789,6 +808,37 @@ function isEndpointMismatchError(error: unknown): boolean {
   return message.includes('invalid url (post') || message.includes('invalid url')
 }
 
+function extractStreamDeltaText(payload: unknown): string {
+  if (!payload || typeof payload !== 'object') {
+    return ''
+  }
+  const choices = (payload as { choices?: unknown[] }).choices
+  if (!Array.isArray(choices) || choices.length === 0) {
+    return ''
+  }
+
+  const first = choices[0] as { delta?: { content?: unknown } }
+  const content = first?.delta?.content
+  if (typeof content === 'string') {
+    return content
+  }
+  if (!Array.isArray(content)) {
+    return ''
+  }
+
+  const segments = content
+    .map((item) => {
+      if (!item || typeof item !== 'object') {
+        return ''
+      }
+      const chunk = item as { text?: unknown }
+      return typeof chunk.text === 'string' ? chunk.text : ''
+    })
+    .filter(Boolean)
+
+  return segments.join('')
+}
+
 const capabilities: ProviderCapabilities = {
   endpointStyle: 'openai-compatible',
   auth: 'bearer',
@@ -1150,6 +1200,142 @@ export const openAICompatibleAdapter: ProviderAdapter = {
         serverTaskId: input.taskId,
         serverTaskMeta: input.taskMeta,
       }
+    }
+  },
+  async streamText(input) {
+    const { channel, request, onDelta, onDone, onError } = input
+    const url = buildChatCompletionsUrl(channel.baseUrl)
+    const body: Record<string, unknown> = {
+      model: request.modelId,
+      messages: request.messages.map((item) => ({
+        role: item.role,
+        content: item.content,
+      })),
+      stream: true,
+    }
+    if (typeof request.temperature === 'number' && Number.isFinite(request.temperature)) {
+      body.temperature = request.temperature
+    }
+    if (typeof request.topP === 'number' && Number.isFinite(request.topP)) {
+      body.top_p = request.topP
+    }
+    if (typeof request.maxTokens === 'number' && Number.isFinite(request.maxTokens)) {
+      body.max_tokens = Math.max(1, Math.floor(request.maxTokens))
+    }
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${channel.apiKey}`,
+        },
+        body: JSON.stringify(body),
+        signal: request.signal,
+      })
+
+      if (!response.ok) {
+        let detail = ''
+        try {
+          detail = (await response.text()).trim()
+        } catch {
+          detail = ''
+        }
+        throw createProviderError({
+          message: `HTTP ${response.status}${detail ? `: ${detail}` : ''}`,
+          code:
+            response.status === 401 || response.status === 403
+              ? 'auth'
+              : response.status === 429
+                ? 'rate_limit'
+                : response.status >= 500
+                  ? 'provider_unavailable'
+                  : 'unknown',
+          status: response.status,
+          detail,
+          retriable: response.status === 429 || response.status >= 500,
+        })
+      }
+
+      if (!response.body) {
+        throw createProviderError({
+          message: 'stream response body is empty',
+          code: 'unknown',
+        })
+      }
+
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder('utf-8')
+      let buffer = ''
+      let finished = false
+
+      const consumeEventBlock = (block: string) => {
+        const lines = block
+          .split('\n')
+          .map((line) => line.trim())
+          .filter((line) => line.startsWith('data:'))
+          .map((line) => line.slice(5).trim())
+
+        if (lines.length === 0) {
+          return
+        }
+        const payloadText = lines.join('\n')
+        if (!payloadText) {
+          return
+        }
+        if (payloadText === '[DONE]') {
+          finished = true
+          return
+        }
+
+        let parsed: unknown = null
+        try {
+          parsed = JSON.parse(payloadText) as unknown
+        } catch {
+          return
+        }
+        const deltaText = extractStreamDeltaText(parsed)
+        if (deltaText) {
+          onDelta(deltaText)
+        }
+      }
+
+      while (!finished) {
+        const { done, value } = await reader.read()
+        if (done) {
+          buffer += decoder.decode().replace(/\r\n/g, '\n')
+          break
+        }
+        buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n')
+
+        let splitIndex = buffer.indexOf('\n\n')
+        while (splitIndex >= 0) {
+          const eventBlock = buffer.slice(0, splitIndex)
+          buffer = buffer.slice(splitIndex + 2)
+          consumeEventBlock(eventBlock)
+          if (finished) {
+            break
+          }
+          splitIndex = buffer.indexOf('\n\n')
+        }
+      }
+
+      if (!finished && buffer.trim().length > 0) {
+        consumeEventBlock(buffer)
+      }
+      onDone?.()
+    } catch (error) {
+      if (isAbortError(error)) {
+        throw Object.assign(new Error('aborted'), { name: 'AbortError' })
+      }
+      const normalized = error && typeof error === 'object' && 'providerId' in error
+        ? (error as ProviderError)
+        : createProviderError({
+          message: error instanceof Error ? error.message : 'text stream failed',
+          code: 'unknown',
+        })
+      onError?.(normalized)
+      throw normalized
     }
   },
   normalizeError(error) {

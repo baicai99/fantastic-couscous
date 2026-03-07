@@ -38,6 +38,7 @@ interface ComposerProps {
   models: ModelSpec[]
   showAdvancedVariables: boolean
   dynamicPromptEnabled: boolean
+  generationMode?: 'image' | 'text'
   panelValueFormat: PanelValueFormat
   panelVariables: PanelVariableRow[]
   resolvedVariables: Record<string, string>
@@ -57,7 +58,9 @@ interface ComposerProps {
   onPanelValueFormatChange: (value: PanelValueFormat) => void
   onPanelVariablesChange: (rows: PanelVariableRow[]) => void
   onDynamicPromptEnabledChange: (value: boolean) => void
+  onGenerationModeChange?: (mode: 'image' | 'text') => void
   onSideModeChange: (mode: SideMode) => void
+  sourceImagesEnabled?: boolean
   isAtMaxWidth?: boolean
   onPreferredWidthChange?: (width: number) => void
   onSend: () => void
@@ -65,7 +68,8 @@ interface ComposerProps {
 
 const DYNAMIC_PROMPT_QUICK_ACTION = '动态提示词'
 const COMPARISON_MODE_QUICK_ACTION = '对照模式'
-const QUICK_PICKER_ITEMS = [DYNAMIC_PROMPT_QUICK_ACTION, COMPARISON_MODE_QUICK_ACTION]
+const IMAGE_GENERATION_QUICK_ACTION = '图片生成'
+const QUICK_PICKER_ITEMS = [IMAGE_GENERATION_QUICK_ACTION, DYNAMIC_PROMPT_QUICK_ACTION, COMPARISON_MODE_QUICK_ACTION]
 const DASH_COMMAND_OPTIONS: DashCommandOption[] = [
   { key: 'ar', insertText: '--ar ', label: '--ar ' },
   { key: 'size', insertText: '--size ', label: '--size ' },
@@ -221,6 +225,7 @@ export function Composer(props: ComposerProps) {
     models,
     showAdvancedVariables,
     dynamicPromptEnabled,
+    generationMode = 'text',
     panelValueFormat,
     panelVariables,
     resolvedVariables,
@@ -238,7 +243,9 @@ export function Composer(props: ComposerProps) {
     onPanelValueFormatChange,
     onPanelVariablesChange,
     onDynamicPromptEnabledChange,
+    onGenerationModeChange,
     onSideModeChange,
+    sourceImagesEnabled = true,
     isAtMaxWidth = false,
     onPreferredWidthChange,
     onSend,
@@ -272,6 +279,7 @@ export function Composer(props: ComposerProps) {
   const pendingShrinkWidthRef = useRef<number | null>(null)
   const shrinkTimerRef = useRef<number | null>(null)
   const selectedQuickActions = [
+    ...(generationMode === 'image' ? [IMAGE_GENERATION_QUICK_ACTION] : []),
     ...(dynamicPromptEnabled ? [DYNAMIC_PROMPT_QUICK_ACTION] : []),
     ...(sideMode === 'multi' ? [COMPARISON_MODE_QUICK_ACTION] : []),
   ]
@@ -806,6 +814,9 @@ export function Composer(props: ComposerProps) {
     if (label === DYNAMIC_PROMPT_QUICK_ACTION && !dynamicPromptEnabled) {
       onDynamicPromptEnabledChange(true)
     }
+    if (label === IMAGE_GENERATION_QUICK_ACTION && generationMode !== 'image') {
+      onGenerationModeChange?.('image')
+    }
     if (label === COMPARISON_MODE_QUICK_ACTION && sideMode !== 'multi') {
       if (!isSideConfigLocked) {
         onSideModeChange('multi')
@@ -824,6 +835,10 @@ export function Composer(props: ComposerProps) {
   }
 
   const removeQuickAction = (label: string) => {
+    if (label === IMAGE_GENERATION_QUICK_ACTION && generationMode === 'image') {
+      onGenerationModeChange?.('text')
+      return
+    }
     if (label === DYNAMIC_PROMPT_QUICK_ACTION && dynamicPromptEnabled) {
       onDynamicPromptEnabledChange(false)
     }
@@ -869,7 +884,11 @@ export function Composer(props: ComposerProps) {
             multiple
             accept="image/png,image/jpeg,image/jpg,image/webp"
             className="composer-source-image-input"
+            disabled={!sourceImagesEnabled}
             onChange={(event) => {
+              if (!sourceImagesEnabled) {
+                return
+              }
               const fileList = event.target.files
               if (!fileList || fileList.length === 0) {
                 return
@@ -902,10 +921,11 @@ export function Composer(props: ComposerProps) {
               ref={plusBtnRef}
               type="text"
               icon={<PlusOutlined />}
+              disabled={!sourceImagesEnabled}
               onClick={() => sourceImageInputRef.current?.click()}
               className="composer-plus-btn"
-              aria-label="上传参考图"
-              title="上传参考图（最多 6 张）"
+              aria-label={sourceImagesEnabled ? '上传参考图' : '文本模式不支持参考图'}
+              title={sourceImagesEnabled ? '上传参考图（最多 6 张）' : '文本模式不支持参考图'}
             />
             <div
               className={`composer-textarea-wrap ${selectedQuickActions.length > 0 ? 'has-chip-row' : ''}`}
@@ -975,6 +995,9 @@ export function Composer(props: ComposerProps) {
                   }
                 }}
                 onPaste={(event) => {
+                  if (!sourceImagesEnabled) {
+                    return
+                  }
                   const imageFiles = extractImageFilesFromTransfer(event.clipboardData)
                   if (imageFiles.length === 0) {
                     return

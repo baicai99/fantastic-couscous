@@ -70,6 +70,7 @@ export interface ParseApiChannelsResult {
 }
 
 export interface SingleSideSettings {
+  generationMode?: 'image' | 'text'
   resolution: string
   aspectRatio: string
   imageCount: number
@@ -81,6 +82,8 @@ export interface SingleSideSettings {
   saveDirectory?: string
   channelId: string | null
   modelId: string
+  textModelId?: string
+  videoModelId?: string
   paramValues: Record<string, SettingPrimitive>
 }
 
@@ -155,6 +158,7 @@ export interface Message {
   displayCreatedAt?: string
   role: MessageRole
   content: string
+  sourceImages?: RunSourceImageRef[]
   runs?: Run[]
   actions?: MessageAction[]
 }

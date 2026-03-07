@@ -54,6 +54,20 @@ export interface NormalizedImageRequest {
   signal?: AbortSignal
 }
 
+export interface NormalizedTextMessage {
+  role: 'system' | 'user' | 'assistant'
+  content: string
+}
+
+export interface NormalizedTextRequest {
+  modelId: string
+  messages: NormalizedTextMessage[]
+  temperature?: number
+  topP?: number
+  maxTokens?: number
+  signal?: AbortSignal
+}
+
 export interface ProviderSourceImage {
   blob: Blob
   fileName: string
@@ -102,5 +116,12 @@ export interface ProviderAdapter {
     taskMeta?: Record<string, string>
     signal?: AbortSignal
   }) => Promise<NormalizedResumeResult>
+  streamText: (input: {
+    channel: ProviderChannel
+    request: NormalizedTextRequest
+    onDelta: (chunk: string) => void
+    onDone?: () => void
+    onError?: (error: ProviderError) => void
+  }) => Promise<void>
   normalizeError: (error: unknown) => ProviderError
 }

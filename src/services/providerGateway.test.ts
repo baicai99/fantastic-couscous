@@ -3,6 +3,7 @@ import {
   discoverModelsByProvider,
   generateImagesByProvider,
   resumeImageTaskByProvider,
+  streamTextByProvider,
 } from './providerGateway'
 
 describe('providerGateway', () => {
@@ -232,6 +233,75 @@ describe('providerGateway', () => {
     expect(result).toMatchObject({
       state: 'pending',
       serverTaskId: 'task-mj-2',
+    })
+  })
+
+  it('streams text deltas from openai-compatible provider', async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{"content":"你好"}}]}\n\n'))
+        controller.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{"content":"，世界"}}]}\n\n'))
+        controller.enqueue(new TextEncoder().encode('data: [DONE]\n\n'))
+        controller.close()
+      },
+    })
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: stream,
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const chunks: string[] = []
+    await streamTextByProvider({
+      channel: {
+        id: 'ch',
+        name: 'main',
+        baseUrl: 'https://api.example.com/v1',
+        apiKey: 'k',
+        providerId: 'openai-compatible',
+      },
+      request: {
+        modelId: 'gpt-4o',
+        messages: [{ role: 'user', content: 'hi' }],
+      },
+      onDelta: (chunk) => chunks.push(chunk),
+    })
+
+    expect(chunks).toEqual(['你好', '，世界'])
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://api.example.com/v1/chat/completions',
+      expect.objectContaining({ method: 'POST' }),
+    )
+  })
+
+  it('throws mapped auth error when text stream response is unauthorized', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 401,
+      text: async () => 'unauthorized',
+      body: null,
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      streamTextByProvider({
+        channel: {
+          id: 'ch',
+          name: 'main',
+          baseUrl: 'https://api.example.com/v1',
+          apiKey: 'k',
+          providerId: 'openai-compatible',
+        },
+        request: {
+          modelId: 'gpt-4o',
+          messages: [{ role: 'user', content: 'hi' }],
+        },
+        onDelta: () => {},
+      }),
+    ).rejects.toMatchObject({
+      code: 'auth',
+      providerId: 'openai-compatible',
     })
   })
 })

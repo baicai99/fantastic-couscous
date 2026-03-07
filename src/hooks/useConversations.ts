@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { message, notification } from 'antd'
-import { resumeImageTaskByProvider } from '../services/providerGateway'
+import { resumeImageTaskByProvider, streamTextByProvider } from '../services/providerGateway'
 import { getModelCatalogFromChannels } from '../services/modelCatalog'
 import { getAspectRatioOptions } from '../services/imageSizing'
 import { putImageBlob } from '../services/imageAssetStore'
@@ -37,6 +37,7 @@ import {
   normalizeSettingsBySide,
 } from '../features/conversation/domain/conversationDomain'
 import type { PanelValueFormat, PanelVariableRow } from '../features/conversation/domain/types'
+import type { NormalizedTextMessage } from '../types/provider'
 import { createConversationRepository } from '../features/conversation/infra/conversationRepository'
 import {
   conversationSelectors,
@@ -126,6 +127,44 @@ function isAllowedSourceImageFile(file: File): boolean {
   }
   const name = file.name.trim().toLowerCase()
   return name.endsWith('.png') || name.endsWith('.jpg') || name.endsWith('.jpeg') || name.endsWith('.webp')
+}
+
+function resolveSendGenerationMode(input: {
+  sideMode: SideMode
+  sideCount: number
+  settingsBySide: Record<Side, SingleSideSettings>
+}): { mode: 'image' | 'text' } | { error: string } {
+  const targetSides = input.sideMode === 'single' ? (['single'] as Side[]) : getMultiSideIds(input.sideCount)
+  const settings = targetSides
+    .map((side) => input.settingsBySide[side])
+    .filter((item): item is SingleSideSettings => Boolean(item))
+  const modeSet = new Set(settings.map((item) => item.generationMode ?? 'image'))
+  if (modeSet.size > 1) {
+    return { error: '当前窗口生成模式不一致，请先统一为“文本生成”或“图片生成”。' }
+  }
+  if (modeSet.has('text')) {
+    return { mode: 'text' }
+  }
+  return { mode: 'image' }
+}
+
+function buildTextRequestMessages(conversation: Conversation | null | undefined, currentDraft: string): NormalizedTextMessage[] {
+  const history = (conversation?.messages ?? [])
+    .filter((item) => item.role === 'user' || item.role === 'assistant')
+    .map((item) => ({
+      role: item.role,
+      content: item.content.trim(),
+    }))
+    .filter((item) => item.content.length > 0)
+
+  const current = currentDraft.trim()
+  if (current) {
+    history.push({
+      role: 'user',
+      content: current,
+    })
+  }
+  return history
 }
 
 export function sortConversationSummariesByLastMessageTime(
@@ -1157,6 +1196,16 @@ export function useConversations() {
     )
 
     updateConversationState(activeSideMode, activeSideCount, merged)
+    if (patch.generationMode === 'text') {
+      const modeResolution = resolveSendGenerationMode({
+        sideMode: activeSideMode,
+        sideCount: activeSideCount,
+        settingsBySide: merged,
+      })
+      if (!('error' in modeResolution) && modeResolution.mode === 'text') {
+        clearDraftSourceImages()
+      }
+    }
   }
 
   const setSideModel = (side: Side, modelId: string) => {
@@ -1176,6 +1225,26 @@ export function useConversations() {
     )
 
     updateConversationState(activeSideMode, activeSideCount, merged)
+  }
+
+  const setGenerationMode = (mode: 'image' | 'text') => {
+    const targetSides = activeSideMode === 'single' ? (['single'] as Side[]) : activeSides
+    const nextSettings = { ...activeSettingsBySide }
+    for (const side of targetSides) {
+      const current = nextSettings[side]
+      if (!current) {
+        continue
+      }
+      nextSettings[side] = {
+        ...current,
+        generationMode: mode,
+      }
+    }
+    const merged = normalizeSettingsBySide(nextSettings, state.channels, modelCatalog, activeSideCount)
+    updateConversationState(activeSideMode, activeSideCount, merged)
+    if (mode === 'text') {
+      clearDraftSourceImages()
+    }
   }
 
   const applyModelShortcut = (modelId: string): Record<Side, SingleSideSettings> => {
@@ -1389,6 +1458,7 @@ export function useConversations() {
     assistantContent: string,
     runs: Run[] = [],
     titleSource?: string,
+    userSourceImages: RunSourceImageRef[] = [],
     assistantActions?: MessageAction[],
   ): Conversation => {
     const now = new Date().toISOString()
@@ -1397,6 +1467,7 @@ export function useConversations() {
       createdAt: now,
       role: 'user',
       content: userContent,
+      sourceImages: userSourceImages,
     }
     const assistantMessage: Message = {
       id: makeId(),
@@ -1416,6 +1487,49 @@ export function useConversations() {
       messages: [...conversation.messages, userMessage, assistantMessage],
     }
   }
+
+  const updateAssistantMessageContent = (
+    conversationId: string,
+    messageId: string,
+    content: string,
+    options?: { immediateStorage?: boolean },
+  ) => {
+    const snapshot = stateRef.current
+    const currentConversation = snapshot.contents[conversationId]
+    if (!currentConversation) {
+      return
+    }
+
+    const messageIndex = currentConversation.messages.findIndex((item) => item.id === messageId)
+    if (messageIndex < 0) {
+      return
+    }
+
+    const target = currentConversation.messages[messageIndex]
+    if (target.role !== 'assistant' || target.content === content) {
+      return
+    }
+
+    const nextMessages = [...currentConversation.messages]
+    nextMessages[messageIndex] = {
+      ...target,
+      content,
+    }
+
+    persistConversation({
+      ...currentConversation,
+      updatedAt: new Date().toISOString(),
+      messages: nextMessages,
+    }, {
+      saveStorage: options?.immediateStorage ?? false,
+      saveIndex: options?.immediateStorage ?? false,
+    })
+
+    if (!(options?.immediateStorage ?? false)) {
+      scheduleConversationPersistence(conversationId)
+    }
+  }
+
   const replaceRunsInConversation = (conversationId: string, nextRunsById: Map<string, Run>) => {
     const snapshot = stateRef.current
     const currentConversation = snapshot.contents[conversationId]
@@ -2011,7 +2125,11 @@ export function useConversations() {
     const selectedSettings = targetSides
       .map((side) => activeState.activeSettingsBySide[side])
       .filter((settings): settings is SingleSideSettings => Boolean(settings))
-    const modelIds = selectedSettings.map((settings) => settings.modelId.trim())
+    const modelIds = selectedSettings.map((settings) => {
+      const mode = settings.generationMode ?? 'text'
+      const selectedModelId = mode === 'text' ? (settings.textModelId ?? settings.modelId) : settings.modelId
+      return selectedModelId.trim()
+    })
     const hasAvailableModels = modelCatalog.models.length > 0
     const hasAnyConfiguredApi = hasConfiguredApiChannel(snapshot.channels)
     const isModelMissing = modelIds.some((modelId) => !modelId || !modelCatalog.models.some((model) => model.id === modelId))
@@ -2050,6 +2168,17 @@ export function useConversations() {
 
   const appendDraftSourceImages = (files: File[]) => {
     if (files.length === 0) {
+      return
+    }
+    const snapshot = stateRef.current
+    const activeState = conversationSelectors.selectActiveSettings(snapshot)
+    const modeResolution = resolveSendGenerationMode({
+      sideMode: activeState.activeSideMode,
+      sideCount: activeState.activeSideCount,
+      settingsBySide: activeState.activeSettingsBySide,
+    })
+    if (!('error' in modeResolution) && modeResolution.mode === 'text') {
+      void message.info('当前为文本模式，不支持上传参考图。')
       return
     }
     const current = draftSourceImagesRef.current
@@ -2147,11 +2276,13 @@ export function useConversations() {
         `模型已切换为 ${modelCommand.model.name}，后续请求将默认使用该模型。`,
         [],
         modelCommand.model.name,
+        [],
       )
       persistConversation(updatedConversation)
       setActiveConversation(updatedConversation.id)
       setSendScrollTrigger((prev) => prev + 1)
       actions.setDraft('')
+      clearDraftSourceImages()
       void message.success(`已切换到 ${modelCommand.model.name}`)
       return
     }
@@ -2175,6 +2306,7 @@ export function useConversations() {
             nextSettings[side] = {
               ...current,
               modelId: modelCommand.model.id,
+              textModelId: modelCommand.model.id,
               paramValues: {},
             }
           }
@@ -2201,13 +2333,115 @@ export function useConversations() {
         blockedReason.assistantContent,
         [],
         effectiveDraft,
+        [],
         blockedReason.actions,
       )
       persistConversation(updatedConversation)
       setActiveConversation(updatedConversation.id)
       setSendScrollTrigger((prev) => prev + 1)
       actions.setDraft('')
+      clearDraftSourceImages()
       dispatch({ type: 'send/clearError' })
+      return
+    }
+
+    const sendModeResolution = resolveSendGenerationMode({
+      sideMode: activeState.activeSideMode,
+      sideCount: activeState.activeSideCount,
+      settingsBySide: effectiveSettingsBySide,
+    })
+    if ('error' in sendModeResolution) {
+      dispatch({ type: 'send/fail', payload: sendModeResolution.error })
+      return
+    }
+
+    dispatch({ type: 'send/start' })
+    setSendScrollTrigger((prev) => prev + 1)
+
+    if (sendModeResolution.mode === 'text') {
+      const primarySide = targetSides[0] ?? 'single'
+      const textSettings = effectiveSettingsBySide[primarySide]
+      const textChannel = snapshot.channels.find((item) => item.id === textSettings?.channelId)
+      if (!textSettings || !textChannel) {
+        dispatch({ type: 'send/fail', payload: '当前文本模式未找到可用渠道配置。' })
+        return
+      }
+
+      if (draftSourceImageSnapshot.length > 0) {
+        void message.info('文本模式下不会携带参考图，已自动忽略。')
+      }
+
+      const textMessages = buildTextRequestMessages(currentActive, effectiveDraft)
+      const baseConversation =
+        currentActive ??
+        createConversation(activeState.activeSettingsBySide, activeState.activeSideMode, activeState.activeSideCount)
+      const conversationWithLatestSettings = {
+        ...baseConversation,
+        sideMode: activeState.activeSideMode,
+        sideCount: activeState.activeSideCount,
+        settingsBySide: effectiveSettingsBySide,
+      }
+      const assistantInitialContent = modelCommand?.scope === 'temporary'
+        ? `已临时切换到 ${modelCommand.model.name} 执行本次文本请求。\n\n`
+        : ''
+      const updatedConversation = appendConversationEntry(
+        conversationWithLatestSettings,
+        snapshot.draft,
+        assistantInitialContent,
+        [],
+        effectiveDraft,
+        [],
+      )
+      persistConversation(updatedConversation)
+      if (!currentActive) {
+        setActiveConversation(updatedConversation.id)
+      }
+
+      const assistantMessageId = updatedConversation.messages[updatedConversation.messages.length - 1]?.id
+      const targetConversationId = updatedConversation.id
+
+      actions.setDraft('')
+      clearDraftSourceImages()
+      if (modelCommand?.scope === 'temporary') {
+        void message.success(`本次已临时切换到 ${modelCommand.model.name}`)
+      }
+
+      if (!assistantMessageId) {
+        dispatch({ type: 'send/fail', payload: '助手消息初始化失败。' })
+        return
+      }
+
+      let streamedText = assistantInitialContent
+      try {
+        await streamTextByProvider({
+          channel: textChannel,
+          request: {
+            modelId: textSettings.textModelId ?? textSettings.modelId,
+            messages: textMessages,
+          },
+          onDelta: (chunk) => {
+            streamedText += chunk
+            updateAssistantMessageContent(targetConversationId, assistantMessageId, streamedText)
+          },
+        })
+
+        const finalText = streamedText.trim().length > 0 ? streamedText : '（未返回文本内容）'
+        updateAssistantMessageContent(targetConversationId, assistantMessageId, finalText, {
+          immediateStorage: true,
+        })
+        dispatch({ type: 'send/succeed' })
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : '文本生成失败'
+        const fallbackText = streamedText.trim().length > 0 ? streamedText : `文本生成失败：${reason}`
+        updateAssistantMessageContent(targetConversationId, assistantMessageId, fallbackText, {
+          immediateStorage: true,
+        })
+        if (isAbortLikeError(error)) {
+          dispatch({ type: 'send/succeed' })
+          return
+        }
+        dispatch({ type: 'send/fail', payload: reason })
+      }
       return
     }
 
@@ -2239,10 +2473,6 @@ export function useConversations() {
     }
 
     const plan = planned.value
-
-    dispatch({ type: 'send/start' })
-    setSendScrollTrigger((prev) => prev + 1)
-
     let targetConversationId: string
 
     if (!currentActive) {
@@ -2260,6 +2490,7 @@ export function useConversations() {
         assistantContent,
         plan.pendingRuns,
         effectiveDraft,
+        sourceImageRefs,
       )
       persistConversation(updatedConversation)
       setActiveConversation(updatedConversation.id)
@@ -2274,12 +2505,14 @@ export function useConversations() {
         assistantContent,
         plan.pendingRuns,
         effectiveDraft,
+        sourceImageRefs,
       )
       persistConversation(updatedConversation)
       targetConversationId = updatedConversation.id
     }
 
     actions.setDraft('')
+    clearDraftSourceImages()
     if (modelCommand?.scope === 'temporary') {
       void message.success(`本次已临时切换到 ${modelCommand.model.name}`)
     }
@@ -2322,7 +2555,6 @@ export function useConversations() {
       replaceRunsInConversation(targetConversationId, map)
       activeCompletedRuns.forEach((run) => unregisterActiveRun(targetConversationId, run.id))
       dispatch({ type: 'send/succeed' })
-      clearDraftSourceImages()
     } catch (error) {
       plan.runPlans.forEach((runPlan) => unregisterActiveRun(targetConversationId, runPlan.pendingRun.id))
       if (isAbortLikeError(error)) {
@@ -2888,6 +3120,7 @@ export function useConversations() {
     updateSideMode,
     updateSideCount,
     updateSideSettings,
+    setGenerationMode,
     setSideModel,
     applyModelShortcut,
     setSideModelParam,

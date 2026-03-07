@@ -6,6 +6,7 @@ import type { Conversation, Run } from '../types/chat'
 
 const mockCreateRun = vi.hoisted(() => vi.fn())
 const mockResumeImageTaskByProvider = vi.hoisted(() => vi.fn())
+const mockStreamTextByProvider = vi.hoisted(() => vi.fn())
 
 vi.mock('../features/conversation/application/runExecutor', () => ({
   createRunExecutor: () => ({
@@ -19,6 +20,7 @@ vi.mock('../services/providerGateway', async () => {
   return {
     ...actual,
     resumeImageTaskByProvider: mockResumeImageTaskByProvider,
+    streamTextByProvider: mockStreamTextByProvider,
   }
 })
 
@@ -192,6 +194,7 @@ describe('useConversations', () => {
     await resetStorage()
     mockCreateRun.mockReset()
     mockResumeImageTaskByProvider.mockReset()
+    mockStreamTextByProvider.mockReset()
     vi.restoreAllMocks()
     vi.useRealTimers()
     seedChannels()
@@ -1085,6 +1088,97 @@ describe('useConversations', () => {
 
     await waitFor(() => expect(mockCreateRun).toHaveBeenCalledTimes(1))
     expect(result.current.activeConversation?.messages[1]?.content).not.toContain('还没有可用的 API 配置')
+  })
+
+  it('clears draft source images right after message bubble is appended', async () => {
+    let resolveRun!: () => void
+    const deferred = new Promise<void>((resolve) => {
+      resolveRun = resolve
+    })
+
+    mockCreateRun.mockImplementation((input: any) =>
+      deferred.then(() =>
+        buildSuccessfulRunFromInput({
+          runId: input.runId,
+          createdAt: input.createdAt,
+          sideMode: input.sideMode,
+          side: input.side,
+          channel: input.channel,
+          modelId: input.modelId,
+          modelName: input.modelName,
+          templatePrompt: input.templatePrompt,
+          finalPrompt: input.finalPrompt,
+          variablesSnapshot: input.variablesSnapshot,
+          paramsSnapshot: input.paramsSnapshot,
+          settings: input.settings,
+        }),
+      ),
+    )
+
+    const { useConversations } = await import('./useConversations')
+    const { result } = renderHook(() => useConversations())
+    const file = new File(['ref-image'], 'ref.png', { type: 'image/png' })
+
+    act(() => {
+      result.current.appendDraftSourceImages([file])
+      result.current.setDraft('draw a cat')
+    })
+    expect(result.current.draftSourceImages).toHaveLength(1)
+
+    act(() => {
+      void result.current.sendDraft()
+    })
+
+    await waitFor(() => expect(result.current.activeConversation?.messages).toHaveLength(2))
+    expect(result.current.draftSourceImages).toHaveLength(0)
+    expect(result.current.activeConversation?.messages[0]?.sourceImages).toHaveLength(1)
+
+    act(() => {
+      resolveRun()
+    })
+
+    await waitFor(() =>
+      expect(result.current.activeConversation?.messages[1]?.runs?.[0]?.images[0]).toMatchObject({
+        status: 'success',
+        threadState: 'settled',
+      }),
+    )
+  })
+
+  it('streams assistant text in text generation mode without creating image runs', async () => {
+    await resetStorage()
+    seedChannels({
+      settingsOverride: {
+        generationMode: 'text',
+        modelId: 'gpt-4o',
+      },
+    })
+
+    mockStreamTextByProvider.mockImplementation(async (input: { onDelta: (chunk: string) => void }) => {
+      input.onDelta('你好，')
+      input.onDelta('我是流式回复。')
+    })
+
+    const { useConversations } = await import('./useConversations')
+    const { result } = renderHook(() => useConversations())
+
+    act(() => {
+      result.current.setDraft('介绍一下你自己')
+    })
+
+    act(() => {
+      void result.current.sendDraft()
+    })
+
+    await waitFor(() => {
+      const assistant = result.current.activeConversation?.messages[1]
+      expect(assistant?.role).toBe('assistant')
+      expect(assistant?.content).toBe('你好，我是流式回复。')
+      expect(assistant?.runs ?? []).toHaveLength(0)
+    })
+
+    expect(mockCreateRun).not.toHaveBeenCalled()
+    expect(mockStreamTextByProvider).toHaveBeenCalledTimes(1)
   })
 
   it('persists favorite model ids in staged settings', async () => {

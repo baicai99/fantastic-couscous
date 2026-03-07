@@ -439,6 +439,15 @@ export const midjourneyAdapter: ProviderAdapter = {
       }
     }
   },
+  async streamText(input) {
+    const unsupported = createProviderError({
+      message: '当前 Provider 暂不支持文本流式生成。',
+      code: 'unsupported_param',
+      retriable: false,
+    })
+    input.onError?.(unsupported)
+    throw unsupported
+  },
   normalizeError(error) {
     if (error && typeof error === 'object' && 'code' in error && 'providerId' in error) {
       return error as ProviderError

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { GithubOutlined, ReloadOutlined, SettingOutlined } from '@ant-design/icons'
 import {
@@ -31,7 +31,7 @@ import type {
   SideMode,
   SingleSideSettings,
 } from '../../types/chat'
-import { fetchChannelModels } from '../../services/channelModels'
+import { fetchChannelModelEntries, fetchChannelModels, type ChannelModelEntry } from '../../services/channelModels'
 import { resolveProviderId } from '../../services/providers/providerId'
 import {
   applyChannelImport,
@@ -56,8 +56,32 @@ type ChannelFormValues = {
   apiKey: string
 }
 
+type ModelListViewMode = 'normal' | 'metadata'
+
 const CHANNEL_IMPORT_DEBOUNCE_MS = 500
 const GITHUB_REPO_URL = 'https://github.com/baicai99/fantastic-couscous'
+const CHANNEL_DRAWER_MIN_WIDTH = 720
+const CHANNEL_DRAWER_MAX_RATIO = 0.7
+const CHANNEL_DRAWER_HORIZONTAL_ALLOWANCE = 64
+const IMAGE_MODEL_BLOCKLIST_KEYWORDS = [
+  'chat',
+  'o1',
+  'o2',
+  'o3',
+  'o4',
+  'o5',
+  'claude',
+  'deepseek',
+  'codex',
+  'llama',
+  'coder',
+  'audio',
+  'tts',
+  'embedding',
+]
+const DOUBAO_FAMILY_KEYWORDS = ['doubao', 'seeddance', 'seedance', 'seedream']
+const DOUBAO_VIDEO_MODEL_ALLOWLIST_KEYWORDS = ['seeddance', 'seedance']
+const DOUBAO_TEXT_MODEL_BLOCKLIST_KEYWORDS = ['seedream', 'seeddance', 'seedance']
 
 interface SettingsPanelProps {
   sideMode: SideMode
@@ -155,6 +179,9 @@ function inferModelTags(model: ModelSpec): string[] {
     if (value === 'gemini' || value === 'banana' || value === 'google-ai' || value === 'googleai') {
       return 'google'
     }
+    if (DOUBAO_FAMILY_KEYWORDS.includes(value)) {
+      return '豆包'
+    }
     return value
   }
 
@@ -167,22 +194,10 @@ function inferModelTags(model: ModelSpec): string[] {
     }
   }
 
-  const value = `${model.id} ${model.name}`.toLowerCase()
-  const isOpenAIModel =
-    value.includes('openai') ||
-    value.includes('gpt-image') ||
-    value.includes('gpt-4o') ||
-    value.includes('gpt-4-all') ||
-    value.includes('sora_image') ||
-    value.includes('dall-e') ||
-    value.includes('dalle') ||
-    value.includes('kolors')
-  if (value.includes('gemini') || value.includes('banana')) tags.add('google')
-  if (value.includes('doubao') || value.includes('seeddance') || value.includes('seeddream')) tags.add('豆包')
-  if (value.includes('kling')) tags.add('可灵')
-  if (value.includes('midjourney') || value.includes('mj')) tags.add('midjourney')
-  if (isOpenAIModel) tags.add('openai')
-  if (value.includes('stability') || value.includes('stable-diffusion') || value.includes('sdxl')) tags.add('stability')
+  const normalizedName = `${model.id} ${model.name}`.toLowerCase()
+  if (DOUBAO_FAMILY_KEYWORDS.some((keyword) => normalizedName.includes(keyword))) {
+    tags.add('豆包')
+  }
 
   return Array.from(tags)
 }
@@ -241,6 +256,63 @@ function inferModelSearchTokens(model: ModelSpec): string {
   return Array.from(tokens).join(' ')
 }
 
+function isBlockedImageModel(input: { id: string; name?: string }): boolean {
+  const haystack = `${input.id} ${input.name ?? ''}`.toLowerCase()
+  const isDoubaoFamily = DOUBAO_FAMILY_KEYWORDS.some((keyword) => haystack.includes(keyword))
+  if (isDoubaoFamily && !haystack.includes('seedream')) {
+    return true
+  }
+  return IMAGE_MODEL_BLOCKLIST_KEYWORDS.some((keyword) => haystack.includes(keyword))
+}
+
+function isBlockedVideoModel(input: { id: string; name?: string }): boolean {
+  const haystack = `${input.id} ${input.name ?? ''}`.toLowerCase()
+  const isDoubaoFamily = DOUBAO_FAMILY_KEYWORDS.some((keyword) => haystack.includes(keyword))
+  if (!isDoubaoFamily) {
+    return false
+  }
+  return !DOUBAO_VIDEO_MODEL_ALLOWLIST_KEYWORDS.some((keyword) => haystack.includes(keyword))
+}
+
+function isBlockedTextModel(input: { id: string; name?: string }): boolean {
+  const haystack = `${input.id} ${input.name ?? ''}`.toLowerCase()
+  const isDoubaoFamily = DOUBAO_FAMILY_KEYWORDS.some((keyword) => haystack.includes(keyword))
+  if (!isDoubaoFamily) {
+    return false
+  }
+  return DOUBAO_TEXT_MODEL_BLOCKLIST_KEYWORDS.some((keyword) => haystack.includes(keyword))
+}
+
+function normalizeSearchText(input: string): string {
+  return input.trim().toLowerCase()
+}
+
+function fuzzyIncludes(haystack: string, needle: string): boolean {
+  if (!needle) {
+    return true
+  }
+  if (!haystack) {
+    return false
+  }
+  if (haystack.includes(needle)) {
+    return true
+  }
+  let cursor = 0
+  for (const char of haystack) {
+    if (char === needle[cursor]) {
+      cursor += 1
+      if (cursor >= needle.length) {
+        return true
+      }
+    }
+  }
+  return false
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max)
+}
+
 export function SettingsPanel(props: SettingsPanelProps) {
   const {
     sideMode,
@@ -276,6 +348,15 @@ export function SettingsPanel(props: SettingsPanelProps) {
   const [channelForm] = Form.useForm<ChannelFormValues>()
   const [isSavingChannel, setIsSavingChannel] = useState(false)
   const [isRefreshingChannels, setIsRefreshingChannels] = useState(false)
+  const [isModelListModalOpen, setIsModelListModalOpen] = useState(false)
+  const [selectedModelListChannelId, setSelectedModelListChannelId] = useState<string | null>(null)
+  const [modelListViewMode, setModelListViewMode] = useState<ModelListViewMode>('normal')
+  const [modelListItems, setModelListItems] = useState<ChannelModelEntry[]>([])
+  const [isModelListLoading, setIsModelListLoading] = useState(false)
+  const [modelListError, setModelListError] = useState('')
+  const [channelDrawerWidth, setChannelDrawerWidth] = useState<number>(CHANNEL_DRAWER_MIN_WIDTH)
+  const [modelSearchInput, setModelSearchInput] = useState('')
+  const [modelSearchKeyword, setModelSearchKeyword] = useState('')
   const [channelImportText, setChannelImportText] = useState('')
   const [channelImportItems, setChannelImportItems] = useState<ChannelImportPreviewItem[]>([])
   const [channelImportDetected, setChannelImportDetected] = useState(0)
@@ -313,6 +394,8 @@ export function SettingsPanel(props: SettingsPanelProps) {
       return { single: DEFAULT_SIDE_COLLAPSE_KEYS }
     }
   })
+  const modelListRequestIdRef = useRef(0)
+  const channelTableContainerRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     try {
@@ -355,6 +438,68 @@ export function SettingsPanel(props: SettingsPanelProps) {
     setChannelImportError('')
     setIsModalOpen(true)
   }, [channelForm, openAddChannelModalSignal])
+
+  const getChannelDrawerMaxWidth = useCallback(() => {
+    if (typeof window === 'undefined') {
+      return CHANNEL_DRAWER_MIN_WIDTH
+    }
+    return Math.max(CHANNEL_DRAWER_MIN_WIDTH, Math.floor(window.innerWidth * CHANNEL_DRAWER_MAX_RATIO))
+  }, [])
+
+  const recalculateChannelDrawerWidth = useCallback(() => {
+    if (!isDrawerOpen) {
+      return
+    }
+    const wrapper = channelTableContainerRef.current
+    const tableElement = wrapper?.querySelector('.ant-table-content table') as HTMLElement | null
+    const tableIntrinsicWidth = tableElement ? Math.ceil(tableElement.scrollWidth) : 0
+    const expectedContentWidth =
+      tableIntrinsicWidth > 0
+        ? tableIntrinsicWidth + CHANNEL_DRAWER_HORIZONTAL_ALLOWANCE
+        : CHANNEL_DRAWER_MIN_WIDTH
+    const nextWidth = clampNumber(expectedContentWidth, CHANNEL_DRAWER_MIN_WIDTH, getChannelDrawerMaxWidth())
+    setChannelDrawerWidth((prev) => (Math.abs(prev - nextWidth) < 1 ? prev : nextWidth))
+  }, [getChannelDrawerMaxWidth, isDrawerOpen])
+
+  useEffect(() => {
+    if (!isDrawerOpen) {
+      return
+    }
+    const frame = window.requestAnimationFrame(() => {
+      recalculateChannelDrawerWidth()
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [channels, isDrawerOpen, recalculateChannelDrawerWidth])
+
+  useEffect(() => {
+    if (!isDrawerOpen) {
+      return
+    }
+    const onResize = () => {
+      recalculateChannelDrawerWidth()
+    }
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [isDrawerOpen, recalculateChannelDrawerWidth])
+
+  useEffect(() => {
+    if (!isDrawerOpen) {
+      return
+    }
+    const wrapper = channelTableContainerRef.current
+    if (!wrapper || typeof ResizeObserver === 'undefined') {
+      return
+    }
+    const observer = new ResizeObserver(() => {
+      recalculateChannelDrawerWidth()
+    })
+    observer.observe(wrapper)
+    const tableElement = wrapper.querySelector('.ant-table-content table')
+    if (tableElement instanceof HTMLElement) {
+      observer.observe(tableElement)
+    }
+    return () => observer.disconnect()
+  }, [channels, isDrawerOpen, recalculateChannelDrawerWidth])
 
   const availableModelTags = useMemo(() => {
     const tags = new Set<string>(FIXED_VENDOR_TAGS)
@@ -432,6 +577,85 @@ export function SettingsPanel(props: SettingsPanelProps) {
       setIsRefreshingChannels(false)
     }
   }
+
+  const selectedModelListChannel = useMemo(() => {
+    if (!selectedModelListChannelId) {
+      return null
+    }
+    return channels.find((item) => item.id === selectedModelListChannelId) ?? null
+  }, [channels, selectedModelListChannelId])
+
+  const loadModelListForChannel = useCallback(
+    async (channel: ApiChannel) => {
+      const requestId = modelListRequestIdRef.current + 1
+      modelListRequestIdRef.current = requestId
+      setIsModelListLoading(true)
+      setModelListError('')
+      try {
+        const entries = await fetchChannelModelEntries({
+          baseUrl: channel.baseUrl,
+          apiKey: channel.apiKey,
+          providerId: channel.providerId,
+        })
+        if (modelListRequestIdRef.current !== requestId) {
+          return
+        }
+        setModelListItems(entries)
+        const nextIds = entries.map((item) => item.id)
+        if (nextIds.length > 0 && nextIds.join('\n') !== (channel.models ?? []).join('\n')) {
+          onChannelsChange(channels.map((item) => (item.id === channel.id ? { ...item, models: nextIds } : item)))
+        }
+      } catch (error) {
+        if (modelListRequestIdRef.current !== requestId) {
+          return
+        }
+        const reason = error instanceof Error ? error.message : '读取模型列表失败'
+        setModelListItems([])
+        setModelListError(reason)
+      } finally {
+        if (modelListRequestIdRef.current === requestId) {
+          setIsModelListLoading(false)
+        }
+      }
+    },
+    [channels, onChannelsChange],
+  )
+
+  const openModelListModal = useCallback(() => {
+    if (channels.length === 0) {
+      messageApi.info('暂无可查看的渠道，请先新增渠道')
+      return
+    }
+    const fallbackChannel = selectedModelListChannel ?? channels[0]
+    setSelectedModelListChannelId(fallbackChannel.id)
+    setModelListViewMode('normal')
+    setModelListItems([])
+    setModelListError('')
+    setIsModelListModalOpen(true)
+  }, [channels, messageApi, selectedModelListChannel])
+
+  useEffect(() => {
+    if (!isModelListModalOpen || !selectedModelListChannel) {
+      return
+    }
+    setModelListItems([])
+    setModelListError('')
+    setModelSearchInput('')
+    setModelSearchKeyword('')
+    void loadModelListForChannel(selectedModelListChannel)
+  }, [isModelListModalOpen, loadModelListForChannel, selectedModelListChannel])
+
+  const filteredModelListItems = useMemo(() => {
+    const keyword = normalizeSearchText(modelSearchKeyword)
+    if (!keyword) {
+      return modelListItems
+    }
+    return modelListItems.filter((item) => {
+      const idText = normalizeSearchText(item.id)
+      const metadataText = normalizeSearchText(JSON.stringify(item.metadata ?? {}))
+      return fuzzyIncludes(idText, keyword) || fuzzyIncludes(metadataText, keyword)
+    })
+  }, [modelListItems, modelSearchKeyword])
 
   const parseChannelImportText = useCallback((text: string) => {
     const parsed = parseApiChannelsFromText(text)
@@ -572,17 +796,23 @@ export function SettingsPanel(props: SettingsPanelProps) {
       selectedTag === ALL_MODEL_TAG
         ? scopedModels
         : scopedModels.filter((item) => inferModelTags(item).includes(selectedTag))
-    const activeModel =
-      filteredModels.find((item) => item.id === settings.modelId) ??
-      scopedModels.find((item) => item.id === settings.modelId) ??
-      filteredModels[0] ??
-      scopedModels[0] ??
-      models[0]
+    const imageModels = filteredModels.filter((item) => !isBlockedImageModel({ id: item.id, name: item.name }))
+    const textModels = filteredModels.filter((item) => !isBlockedTextModel({ id: item.id, name: item.name }))
+    const videoModels = filteredModels.filter((item) => !isBlockedVideoModel({ id: item.id, name: item.name }))
+    const activeImageModel =
+      imageModels.find((item) => item.id === settings.modelId)
+    const activeTextModel =
+      textModels.find((item) => item.id === (settings.textModelId ?? settings.modelId)) ??
+      textModels[0]
+    const activeVideoModel =
+      videoModels.find((item) => item.id === (settings.videoModelId ?? settings.modelId)) ??
+      videoModels[0]
     const computedResolution =
       settings.sizeMode === 'custom'
         ? `${settings.customWidth}x${settings.customHeight}`
         : getComputedPresetResolution(settings.aspectRatio, normalizeSizeTier(settings.resolution)) ?? settings.resolution
     const hasSelectedDirectory = isSaveDirectoryReady(settings.saveDirectory)
+    const isTextMode = settings.generationMode === 'text'
     return (
       <Collapse
         className="full-width"
@@ -599,12 +829,26 @@ export function SettingsPanel(props: SettingsPanelProps) {
             label: '生成设置',
             children: (
               <Form layout="vertical">
+                <Form.Item label="生成模式">
+                  <Radio.Group
+                    value={settings.generationMode}
+                    optionType="button"
+                    buttonStyle="solid"
+                    options={[
+                      { label: '图片', value: 'image' },
+                      { label: '文本', value: 'text' },
+                    ]}
+                    onChange={(event) =>
+                      onSettingsChange(side, { generationMode: event.target.value as SingleSideSettings['generationMode'] })}
+                  />
+                </Form.Item>
                 <Form.Item label="单次生成张数">
                   <InputNumber
                     className="full-width"
                     min={1}
                     precision={0}
                     value={settings.imageCount}
+                    disabled={isTextMode}
                     onChange={(value) => onSettingsChange(side, { imageCount: typeof value === 'number' ? value : 4 })}
                   />
                 </Form.Item>
@@ -614,24 +858,30 @@ export function SettingsPanel(props: SettingsPanelProps) {
                     min={1}
                     max={8}
                     value={settings.gridColumns}
+                    disabled={isTextMode}
                     onChange={(value) => onSettingsChange(side, { gridColumns: typeof value === 'number' ? value : 4 })}
                   />
                 </Form.Item>
                 <Form.Item label="自动保存到本地" style={{ marginBottom: 0 }}>
                   <Switch
                     checked={hasSelectedDirectory ? settings.autoSave : false}
-                    disabled={!hasSelectedDirectory}
+                    disabled={!hasSelectedDirectory || isTextMode}
                     onChange={(checked) => onSettingsChange(side, { autoSave: checked })}
                   />
                 </Form.Item>
                 <Form.Item style={{ marginBottom: 8 }}>
                   <Text type="secondary">
-                    {hasSelectedDirectory ? '路径已授权，可开启自动保存。' : '请先选择路径并授权后再开启自动保存。'}
+                    {isTextMode
+                      ? '文本模式不会产出图片文件，自动保存暂不可用。'
+                      : hasSelectedDirectory
+                        ? '路径已授权，可开启自动保存。'
+                        : '请先选择路径并授权后再开启自动保存。'}
                   </Text>
                 </Form.Item>
                 <Form.Item style={{ marginBottom: 0 }}>
                   <Button
                     block
+                    disabled={isTextMode}
                     onClick={async () => {
                       try {
                         const result = await pickSaveDirectory()
@@ -672,13 +922,34 @@ export function SettingsPanel(props: SettingsPanelProps) {
                     }
 
                     const supportedSet = new Set(selectedChannel.models)
-                    if (supportedSet.has(settings.modelId)) {
-                      return
+                    const fallbackImageModel = models.find(
+                      (item) => supportedSet.has(item.id) && !isBlockedImageModel({ id: item.id, name: item.name }),
+                    )
+                    const fallbackTextModel = models.find(
+                      (item) => supportedSet.has(item.id) && !isBlockedTextModel({ id: item.id, name: item.name }),
+                    )
+                    const fallbackVideoModel = models.find(
+                      (item) => supportedSet.has(item.id) && !isBlockedVideoModel({ id: item.id, name: item.name }),
+                    )
+                    if (
+                      fallbackImageModel &&
+                      (!supportedSet.has(settings.modelId) || isBlockedImageModel({ id: settings.modelId }))
+                    ) {
+                      onModelChange(side, fallbackImageModel.id)
                     }
-
-                    const fallbackModel = models.find((item) => supportedSet.has(item.id))
-                    if (fallbackModel) {
-                      onModelChange(side, fallbackModel.id)
+                    if (
+                      fallbackTextModel &&
+                      (!supportedSet.has(settings.textModelId ?? settings.modelId) ||
+                        isBlockedTextModel({ id: settings.textModelId ?? settings.modelId }))
+                    ) {
+                      onSettingsChange(side, { textModelId: fallbackTextModel.id })
+                    }
+                    if (
+                      fallbackVideoModel &&
+                      (!supportedSet.has(settings.videoModelId ?? settings.modelId) ||
+                        isBlockedVideoModel({ id: settings.videoModelId ?? settings.modelId }))
+                    ) {
+                      onSettingsChange(side, { videoModelId: fallbackVideoModel.id })
                     }
                   }}
                   allowClear
@@ -713,23 +984,44 @@ export function SettingsPanel(props: SettingsPanelProps) {
                         const scopedVendorModels = channelModelSet
                           ? vendorModels.filter((item) => channelModelSet.has(item.id))
                           : vendorModels
-                        const currentMatches = scopedVendorModels.some((item) => item.id === settings.modelId)
-                        if (!currentMatches && scopedVendorModels[0]) {
-                          onModelChange(side, scopedVendorModels[0].id)
+                        const scopedVendorImageModels = scopedVendorModels.filter(
+                          (item) => !isBlockedImageModel({ id: item.id, name: item.name }),
+                        )
+                        const scopedVendorTextModels = scopedVendorModels.filter(
+                          (item) => !isBlockedTextModel({ id: item.id, name: item.name }),
+                        )
+                        const scopedVendorVideoModels = scopedVendorModels.filter(
+                          (item) => !isBlockedVideoModel({ id: item.id, name: item.name }),
+                        )
+                        const currentMatches = scopedVendorImageModels.some((item) => item.id === settings.modelId)
+                        const currentTextMatches = scopedVendorTextModels.some(
+                          (item) => item.id === (settings.textModelId ?? settings.modelId),
+                        )
+                        const currentVideoMatches = scopedVendorVideoModels.some(
+                          (item) => item.id === (settings.videoModelId ?? settings.modelId),
+                        )
+                        if (!currentMatches && scopedVendorImageModels[0]) {
+                          onModelChange(side, scopedVendorImageModels[0].id)
+                        }
+                        if (!currentTextMatches && scopedVendorTextModels[0]) {
+                          onSettingsChange(side, { textModelId: scopedVendorTextModels[0].id })
+                        }
+                        if (!currentVideoMatches && scopedVendorVideoModels[0]) {
+                          onSettingsChange(side, { videoModelId: scopedVendorVideoModels[0].id })
                         }
                       }}
                     />
                   </Form.Item>
-                  <Form.Item label="模型">
+                  <Form.Item label="图片模型">
                     <Select
                       showSearch
-                      value={activeModel?.id}
-                      options={filteredModels.map((item) => ({ label: item.name, value: item.id }))}
+                      value={activeImageModel?.id}
+                      options={imageModels.map((item) => ({ label: item.name, value: item.id }))}
                       optionFilterProp="label"
                       filterOption={(input, option) => {
                         const keyword = input.trim().toLowerCase()
                         const value = String(option?.value ?? '')
-                        const model = filteredModels.find((item) => item.id === value)
+                        const model = imageModels.find((item) => item.id === value)
                         const label = String(option?.label ?? '').toLowerCase()
                         const id = value.toLowerCase()
                         const aliases = model ? inferModelSearchTokens(model) : ''
@@ -739,11 +1031,50 @@ export function SettingsPanel(props: SettingsPanelProps) {
                       onChange={(value) => onModelChange(side, value)}
                     />
                   </Form.Item>
+                  <Form.Item label="文本模型">
+                    <Select
+                      showSearch
+                      value={activeTextModel?.id}
+                      options={textModels.map((item) => ({ label: item.name, value: item.id }))}
+                      optionFilterProp="label"
+                      filterOption={(input, option) => {
+                        const keyword = input.trim().toLowerCase()
+                        const value = String(option?.value ?? '')
+                        const model = textModels.find((item) => item.id === value)
+                        const label = String(option?.label ?? '').toLowerCase()
+                        const id = value.toLowerCase()
+                        const aliases = model ? inferModelSearchTokens(model) : ''
+                        const haystack = `${label} ${id} ${aliases}`
+                        return haystack.includes(keyword)
+                      }}
+                      onChange={(value) => onSettingsChange(side, { textModelId: value })}
+                    />
+                  </Form.Item>
+                  <Form.Item label="视频模型">
+                    <Select
+                      showSearch
+                      value={activeVideoModel?.id}
+                      options={videoModels.map((item) => ({ label: item.name, value: item.id }))}
+                      optionFilterProp="label"
+                      filterOption={(input, option) => {
+                        const keyword = input.trim().toLowerCase()
+                        const value = String(option?.value ?? '')
+                        const model = videoModels.find((item) => item.id === value)
+                        const label = String(option?.label ?? '').toLowerCase()
+                        const id = value.toLowerCase()
+                        const aliases = model ? inferModelSearchTokens(model) : ''
+                        const haystack = `${label} ${id} ${aliases}`
+                        return haystack.includes(keyword)
+                      }}
+                      onChange={(value) => onSettingsChange(side, { videoModelId: value })}
+                    />
+                  </Form.Item>
                   <Form.Item label="尺寸模式">
                     <Radio.Group
                       value={settings.sizeMode}
                       optionType="button"
                       buttonStyle="solid"
+                      disabled={isTextMode}
                       options={[
                         { label: '预设', value: 'preset' },
                         { label: '自定义', value: 'custom' },
@@ -755,6 +1086,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
                     <Form.Item label="比例">
                       <Select
                         value={settings.aspectRatio}
+                        disabled={isTextMode}
                         options={aspectRatioOptions}
                         onChange={(value) => onSettingsChange(side, { aspectRatio: value })}
                       />
@@ -764,6 +1096,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
                     <Form.Item label="预设尺寸">
                       <Select
                         value={settings.resolution}
+                        disabled={isTextMode}
                         options={sizeTierOptions}
                         onChange={(value) => onSettingsChange(side, { resolution: value })}
                       />
@@ -777,6 +1110,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
                           min={256}
                           max={8192}
                           value={settings.customWidth}
+                          disabled={isTextMode}
                           onChange={(value) =>
                             onSettingsChange(side, { customWidth: typeof value === 'number' ? value : 1024 })
                           }
@@ -787,6 +1121,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
                           min={256}
                           max={8192}
                           value={settings.customHeight}
+                          disabled={isTextMode}
                           onChange={(value) =>
                             onSettingsChange(side, { customHeight: typeof value === 'number' ? value : 1024 })
                           }
@@ -797,11 +1132,16 @@ export function SettingsPanel(props: SettingsPanelProps) {
                   <Form.Item label="当前尺寸" style={{ marginBottom: 0 }}>
                     <Alert type="info" showIcon title={computedResolution} />
                   </Form.Item>
+                  {isTextMode ? (
+                    <Form.Item style={{ marginBottom: 0, marginTop: 8 }}>
+                      <Alert type="info" showIcon message="文本模式将调用 /v1/chat/completions 流式接口。" />
+                    </Form.Item>
+                  ) : null}
                 </Form>
 
-                {activeModel ? (
+                {activeImageModel ? (
                   <Space orientation="vertical" className="full-width" size={8}>
-                    {activeModel.params.map((param) => (
+                    {activeImageModel.params.map((param) => (
                       <div key={param.key}>
                         <Text>{param.label}</Text>
                         <div style={{ marginTop: 6 }}>
@@ -902,12 +1242,13 @@ export function SettingsPanel(props: SettingsPanelProps) {
         title: '名称',
         dataIndex: 'name',
         key: 'name',
+        render: (value: string) => <span style={{ whiteSpace: 'nowrap' }}>{value}</span>,
       },
       {
         title: 'Base URL',
         dataIndex: 'baseUrl',
         key: 'baseUrl',
-        ellipsis: true,
+        render: (value: string) => <span style={{ whiteSpace: 'nowrap' }}>{value}</span>,
       },
       {
         title: 'API Key',
@@ -919,7 +1260,19 @@ export function SettingsPanel(props: SettingsPanelProps) {
         title: '操作',
         key: 'actions',
         render: (_: unknown, row: ApiChannel) => (
-          <Space>
+          <Space size={8} style={{ whiteSpace: 'nowrap' }}>
+            <Button
+              size="small"
+              onClick={() => {
+                setSelectedModelListChannelId(row.id)
+                setModelListViewMode('normal')
+                setModelListItems([])
+                setModelListError('')
+                setIsModelListModalOpen(true)
+              }}
+            >
+              模型列表
+            </Button>
             <Button
               size="small"
               onClick={() => {
@@ -1066,7 +1419,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
         title="API 渠道管理"
         open={isDrawerOpen}
         onClose={() => setIsDrawerOpen(false)}
-        size="large"
+        width={channelDrawerWidth}
         extra={
           <Space>
             <Button
@@ -1077,6 +1430,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
                 void refreshChannelModels()
               }}
             />
+            <Button onClick={openModelListModal}>查看模型</Button>
             <Button
               type="primary"
               onClick={() => {
@@ -1091,14 +1445,118 @@ export function SettingsPanel(props: SettingsPanelProps) {
           </Space>
         }
       >
-        <Table<ApiChannel>
-          rowKey="id"
-          columns={channelColumns}
-          dataSource={channels}
-          pagination={false}
-          locale={{ emptyText: '暂无渠道，先新增一个' }}
-        />
+        <div ref={channelTableContainerRef}>
+          <Table<ApiChannel>
+            className="channel-management-table"
+            rowKey="id"
+            columns={channelColumns}
+            dataSource={channels}
+            pagination={false}
+            scroll={{ x: 'max-content' }}
+            locale={{ emptyText: '暂无渠道，先新增一个' }}
+          />
+        </div>
       </Drawer>
+
+      <Modal
+        title="模型列表"
+        open={isModelListModalOpen}
+        centered
+        width={760}
+        zIndex={1200}
+        footer={null}
+        styles={{ body: { maxHeight: '70vh', overflowY: 'auto' } }}
+        onCancel={() => {
+          setIsModelListModalOpen(false)
+        }}
+      >
+        <Space orientation="vertical" className="full-width" size={12}>
+          <Space wrap>
+            <Select
+              style={{ minWidth: 320 }}
+              value={selectedModelListChannelId ?? undefined}
+              options={channels.map((item) => ({ label: item.name, value: item.id }))}
+              onChange={(value) => setSelectedModelListChannelId(value)}
+            />
+            <Input
+              style={{ width: 220 }}
+              value={modelSearchInput}
+              placeholder="搜索模型（支持模糊）"
+              allowClear
+              onChange={(event) => setModelSearchInput(event.target.value)}
+              onPressEnter={() => setModelSearchKeyword(modelSearchInput)}
+            />
+            <Button onClick={() => setModelSearchKeyword(modelSearchInput)}>搜索</Button>
+            <Radio.Group
+              optionType="button"
+              buttonStyle="solid"
+              value={modelListViewMode}
+              onChange={(event) => setModelListViewMode(event.target.value as ModelListViewMode)}
+            >
+              <Radio.Button value="normal">普通模式</Radio.Button>
+              <Radio.Button value="metadata">元数据模式</Radio.Button>
+            </Radio.Group>
+            <Button
+              icon={<ReloadOutlined />}
+              loading={isModelListLoading}
+              disabled={!selectedModelListChannel}
+              onClick={() => {
+                if (!selectedModelListChannel) {
+                  return
+                }
+                void loadModelListForChannel(selectedModelListChannel)
+              }}
+            >
+              刷新
+            </Button>
+          </Space>
+          {modelListError ? <Alert type="error" message={modelListError} /> : null}
+          <Table<ChannelModelEntry>
+            size="small"
+            rowKey={(row, index) => `${row.id}-${index ?? 0}`}
+            loading={isModelListLoading}
+            dataSource={filteredModelListItems}
+            pagination={{ pageSize: 8, showSizeChanger: false, position: ['bottomCenter'] }}
+            locale={{ emptyText: modelListError ? '读取失败' : modelSearchKeyword ? '没有匹配的模型' : '暂无模型数据' }}
+            scroll={{ x: 700, y: 360 }}
+            columns={
+              modelListViewMode === 'normal'
+                ? [
+                    {
+                      title: '模型 ID',
+                      dataIndex: 'id',
+                      key: 'id',
+                    },
+                  ]
+                : [
+                    {
+                      title: '模型 ID',
+                      dataIndex: 'id',
+                      key: 'id',
+                      width: 260,
+                    },
+                    {
+                      title: '元数据',
+                      key: 'metadata',
+                      render: (_: unknown, row: ChannelModelEntry) => (
+                        <pre
+                          style={{
+                            margin: 0,
+                            whiteSpace: 'pre-wrap',
+                            wordBreak: 'break-word',
+                            fontSize: 12,
+                            lineHeight: 1.45,
+                          }}
+                        >
+                          {JSON.stringify(row.metadata ?? { id: row.id }, null, 2)}
+                        </pre>
+                      ),
+                    },
+                  ]
+            }
+          />
+        </Space>
+      </Modal>
 
       <Modal
         title={editingChannelId ? '编辑渠道' : '新增渠道'}

@@ -713,6 +713,7 @@ function normalizeSettings(
   const autoSaveEnabled = Boolean(settings?.autoSave && saveDirectory)
 
   return {
+    generationMode: settings?.generationMode === 'image' ? 'image' : 'text',
     resolution: normalizeSizeTier(settings?.resolution),
     aspectRatio: settings?.aspectRatio ?? ASPECT_RATIO_DEFAULT,
     imageCount: Math.max(1, Math.floor(settings?.imageCount ?? 4)),
@@ -724,6 +725,14 @@ function normalizeSettings(
     saveDirectory,
     channelId,
     modelId: model?.id ?? '',
+    textModelId:
+      settings?.textModelId && getModelById(catalog, settings.textModelId)
+        ? settings.textModelId
+        : (model?.id ?? ''),
+    videoModelId:
+      settings?.videoModelId && getModelById(catalog, settings.videoModelId)
+        ? settings.videoModelId
+        : (model?.id ?? ''),
     paramValues: normalizeParamValues(model, settings?.paramValues ?? getDefaultParamValues(model)),
   }
 }
@@ -836,7 +845,33 @@ function normalizeRun(run: Run): Run {
     }
   })
 
-  const normalizedSourceImages = (Array.isArray(run.sourceImages) ? run.sourceImages : [])
+  const normalizedSourceImages = normalizeSourceImageRefs(run.sourceImages)
+
+  return {
+    ...run,
+    sideMode: raw.sideMode === 'ab' ? 'multi' : run.sideMode,
+    side: raw.side === 'A' ? 'win-1' : raw.side === 'B' ? 'win-2' : run.side,
+    templatePrompt: raw.templatePrompt ?? run.prompt ?? '',
+    finalPrompt: raw.finalPrompt ?? run.prompt ?? '',
+    variablesSnapshot: raw.variablesSnapshot ?? {},
+    retryAttempt: raw.retryAttempt ?? 0,
+    sourceImages: normalizedSourceImages,
+    images: normalizedImages,
+    settingsSnapshot: run.settingsSnapshot ?? {
+      resolution: '1K',
+      aspectRatio: ASPECT_RATIO_DEFAULT,
+      imageCount: run.imageCount,
+      gridColumns: 4,
+      sizeMode: 'preset',
+      customWidth: 1024,
+      customHeight: 1024,
+      autoSave: true,
+    },
+  }
+}
+
+function normalizeSourceImageRefs(items: RunSourceImageRef[] | undefined): RunSourceImageRef[] {
+  return (Array.isArray(items) ? items : [])
     .map((item) => {
       if (!item || typeof item !== 'object') {
         return null
@@ -860,28 +895,6 @@ function normalizeRun(run: Run): Run {
       } satisfies RunSourceImageRef
     })
     .filter((item): item is RunSourceImageRef => Boolean(item))
-
-  return {
-    ...run,
-    sideMode: raw.sideMode === 'ab' ? 'multi' : run.sideMode,
-    side: raw.side === 'A' ? 'win-1' : raw.side === 'B' ? 'win-2' : run.side,
-    templatePrompt: raw.templatePrompt ?? run.prompt ?? '',
-    finalPrompt: raw.finalPrompt ?? run.prompt ?? '',
-    variablesSnapshot: raw.variablesSnapshot ?? {},
-    retryAttempt: raw.retryAttempt ?? 0,
-    sourceImages: normalizedSourceImages,
-    images: normalizedImages,
-    settingsSnapshot: run.settingsSnapshot ?? {
-      resolution: '1K',
-      aspectRatio: ASPECT_RATIO_DEFAULT,
-      imageCount: run.imageCount,
-      gridColumns: 4,
-      sizeMode: 'preset',
-      customWidth: 1024,
-      customHeight: 1024,
-      autoSave: true,
-    },
-  }
 }
 
 export function normalizeConversation(
@@ -914,6 +927,7 @@ export function normalizeConversation(
     ),
     messages: conversation.messages.map((message) => ({
       ...message,
+      sourceImages: normalizeSourceImageRefs(message.sourceImages),
       runs: (message.runs ?? []).map((run) => normalizeRun(run)),
     })),
   }
@@ -1108,6 +1122,7 @@ export function buildRetryPlan(input: {
   }, 0)
 
   const settings: SingleSideSettings = {
+    generationMode: 'image',
     resolution: normalizeSizeTier(sourceRun.settingsSnapshot?.resolution),
     aspectRatio: sourceRun.settingsSnapshot?.aspectRatio ?? ASPECT_RATIO_DEFAULT,
     imageCount: sourceRun.settingsSnapshot?.imageCount ?? sourceRun.imageCount,
@@ -1123,6 +1138,8 @@ export function buildRetryPlan(input: {
         : undefined,
     channelId: sourceRun.channelId,
     modelId: sourceRun.modelId,
+    textModelId: sourceRun.modelId,
+    videoModelId: sourceRun.modelId,
     paramValues: { ...sourceRun.paramsSnapshot },
   }
 
@@ -1163,6 +1180,7 @@ export function buildReplayPlan(input: {
   }
 
   const settings: SingleSideSettings = {
+    generationMode: 'image',
     resolution: normalizeSizeTier(sourceRun.settingsSnapshot?.resolution),
     aspectRatio: sourceRun.settingsSnapshot?.aspectRatio ?? ASPECT_RATIO_DEFAULT,
     imageCount: sourceRun.settingsSnapshot?.imageCount ?? sourceRun.imageCount,
@@ -1178,6 +1196,8 @@ export function buildReplayPlan(input: {
         : undefined,
     channelId: sourceRun.channelId,
     modelId: sourceRun.modelId,
+    textModelId: sourceRun.modelId,
+    videoModelId: sourceRun.modelId,
     paramValues: { ...sourceRun.paramsSnapshot },
   }
 

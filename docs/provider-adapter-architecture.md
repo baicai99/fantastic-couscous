@@ -145,3 +145,18 @@
 - 前端 Composer 已支持参考图上传、删除、清空与发送后策略（成功清空、失败保留）。
 - Run 级别新增参考图引用快照，可直接用于 retry/replay。
 - 详细规则见：`docs/nano-banana-image-edits-adapter.md`
+
+## 10. 文本流式能力补充（`/v1/chat/completions`）
+
+- Provider 抽象新增文本流式能力：
+  - `ProviderAdapter.streamText`
+  - 标准回调：`onDelta` / `onDone` / `onError`
+- Gateway 新增 `streamTextByProvider` 统一入口，复用既有 provider 选路与错误归一化。
+- OpenAI Compatible Adapter 新增 SSE 解析：
+  - 逐帧读取 `data:`。
+  - 识别 `[DONE]`。
+  - 提取 `choices[].delta.content` 增量文本。
+- Midjourney Adapter 当前明确返回“不支持文本流式”，避免静默失败。
+- 上层发送链路通过 `SingleSideSettings.generationMode` 显式切换：
+  - `image`：走 run/image 链路。
+  - `text`：直接流式更新 assistant 文本，不写入 `runs`。

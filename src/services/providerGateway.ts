@@ -4,6 +4,7 @@ import type {
   NormalizedImageRequest,
   NormalizedImageResult,
   NormalizedResumeResult,
+  NormalizedTextRequest,
   ProviderErrorCode,
 } from '../types/provider'
 import { getProviderAdapterById, getProviderAdapterForChannel } from './providers/providerRegistry'
@@ -168,4 +169,58 @@ export async function resumeImageTaskByProvider(input: {
     taskMeta: input.taskMeta,
     signal: input.signal,
   })
+}
+
+export async function streamTextByProvider(input: {
+  channel: ApiChannel
+  request: NormalizedTextRequest
+  onDelta: (chunk: string) => void
+  onDone?: () => void
+  onError?: (error: Error) => void
+}): Promise<void> {
+  const adapter = getProviderAdapterForChannel(input.channel)
+  const providerId = adapter.id
+  const startedAt = performance.now()
+
+  try {
+    await adapter.streamText({
+      channel: {
+        id: input.channel.id,
+        name: input.channel.name,
+        baseUrl: input.channel.baseUrl,
+        apiKey: input.channel.apiKey,
+        providerId: input.channel.providerId,
+        models: input.channel.models,
+      },
+      request: input.request,
+      onDelta: input.onDelta,
+      onDone: input.onDone,
+      onError: (error) => {
+        input.onError?.(error)
+      },
+    })
+    trackGatewayMetric({
+      providerId,
+      modelId: input.request.modelId,
+      endpointVariant: 'chat.completions(stream)',
+      latencyMs: performance.now() - startedAt,
+      status: 'success',
+      errorCode: 'unknown',
+    })
+  } catch (error) {
+    if (error && typeof error === 'object' && 'name' in error && (error as { name?: unknown }).name === 'AbortError') {
+      throw error
+    }
+    const normalized = adapter.normalizeError(error)
+    trackGatewayMetric({
+      providerId,
+      modelId: input.request.modelId,
+      endpointVariant: 'chat.completions(stream)',
+      latencyMs: performance.now() - startedAt,
+      status: 'error',
+      errorCode: toProviderErrorCode(normalized),
+    })
+    input.onError?.(normalized)
+    throw normalized
+  }
 }

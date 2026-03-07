@@ -6,6 +6,7 @@
 
 这是一个 **多渠道图片生成会话应用（React + TypeScript + Ant Design + Vite）**，核心能力：
 - 会话式输入提示词并生成图片。
+- 支持文本模式流式回复（`/v1/chat/completions`）。
 - 支持单窗口 / 多窗口并行对照生成。
 - 支持模板变量批量展开（动态提示词），一次触发多轮 run。
 - 支持失败重试（仅重试失败图片）与 replay（同参数新消息再跑）。
@@ -56,15 +57,18 @@
 ### 5.1 Send Draft
 
 1. `useConversations.sendDraft()` 读取当前状态。
-2. `orchestrator.planSendDraft()` 调 `domain.planRunBatch()`：
+2. 按 side 设置 `generationMode` 分流：
+   - `image`：进入图片 run 计划与执行链路。
+   - `text`：直接走 provider 文本流式接口，实时 patch assistant 消息内容。
+3. `orchestrator.planSendDraft()` 调 `domain.planRunBatch()`（仅图片模式）：
    - 校验 draft 是否为空。
    - 若启用动态提示词：解析 panel 变量并生成批次。
    - 按 side（single 或 win-1..win-n）展开 run plans。
    - 生成 pending runs（先写入会话，UI 立即可见）。
-3. 调 `orchestrator.executeRunPlans()` 并发执行：
+4. 调 `orchestrator.executeRunPlans()` 并发执行（仅图片模式）：
    - 通过 `Semaphore` 限制并发（受 `runConcurrency` 控制）。
    - 每张图完成时触发 `onRunImageProgress`，渐进更新会话中的对应 image。
-4. 全部完成后用最终 run 替换 pending run。
+5. 全部完成后用最终 run 替换 pending run。
 
 ### 5.2 Retry 失败图片
 
@@ -86,6 +90,9 @@
 
 - 渠道管理：`components/settings/SettingsPanel.tsx`
   - CRUD 渠道、拉取模型列表、按渠道约束可选模型。
+  - “API 渠道管理”抽屉新增“查看模型”能力：支持按渠道查看模型列表，并可在“普通模式（仅模型 ID）/元数据模式（完整模型对象）”间切换。
+  - 模型列表支持关键词搜索，点击“搜索”后可对模型 ID 与元数据进行模糊匹配过滤。
+  - 渠道管理抽屉采用“测量驱动”宽度：`min 720px / max 70vw`，优先贴合表格内容宽度；当内容总宽超出上限时，表格自动启用横向滚动。
 - 模型拉取：`services/channelModels.ts`
   - 请求 `/v1/models`（兼容不同 path，支持分页 cursor）。
 - 模型目录：`services/modelCatalog.ts`
@@ -96,6 +103,9 @@
   - 单张图片采用“60 秒超时 + 最多 3 轮重试”策略；每轮超时会先回写占位提示“超时并等待下一轮”，第三轮超时后最终失败（timeout）。
   - 识别常见错误（不支持尺寸、敏感内容、不支持模型）。
   - 响应图片字段兼容 `url / b64_json / data / base64`，并先判定 URL/dataURL/合法 Base64，避免把非 Base64 内容误喂给解码流程。
+- 文本流式：`services/providerGateway.ts` + `services/providers/openaiCompatibleAdapter.ts`
+  - 走 `/v1/chat/completions`（`stream: true`）。
+  - 解析 SSE `data:` 增量，并实时更新 assistant 文本内容。
 
 ## 7. 持久化策略
 
@@ -118,6 +128,8 @@
 - 渐进式图片提交/渲染 + 历史消息分页加载（默认初始 100，增量 50）。
 - 左侧会话列表排序规则：按“最后一条消息时间”倒序；若会话正文尚未加载则回退用 summary 的 `updatedAt/createdAt`，确保新近对话始终靠前。
 - 左侧“新建对话”按钮现在会直接关闭当前活动对话：
+- 左侧历史会话项的“更多操作（三个点）”按钮取消低透明度，改为与正文一致的高可见深色常显样式（`opacity: 1`）。
+- 左侧历史会话项“更多操作”图标统一为横向三点（`…`）样式，便于与顶部/正文操作图标视觉一致。
   - 若当前对话已有消息线程，先弹出确认框提示“关闭旧对话线程并新建对话”。
   - 确认后删除旧对话记录，并进入空白新会话编辑态。
 - Workspace 使用 `ResizeObserver + debounce` 动态计算 header/composer 安全区。
