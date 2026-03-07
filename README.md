@@ -10,33 +10,40 @@
 
 - 免费演示地址：[https://image.zhengjiyuan.top/](https://image.zhengjiyuan.top/)
 
-## 近期更新（基于 Git 提交）
+## 近期更新（2026-03-07）
 
-以下内容基于最近提交记录整理（截至 **2026-03-06**）：
-
-- 统一左右侧边栏架构，抽象 `SidebarShell`，减少重复实现。
-- 新增双侧边栏折叠/展开模式持久化，支持响应式断点自动切换。
-- 设置侧边栏增加动画与迷你模式，优化设置按钮/图标对齐与交互。
-- 对聊天区尺寸测量引入防抖（`ResizeObserver + debounce`），降低频繁重排。
-- 修复对照模式（多窗口）布局问题，完善滚动与底部输入区安全间距。
-- 自动滚动改为“发送触发”，避免浏览历史消息时被打断。
-- 消息列表支持历史分页加载与窗口化渲染，优化长对话性能。
-- 图片列表支持渐进渲染（按批展开），减少大批次渲染卡顿。
-- 失败图片支持局部重试；运行记录支持“再来一次（Replay）”。
-- 增强下载能力：单图下载、单次运行下载、动态批次下载。
-- 渠道模型拉取支持分页与批量刷新，模型/厂商筛选体验优化。
-- 增加自动保存目录能力（File System Access API），可在生成完成时自动落盘。
+- **输入框全面改版（胶囊 Composer）**
+  - 左侧 `+` 上传入口与输入条融合，支持粘贴图片（`Ctrl+V`）与聊天区拖拽上传。
+  - 参考图场景支持“上图下输”布局，预览更大、更聚焦，发送成功清空、失败保留。
+  - 多行输入时左右操作区贴底对齐，宽度自适应与回缩策略优化，减少抖动与误换行。
+- **多 Provider 工程化落地**
+  - 新增 Provider Adapter + Registry + Gateway 架构，业务执行链从厂商差异中解耦。
+  - 渠道层引入 `providerId`，支持按渠道自动选路（当前包含 `openai-compatible`、`midjourney-proxy`）。
+  - 原 `imageGeneration` / `channelModels` 改为薄封装转发，平滑过渡不破坏现有调用。
+- **Nano Banana 图像编辑链路接入**
+  - 有参考图自动走 `/v1/images/edits`（含 fallback），无参考图保持 `/v1/images/generations`。
+  - 参考图支持 Run 级轻量引用快照，重试/回放可复用；本地 blob 缺失给出可读错误提示。
+- **消息区交互与反馈增强**
+  - 新增“滚动到底部”悬浮按钮与过渡动画。
+  - 任务完成通知按结果分级展示（success / warning / error）。
+  - 拥塞类上游错误自动转用户可读文案，失败 Run 支持一键复制“报错+参数”。
+- **下载与操作体验优化**
+  - “下载全部”按钮支持 loading 态，zip 命名统一为 `模型名-时间戳.zip`。
+  - 气泡操作统一“先反馈动画再执行动作”，减少点击延迟感。
 
 ## 核心能力
 
 - 多会话管理：新建、切换、删除、清空历史。
 - 单窗口与多窗口（2~8）对照生成。
-- 渠道管理：在 UI 中维护 `baseUrl / apiKey`，自动拉取模型列表。
+- 渠道管理：在 UI 中维护 `baseUrl / apiKey / providerId`，自动拉取模型列表。
 - 模型筛选：按厂商标签、关键词、渠道支持范围筛选模型。
 - 高级变量：
   - 表格编辑与批量导入（JSON / YAML / CSV / 逐行）。
   - 模板预览、缺失变量检查、未使用变量提示。
   - 动态批处理运行（变量展开后循环生成）。
+- 参考图编辑：
+  - 单次最多上传 6 张（`png/jpg/jpeg/webp`）。
+  - 自动切换文生图/图生图接口，支持删除、清空、重试与回放复用。
 - 图片交互：预览、缩放、拖拽、键盘导航。
 - 结果处理：失败重试、复用历史 prompt、Replay 重新生成。
 - 存储策略：会话、渠道、侧栏状态和 staged settings 均本地持久化。
@@ -74,16 +81,25 @@ npm run test        # 运行测试（单次）
 npm run test:watch  # 监听模式测试
 ```
 
-## 接口兼容说明（OpenAI 风格）
+## 接口兼容说明（Provider Adapter）
 
-应用默认按 OpenAI 风格接口适配，并包含兼容回退逻辑：
+应用通过 Provider Gateway 统一请求入口，上层始终使用标准 DTO；当前内置：
 
-- 模型列表：`GET /v1/models`（兼容 `/models`）
-- 图像生成：`POST /v1/images/generations`
-- 图像生成回退：`/v1/images/generations` 与 `/v1/image/generations` 互相回退
+- `openai-compatible`
+  - 模型列表：`GET /v1/models`（兼容 `/models`）
+  - 文生图：`POST /v1/images/generations`（兼容 `/v1/image/generations`）
+  - 图生图：`POST /v1/images/edits`（兼容 `/v1/image/edits`）
+  - 响应字段兼容：`url / b64_json / data / base64`
+- `midjourney-proxy`
+  - 任务提交：`POST /mj/submit/imagine`
+  - 任务查询：`GET /mj/task/:taskId/fetch`
+  - 统一映射到标准任务状态：`pending / success / failed`
+
+通用约束：
+
 - 鉴权：`Authorization: Bearer <API_KEY>`
 - 尺寸参数：统一发送 `size: "宽x高"`（如 `1024x1024`）
-- 渠道提供商：支持 `providerId`（默认 `openai-compatible`，可扩展为 `midjourney-proxy`）
+- 渠道字段：`providerId` 优先显式指定，未指定时按 `baseUrl` 推断
 
 `baseUrl` 支持以下输入形式并会自动归一化：
 
@@ -108,6 +124,11 @@ npm run test:watch  # 监听模式测试
 - 架构：`ui -> application -> domain / infra` 分层，业务规则与 IO 解耦。
 
 更多说明见：[architecture.md](architecture.md) 与 [docs/perf-baseline.md](docs/perf-baseline.md)。
+
+新增架构文档：
+- [docs/provider-adapter-architecture.md](docs/provider-adapter-architecture.md)
+- [docs/nano-banana-image-edits-adapter.md](docs/nano-banana-image-edits-adapter.md)
+- [docs/composer-input-refresh.md](docs/composer-input-refresh.md)
 
 ## 项目结构
 
