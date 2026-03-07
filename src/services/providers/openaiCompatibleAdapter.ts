@@ -10,19 +10,8 @@ import type {
   ProviderErrorCode,
 } from '../../types/provider'
 import { getComputedPresetResolution, normalizeSizeTier } from '../imageSizing'
-
-interface RawModelItem {
-  id?: unknown
-  model?: unknown
-  name?: unknown
-}
-
-interface RawModelListPayload {
-  data?: unknown
-  models?: unknown
-  has_more?: unknown
-  last_id?: unknown
-}
+import { discoverOpenAICompatibleModelEntries } from './openaiCompatible/modelDiscovery'
+import { streamOpenAICompatibleText } from './openaiCompatible/textStream'
 
 interface RawImageItem {
   url?: unknown
@@ -46,39 +35,6 @@ interface RawImageItem {
 
 function normalizeBaseUrl(value: string): string {
   return value.replace(/\/+$/, '')
-}
-
-function buildModelsUrl(baseUrl: string, after?: string): string {
-  const normalized = normalizeBaseUrl(baseUrl)
-  const lower = normalized.toLowerCase()
-  const path = (() => {
-    if (lower.endsWith('/v1/models')) {
-      return normalized
-    }
-
-    if (lower.endsWith('/models')) {
-      return normalized
-    }
-
-    if (lower.endsWith('/v1')) {
-      return `${normalized}/models`
-    }
-
-    return `${normalized}/v1/models`
-  })()
-
-  try {
-    const url = new URL(path)
-    if (!url.searchParams.has('limit')) {
-      url.searchParams.set('limit', '200')
-    }
-    if (after) {
-      url.searchParams.set('after', after)
-    }
-    return url.toString()
-  } catch {
-    return path
-  }
 }
 
 function buildGenerationUrl(baseUrl: string): string {
@@ -456,64 +412,6 @@ function buildEditsFormData(
   return formData
 }
 
-function toModelId(item: unknown): string | null {
-  if (typeof item === 'string') {
-    return item.trim() || null
-  }
-
-  const raw = item as RawModelItem
-  if (typeof raw?.id === 'string' && raw.id.trim()) {
-    return raw.id.trim()
-  }
-  if (typeof raw?.model === 'string' && raw.model.trim()) {
-    return raw.model.trim()
-  }
-  if (typeof raw?.name === 'string' && raw.name.trim()) {
-    return raw.name.trim()
-  }
-  return null
-}
-
-function getModelItems(payload: unknown): unknown[] {
-  if (Array.isArray(payload)) {
-    return payload
-  }
-  if (typeof payload !== 'object' || payload === null) {
-    return []
-  }
-
-  const raw = payload as RawModelListPayload & { data?: { models?: unknown } }
-  if (Array.isArray(raw.data)) {
-    return raw.data
-  }
-  if (Array.isArray(raw.models)) {
-    return raw.models
-  }
-  if (typeof raw.data === 'object' && raw.data !== null && Array.isArray(raw.data.models)) {
-    return raw.data.models
-  }
-  return []
-}
-
-function getPaginationCursor(payload: unknown, list: unknown[]): string | null {
-  if (typeof payload !== 'object' || payload === null) {
-    return null
-  }
-
-  const raw = payload as RawModelListPayload & { data?: { has_more?: unknown; last_id?: unknown } }
-  const hasMore = raw.has_more === true || raw.data?.has_more === true
-  if (!hasMore) {
-    return null
-  }
-  if (typeof raw.last_id === 'string' && raw.last_id.trim()) {
-    return raw.last_id.trim()
-  }
-  if (typeof raw.data?.last_id === 'string' && raw.data.last_id.trim()) {
-    return raw.data.last_id.trim()
-  }
-  return toModelId(list[list.length - 1]) ?? null
-}
-
 function toImageSrc(item: RawImageItem): string | null {
   function normalizeBase64Payload(value: string): string | null {
     const trimmed = value.trim()
@@ -808,37 +706,6 @@ function isEndpointMismatchError(error: unknown): boolean {
   return message.includes('invalid url (post') || message.includes('invalid url')
 }
 
-function extractStreamDeltaText(payload: unknown): string {
-  if (!payload || typeof payload !== 'object') {
-    return ''
-  }
-  const choices = (payload as { choices?: unknown[] }).choices
-  if (!Array.isArray(choices) || choices.length === 0) {
-    return ''
-  }
-
-  const first = choices[0] as { delta?: { content?: unknown } }
-  const content = first?.delta?.content
-  if (typeof content === 'string') {
-    return content
-  }
-  if (!Array.isArray(content)) {
-    return ''
-  }
-
-  const segments = content
-    .map((item) => {
-      if (!item || typeof item !== 'object') {
-        return ''
-      }
-      const chunk = item as { text?: unknown }
-      return typeof chunk.text === 'string' ? chunk.text : ''
-    })
-    .filter(Boolean)
-
-  return segments.join('')
-}
-
 const capabilities: ProviderCapabilities = {
   endpointStyle: 'openai-compatible',
   auth: 'bearer',
@@ -875,52 +742,35 @@ export const openAICompatibleAdapter: ProviderAdapter = {
   displayName: 'OpenAI Compatible',
   capabilities,
   async discoverModels(channel) {
-    const ids = new Set<string>()
-    const seenCursor = new Set<string>()
-    let cursor: string | null = null
-
-    for (let page = 0; page < 30; page += 1) {
-      const response = await fetch(buildModelsUrl(channel.baseUrl, cursor ?? undefined), {
-        method: 'GET',
-        headers: {
-          Authorization: `Bearer ${channel.apiKey}`,
-        },
+    try {
+      const entries = await discoverOpenAICompatibleModelEntries({
+        baseUrl: channel.baseUrl,
+        apiKey: channel.apiKey,
       })
-
-      if (!response.ok) {
-        let detail = ''
-        try {
-          detail = (await response.text()).trim()
-        } catch {
-          detail = ''
-        }
-        throw createProviderError({
-          message: `读取模型列表失败（HTTP ${response.status}${detail ? `: ${detail}` : ''}）`,
-          status: response.status,
-          detail,
-          code: response.status === 401 || response.status === 403 ? 'auth' : 'provider_unavailable',
-          retriable: response.status >= 500 || response.status === 429,
-        })
-      }
-
-      const payload = (await response.json()) as unknown
-      const list = getModelItems(payload)
-      for (const item of list) {
-        const id = toModelId(item)
-        if (id) {
-          ids.add(id)
-        }
-      }
-
-      const nextCursor = getPaginationCursor(payload, list)
-      if (!nextCursor || seenCursor.has(nextCursor)) {
-        break
-      }
-      seenCursor.add(nextCursor)
-      cursor = nextCursor
+      return entries.map((entry) => entry.id)
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : '读取模型列表失败'
+      throw createProviderError({
+        message: reason,
+        code: 'provider_unavailable',
+        retriable: true,
+      })
     }
-
-    return Array.from(ids)
+  },
+  async discoverModelEntries(channel) {
+    try {
+      return await discoverOpenAICompatibleModelEntries({
+        baseUrl: channel.baseUrl,
+        apiKey: channel.apiKey,
+      })
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : '读取模型列表失败'
+      throw createProviderError({
+        message: reason,
+        code: 'provider_unavailable',
+        retriable: true,
+      })
+    }
   },
   async generateImages(input) {
     const { channel, request, onTaskRegistered, onImageCompleted } = input
@@ -1203,140 +1053,16 @@ export const openAICompatibleAdapter: ProviderAdapter = {
     }
   },
   async streamText(input) {
-    const { channel, request, onDelta, onDone, onError } = input
-    const url = buildChatCompletionsUrl(channel.baseUrl)
-    const body: Record<string, unknown> = {
-      model: request.modelId,
-      messages: request.messages.map((item) => ({
-        role: item.role,
-        content: item.content,
-      })),
-      stream: true,
-    }
-    if (typeof request.temperature === 'number' && Number.isFinite(request.temperature)) {
-      body.temperature = request.temperature
-    }
-    if (typeof request.topP === 'number' && Number.isFinite(request.topP)) {
-      body.top_p = request.topP
-    }
-    if (typeof request.maxTokens === 'number' && Number.isFinite(request.maxTokens)) {
-      body.max_tokens = Math.max(1, Math.floor(request.maxTokens))
-    }
-
-    try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${channel.apiKey}`,
-        },
-        body: JSON.stringify(body),
-        signal: request.signal,
-      })
-
-      if (!response.ok) {
-        let detail = ''
-        try {
-          detail = (await response.text()).trim()
-        } catch {
-          detail = ''
-        }
-        throw createProviderError({
-          message: `HTTP ${response.status}${detail ? `: ${detail}` : ''}`,
-          code:
-            response.status === 401 || response.status === 403
-              ? 'auth'
-              : response.status === 429
-                ? 'rate_limit'
-                : response.status >= 500
-                  ? 'provider_unavailable'
-                  : 'unknown',
-          status: response.status,
-          detail,
-          retriable: response.status === 429 || response.status >= 500,
-        })
-      }
-
-      if (!response.body) {
-        throw createProviderError({
-          message: 'stream response body is empty',
-          code: 'unknown',
-        })
-      }
-
-      const reader = response.body.getReader()
-      const decoder = new TextDecoder('utf-8')
-      let buffer = ''
-      let finished = false
-
-      const consumeEventBlock = (block: string) => {
-        const lines = block
-          .split('\n')
-          .map((line) => line.trim())
-          .filter((line) => line.startsWith('data:'))
-          .map((line) => line.slice(5).trim())
-
-        if (lines.length === 0) {
-          return
-        }
-        const payloadText = lines.join('\n')
-        if (!payloadText) {
-          return
-        }
-        if (payloadText === '[DONE]') {
-          finished = true
-          return
-        }
-
-        let parsed: unknown = null
-        try {
-          parsed = JSON.parse(payloadText) as unknown
-        } catch {
-          return
-        }
-        const deltaText = extractStreamDeltaText(parsed)
-        if (deltaText) {
-          onDelta(deltaText)
-        }
-      }
-
-      while (!finished) {
-        const { done, value } = await reader.read()
-        if (done) {
-          buffer += decoder.decode().replace(/\r\n/g, '\n')
-          break
-        }
-        buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n')
-
-        let splitIndex = buffer.indexOf('\n\n')
-        while (splitIndex >= 0) {
-          const eventBlock = buffer.slice(0, splitIndex)
-          buffer = buffer.slice(splitIndex + 2)
-          consumeEventBlock(eventBlock)
-          if (finished) {
-            break
-          }
-          splitIndex = buffer.indexOf('\n\n')
-        }
-      }
-
-      if (!finished && buffer.trim().length > 0) {
-        consumeEventBlock(buffer)
-      }
-      onDone?.()
-    } catch (error) {
-      if (isAbortError(error)) {
-        throw Object.assign(new Error('aborted'), { name: 'AbortError' })
-      }
-      const normalized = error && typeof error === 'object' && 'providerId' in error
-        ? (error as ProviderError)
-        : createProviderError({
-          message: error instanceof Error ? error.message : 'text stream failed',
-          code: 'unknown',
-        })
-      onError?.(normalized)
-      throw normalized
-    }
+    return streamOpenAICompatibleText({
+      url: buildChatCompletionsUrl(input.channel.baseUrl),
+      apiKey: input.channel.apiKey,
+      request: input.request,
+      onDelta: input.onDelta,
+      onDone: input.onDone,
+      onError: input.onError,
+      isAbortError,
+      createProviderError,
+    })
   },
   normalizeError(error) {
     if (error && typeof error === 'object' && 'code' in error && 'providerId' in error) {

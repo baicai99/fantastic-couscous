@@ -74,6 +74,7 @@ function seedChannels(input?: {
     sideCount: 2,
     settingsBySide: {
       single: {
+        generationMode: 'image',
         resolution: '1K',
         aspectRatio: '1:1',
         imageCount: 1,
@@ -90,6 +91,7 @@ function seedChannels(input?: {
     },
     runConcurrency: 1,
     dynamicPromptEnabled: false,
+    autoRenameConversationTitle: true,
     panelValueFormat: 'json',
     panelVariables: [{ id: 'v1', key: '', valuesText: '', selectedValue: '' }],
     favoriteModelIds: [],
@@ -108,6 +110,7 @@ function createSeedConversation(input: { id: string; title: string; prompt?: str
     sideCount: 2,
     settingsBySide: {
       single: {
+        generationMode: 'image',
         resolution: '1K',
         aspectRatio: '1:1',
         imageCount: 1,
@@ -999,6 +1002,48 @@ describe('useConversations', () => {
       expect.objectContaining({ type: 'select-model', label: '选择模型' }),
     ])
     expect(result.current.draft).toBe('')
+  })
+
+  it('keeps new conversation title unchanged when auto-rename is disabled', async () => {
+    await resetStorage()
+    seedChannels({
+      channels: [{
+        id: 'ch',
+        name: 'main',
+        baseUrl: 'https://example.com',
+        apiKey: 'key',
+        models: [],
+      }],
+      settingsOverride: {
+        channelId: 'ch',
+        modelId: '',
+      },
+    })
+
+    const { useConversations } = await import('./useConversations')
+    const first = renderHook(() => useConversations())
+
+    act(() => {
+      first.result.current.setAutoRenameConversationTitle(false)
+      first.result.current.setDraft('this title should not be auto renamed')
+    })
+    await act(async () => {
+      await first.result.current.sendDraft()
+    })
+
+    await waitFor(() => expect(first.result.current.activeConversation?.messages).toHaveLength(2))
+    const createdConversationId = first.result.current.activeConversation?.id
+    expect(createdConversationId).toBeTruthy()
+    expect(first.result.current.autoRenameConversationTitle).toBe(false)
+    expect(first.result.current.activeConversation?.title).toBe('未命名')
+
+    first.unmount()
+    const second = renderHook(() => useConversations())
+    await waitFor(() =>
+      expect(second.result.current.summaries.some((item) => item.id === createdConversationId)).toBe(true),
+    )
+    expect(second.result.current.autoRenameConversationTitle).toBe(false)
+    expect(second.result.current.summaries.find((item) => item.id === createdConversationId)?.title).toBe('未命名')
   })
 
   it('appends assistant guidance when model exists but api is not configured', async () => {

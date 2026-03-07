@@ -26,6 +26,7 @@ import {
   toSettingsSnapshot,
 } from '../../../utils/chat'
 import { parseTemplateKeys, renderTemplate } from '../../../utils/template'
+import { classifyFailure as classifyFailureByMessage } from './failureClassifier'
 import type { PanelValueFormat, PanelVariableRow } from './types'
 
 const ASPECT_RATIO_DEFAULT = '1:1'
@@ -939,20 +940,7 @@ export function collectVariables(panelRows: PanelVariableRow[], format: PanelVal
 }
 
 export function classifyFailure(message: string): FailureCode {
-  const value = message.toLowerCase()
-  if (value.includes('timeout')) return 'timeout'
-  if (value.includes('401') || value.includes('403') || value.includes('auth')) return 'auth'
-  if (value.includes('429') || value.includes('rate')) return 'rate_limit'
-  if (value.includes('unsupported') || value.includes('not support')) return 'unsupported_param'
-  if (
-    value.includes('outputimagesensitivecontentdetected') ||
-    value.includes('sensitive content') ||
-    value.includes('sensitiveinformation')
-  ) {
-    return 'rejected'
-  }
-  if (value.includes('reject') || value.includes('denied')) return 'rejected'
-  return 'unknown'
+  return classifyFailureByMessage(message)
 }
 
 export function getEffectiveSize(settings: SingleSideSettings): string {

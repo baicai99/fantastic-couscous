@@ -1,19 +1,12 @@
-import type { ApiChannel } from '../types/chat'
-import { discoverModelsByProvider } from './providerGateway'
-import { getProviderAdapterForChannel } from './providers/providerRegistry'
+import type { ProviderModelEntry } from '../../../types/provider'
 
-export type ChannelModelEntry = {
-  id: string
-  metadata: Record<string, unknown> | null
-}
-
-type RawModelItem = {
+interface RawModelItem {
   id?: unknown
   model?: unknown
   name?: unknown
 }
 
-type RawModelListPayload = {
+interface RawModelListPayload {
   data?: unknown
   models?: unknown
   has_more?: unknown
@@ -31,12 +24,15 @@ function buildModelsUrl(baseUrl: string, after?: string): string {
     if (lower.endsWith('/v1/models')) {
       return normalized
     }
+
     if (lower.endsWith('/models')) {
       return normalized
     }
+
     if (lower.endsWith('/v1')) {
       return `${normalized}/models`
     }
+
     return `${normalized}/v1/models`
   })()
 
@@ -56,7 +52,8 @@ function buildModelsUrl(baseUrl: string, after?: string): string {
 
 function toModelId(item: unknown): string | null {
   if (typeof item === 'string') {
-    return item.trim() || null
+    const trimmed = item.trim()
+    return trimmed.length > 0 ? trimmed : null
   }
   if (!item || typeof item !== 'object') {
     return null
@@ -113,31 +110,24 @@ function getPaginationCursor(payload: unknown, list: unknown[]): string | null {
   return toModelId(list[list.length - 1]) ?? null
 }
 
-export async function fetchChannelModelEntries(
-  channel: Pick<ApiChannel, 'baseUrl' | 'apiKey' | 'providerId'>,
-): Promise<ChannelModelEntry[]> {
-  const adapter = getProviderAdapterForChannel(channel)
-  if (adapter.discoverModelEntries) {
-    const entries = await adapter.discoverModelEntries({
-      baseUrl: channel.baseUrl,
-      apiKey: channel.apiKey,
-    })
-    return entries.map((item) => ({
-      id: item.id,
-      metadata: item.metadata ?? { id: item.id },
-    }))
-  }
-
-  const items: ChannelModelEntry[] = []
-  const seen = new Set<string>()
+export async function discoverOpenAICompatibleModelEntries(input: {
+  baseUrl: string
+  apiKey: string
+  fetchFn?: typeof fetch
+  maxPages?: number
+}): Promise<ProviderModelEntry[]> {
+  const fetchFn = input.fetchFn ?? fetch
+  const maxPages = input.maxPages ?? 30
+  const entries: ProviderModelEntry[] = []
+  const seenIds = new Set<string>()
   const seenCursor = new Set<string>()
   let cursor: string | null = null
 
-  for (let page = 0; page < 30; page += 1) {
-    const response = await fetch(buildModelsUrl(channel.baseUrl, cursor ?? undefined), {
+  for (let page = 0; page < maxPages; page += 1) {
+    const response = await fetchFn(buildModelsUrl(input.baseUrl, cursor ?? undefined), {
       method: 'GET',
       headers: {
-        Authorization: `Bearer ${channel.apiKey}`,
+        Authorization: `Bearer ${input.apiKey}`,
       },
     })
 
@@ -155,11 +145,11 @@ export async function fetchChannelModelEntries(
     const list = getModelItems(payload)
     for (const item of list) {
       const id = toModelId(item)
-      if (!id || seen.has(id)) {
+      if (!id || seenIds.has(id)) {
         continue
       }
-      seen.add(id)
-      items.push({
+      seenIds.add(id)
+      entries.push({
         id,
         metadata: item && typeof item === 'object' ? (item as Record<string, unknown>) : { value: item },
       })
@@ -173,9 +163,6 @@ export async function fetchChannelModelEntries(
     cursor = nextCursor
   }
 
-  return items
+  return entries
 }
 
-export async function fetchChannelModels(channel: Pick<ApiChannel, 'baseUrl' | 'apiKey' | 'providerId'>): Promise<string[]> {
-  return discoverModelsByProvider(channel)
-}

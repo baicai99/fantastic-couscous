@@ -21,6 +21,7 @@ export interface StagedSettingsState {
   settingsBySide?: Partial<Record<Side, SingleSideSettings>>
   runConcurrency?: number
   dynamicPromptEnabled?: boolean
+  autoRenameConversationTitle?: boolean
   panelValueFormat?: PanelValueFormat
   panelVariables?: PanelVariableRow[]
   favoriteModelIds?: string[]
@@ -37,14 +38,14 @@ let indexedDbPromise: Promise<IDBDatabase | null> | null = null
 
 function resolveConversationTitle(content: Conversation, fallbackTitle: string): string {
   const existingTitle = content.title?.trim()
-  if (existingTitle && existingTitle !== '未命名') {
+  if (existingTitle) {
     return existingTitle
   }
   const firstPrompt = getFirstUserPrompt(content.messages)
   if (firstPrompt) {
     return summarizePromptAsTitle(firstPrompt)
   }
-  return existingTitle || fallbackTitle
+  return fallbackTitle
 }
 
 function contentStorageKey(conversationId: string): string {
@@ -395,6 +396,7 @@ export function loadStagedSettingsFromStorage(): StagedSettingsState | null {
       settingsBySide?: unknown
       runConcurrency?: unknown
       dynamicPromptEnabled?: unknown
+      autoRenameConversationTitle?: unknown
       panelValueFormat?: unknown
       panelVariables?: unknown
       favoriteModelIds?: unknown
@@ -407,6 +409,8 @@ export function loadStagedSettingsFromStorage(): StagedSettingsState | null {
       typeof parsed?.runConcurrency === 'number' ? Math.max(1, Math.floor(parsed.runConcurrency)) : undefined
     const dynamicPromptEnabled =
       typeof parsed?.dynamicPromptEnabled === 'boolean' ? parsed.dynamicPromptEnabled : undefined
+    const autoRenameConversationTitle =
+      typeof parsed?.autoRenameConversationTitle === 'boolean' ? parsed.autoRenameConversationTitle : undefined
     const panelValueFormatCandidates: PanelValueFormat[] = ['json', 'yaml', 'line', 'csv', 'auto']
     const panelValueFormat =
       typeof parsed?.panelValueFormat === 'string' &&
@@ -441,6 +445,7 @@ export function loadStagedSettingsFromStorage(): StagedSettingsState | null {
       settingsBySide,
       runConcurrency,
       dynamicPromptEnabled,
+      autoRenameConversationTitle,
       panelValueFormat,
       panelVariables,
       favoriteModelIds,

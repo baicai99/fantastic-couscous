@@ -269,6 +269,21 @@ export const midjourneyAdapter: ProviderAdapter = {
     }
     return ['midjourney', 'midjourney-v6']
   },
+  async discoverModelEntries(channel) {
+    let ids: string[] = []
+    try {
+      ids = await openAICompatibleAdapter.discoverModels(channel)
+    } catch {
+      ids = []
+    }
+    if (ids.length === 0) {
+      ids = ['midjourney', 'midjourney-v6']
+    }
+    return ids.map((id) => ({
+      id,
+      metadata: { id },
+    }))
+  },
   async generateImages(input) {
     const { channel, request, onTaskRegistered, onImageCompleted } = input
     const submitUrl = buildSubmitUrl(channel.baseUrl)

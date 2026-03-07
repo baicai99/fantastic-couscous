@@ -8,10 +8,12 @@ import {
   parseBulkVariables,
   reformatRowsForPanelFormat,
   serializeBulkVariables,
-} from '../../features/conversation/domain/conversationDomain'
-import type { BulkDetectedFormat } from '../../features/conversation/domain/conversationDomain'
+} from '../../features/conversation/domain/panelVariableParsing'
+import type { BulkDetectedFormat } from '../../features/conversation/domain/panelVariableParsing'
 import type { PanelValueFormat, PanelVariableRow } from '../../features/conversation/domain/types'
+import { inferModelShortcutTokens } from '../../features/conversation/domain/modelShortcuts'
 import { makeId } from '../../utils/chat'
+import { extractImageFilesFromTransfer } from '../../utils/imageTransfer'
 import { parseTemplateKeys } from '../../utils/template'
 
 const { Text } = Typography
@@ -126,27 +128,6 @@ function buildRowsFromTemplateKeys(keys: string[]): PanelVariableRow[] {
   }))
 }
 
-function inferModelShortcutTokens(model: ModelSpec): string[] {
-  const value = `${model.id} ${model.name}`.toLowerCase()
-  const tokens = new Set<string>([model.id.toLowerCase(), model.name.toLowerCase()])
-
-  if (Array.isArray(model.tags)) {
-    for (const tag of model.tags) {
-      if (typeof tag === 'string' && tag.trim()) {
-        tokens.add(tag.trim().toLowerCase())
-      }
-    }
-  }
-
-  if (value.includes('gemini')) tokens.add('google')
-  if (value.includes('google')) tokens.add('gemini')
-  if (value.includes('doubao')) tokens.add('豆包')
-  if (value.includes('midjourney')) tokens.add('mj')
-  if (value.includes('mj')) tokens.add('midjourney')
-
-  return Array.from(tokens)
-}
-
 function normalizeModelShortcutQuery(value: string): string {
   return value.trim().toLowerCase()
 }
@@ -206,15 +187,6 @@ function findDashCommandNearCursor(value: string, cursor: number): (QuickPickerR
 function getLongestDraftLine(draft: string): string {
   const lines = draft.split('\n')
   return lines.reduce((longest, line) => (line.length > longest.length ? line : longest), '')
-}
-
-function extractImageFilesFromTransfer(dataTransfer: DataTransfer | null): File[] {
-  if (!dataTransfer) {
-    return []
-  }
-
-  const files = Array.from(dataTransfer.files ?? [])
-  return files.filter((file) => file.type.toLowerCase().startsWith('image/'))
 }
 
 export function Composer(props: ComposerProps) {

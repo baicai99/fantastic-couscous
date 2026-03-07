@@ -1,9 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { message, notification } from 'antd'
-import { resumeImageTaskByProvider, streamTextByProvider } from '../services/providerGateway'
+import { streamTextByProvider } from '../services/providerGateway'
 import { getModelCatalogFromChannels } from '../services/modelCatalog'
 import { getAspectRatioOptions } from '../services/imageSizing'
-import { putImageBlob } from '../services/imageAssetStore'
 import type {
   ApiChannel,
   Conversation,
@@ -29,15 +27,14 @@ import {
 } from '../services/imageTaskStore'
 import { createConversationOrchestrator } from '../features/conversation/application/conversationOrchestrator'
 import { createRunExecutor } from '../features/conversation/application/runExecutor'
+import { buildPanelVariableBatches } from '../features/conversation/domain/panelVariableParsing'
 import {
-  buildPanelVariableBatches,
-  classifyFailure,
   getMultiSideIds,
   normalizeConversation,
   normalizeSettingsBySide,
-} from '../features/conversation/domain/conversationDomain'
+} from '../features/conversation/domain/settingsNormalization'
+import { inferModelShortcutTokens } from '../features/conversation/domain/modelShortcuts'
 import type { PanelValueFormat, PanelVariableRow } from '../features/conversation/domain/types'
-import type { NormalizedTextMessage } from '../types/provider'
 import { createConversationRepository } from '../features/conversation/infra/conversationRepository'
 import {
   conversationSelectors,
@@ -45,6 +42,15 @@ import {
   useConversationState,
 } from '../features/conversation/state/conversationState'
 import { trackDuration, startMetric } from '../features/performance/runtimeMetrics'
+import { useDraftSourceImages } from './conversations/useDraftSourceImages'
+import { createAntdConversationNotifier } from '../features/conversation/application/conversationNotifier'
+import {
+  createConversationDownloadService,
+  type BulkDownloadItem,
+} from '../features/conversation/application/conversationDownloadService'
+import { createConversationTaskResumeService } from '../features/conversation/application/conversationTaskResumeService'
+import { classifyFailure } from '../features/conversation/domain/failureClassifier'
+import { buildTextRequestMessages, resolveSendGenerationMode } from './conversations/sendFlowUtils'
 
 const PROGRESS_PERSIST_DEBOUNCE_MS = 250
 const GLOBAL_RESUME_POLL_VISIBLE_MS = 5_000
@@ -62,14 +68,6 @@ const ONE_SHOT_CUSTOM_SIZE_MAX = 8192
 const ONE_SHOT_SIZE_TIER_SET = new Set(['0.5K', '1K', '2K', '4K'])
 const ONE_SHOT_ASPECT_RATIO_SET = new Set(getAspectRatioOptions())
 const ONE_SHOT_COMMAND_PATTERN = /(^|[\t \n])(--ar|--size|--wh)\s+([^\t \n]+)/gi
-const MAX_SOURCE_IMAGES = 6
-const ALLOWED_SOURCE_IMAGE_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/jpg', 'image/webp'])
-
-export interface DraftSourceImageItem {
-  id: string
-  file: File
-  previewUrl: string
-}
 
 interface OneShotSizeOverrides {
   mode: 'preset' | 'custom'
@@ -118,53 +116,6 @@ function buildSendBlockedAssistantActions(kind: 'missing-model' | 'missing-api')
   }
 
   return [{ id: makeId(), type: 'add-api', label: '添加 API' }]
-}
-
-function isAllowedSourceImageFile(file: File): boolean {
-  const mimeType = file.type.trim().toLowerCase()
-  if (ALLOWED_SOURCE_IMAGE_MIME_TYPES.has(mimeType)) {
-    return true
-  }
-  const name = file.name.trim().toLowerCase()
-  return name.endsWith('.png') || name.endsWith('.jpg') || name.endsWith('.jpeg') || name.endsWith('.webp')
-}
-
-function resolveSendGenerationMode(input: {
-  sideMode: SideMode
-  sideCount: number
-  settingsBySide: Record<Side, SingleSideSettings>
-}): { mode: 'image' | 'text' } | { error: string } {
-  const targetSides = input.sideMode === 'single' ? (['single'] as Side[]) : getMultiSideIds(input.sideCount)
-  const settings = targetSides
-    .map((side) => input.settingsBySide[side])
-    .filter((item): item is SingleSideSettings => Boolean(item))
-  const modeSet = new Set(settings.map((item) => item.generationMode ?? 'image'))
-  if (modeSet.size > 1) {
-    return { error: '当前窗口生成模式不一致，请先统一为“文本生成”或“图片生成”。' }
-  }
-  if (modeSet.has('text')) {
-    return { mode: 'text' }
-  }
-  return { mode: 'image' }
-}
-
-function buildTextRequestMessages(conversation: Conversation | null | undefined, currentDraft: string): NormalizedTextMessage[] {
-  const history = (conversation?.messages ?? [])
-    .filter((item) => item.role === 'user' || item.role === 'assistant')
-    .map((item) => ({
-      role: item.role,
-      content: item.content.trim(),
-    }))
-    .filter((item) => item.content.length > 0)
-
-  const current = currentDraft.trim()
-  if (current) {
-    history.push({
-      role: 'user',
-      content: current,
-    })
-  }
-  return history
 }
 
 export function sortConversationSummariesByLastMessageTime(
@@ -276,27 +227,6 @@ function isPendingImageTimedOut(run: Run): boolean {
     return false
   }
   return Date.now() - createdAtEpoch >= IMAGE_PENDING_TIMEOUT_MS
-}
-
-function inferModelShortcutTokens(model: ModelSpec): string[] {
-  const value = `${model.id} ${model.name}`.toLowerCase()
-  const tokens = new Set<string>([model.id.toLowerCase(), model.name.toLowerCase()])
-
-  if (Array.isArray(model.tags)) {
-    for (const tag of model.tags) {
-      if (typeof tag === 'string' && tag.trim()) {
-        tokens.add(tag.trim().toLowerCase())
-      }
-    }
-  }
-
-  if (value.includes('gemini')) tokens.add('google')
-  if (value.includes('google')) tokens.add('gemini')
-  if (value.includes('doubao')) tokens.add('豆包')
-  if (value.includes('midjourney')) tokens.add('mj')
-  if (value.includes('mj')) tokens.add('midjourney')
-
-  return Array.from(tokens)
 }
 
 function parseModelCommandDraft(
@@ -591,20 +521,17 @@ export function useConversations() {
   const activeRunControllersRef = useRef<Record<string, Map<string, AbortController>>>({})
   const resumingImageIdsRef = useRef<Set<string>>(new Set())
   const runCompletionSignatureRef = useRef<Map<string, string>>(new Map())
-  const [draftSourceImages, setDraftSourceImages] = useState<DraftSourceImageItem[]>([])
-  const draftSourceImagesRef = useRef<DraftSourceImageItem[]>([])
-
-  useEffect(() => {
-    draftSourceImagesRef.current = draftSourceImages
-  }, [draftSourceImages])
-
-  useEffect(() => {
-    return () => {
-      for (const item of draftSourceImagesRef.current) {
-        URL.revokeObjectURL(item.previewUrl)
-      }
-    }
-  }, [])
+  const {
+    draftSourceImages,
+    draftSourceImagesRef,
+    appendSourceImageFiles,
+    removeDraftSourceImage,
+    clearDraftSourceImages,
+    persistDraftSourceImages,
+    maxSourceImages,
+  } = useDraftSourceImages({
+    makeId,
+  })
 
   const activeConversation = conversationSelectors.selectActiveConversation(state)
   const { activeSideMode, activeSideCount, activeSettingsBySide } = conversationSelectors.selectActiveSettings(state)
@@ -619,6 +546,9 @@ export function useConversations() {
     () => (activeSideMode === 'single' ? (['single'] as Side[]) : getMultiSideIds(activeSideCount)),
     [activeSideCount, activeSideMode],
   )
+  const notifier = useMemo(() => createAntdConversationNotifier(), [])
+  const downloadService = useMemo(() => createConversationDownloadService(notifier), [notifier])
+  const taskResumeService = useMemo(() => createConversationTaskResumeService(), [])
 
   const isSideConfigLocked = Boolean(activeConversation && activeConversation.messages.length > 0)
 
@@ -659,7 +589,6 @@ export function useConversations() {
       : `${conversationTitle}：${summaryParts.join('，') || '结果已更新'}。点击跳转查看。`
 
     const notificationConfig = {
-      placement: 'topRight' as const,
       title: resultLabel,
       description,
       duration: isCurrentConversation ? 3 : 5,
@@ -670,11 +599,11 @@ export function useConversations() {
           },
     }
     if (stats.failedCount === 0) {
-      notification.success(notificationConfig)
+      notifier.notify({ ...notificationConfig, level: 'success' })
     } else if (stats.successCount === 0) {
-      notification.error(notificationConfig)
+      notifier.notify({ ...notificationConfig, level: 'error' })
     } else {
-      notification.warning(notificationConfig)
+      notifier.notify({ ...notificationConfig, level: 'warning' })
     }
   }
 
@@ -960,6 +889,7 @@ export function useConversations() {
     settingsBySide: Record<Side, SingleSideSettings>,
     runConcurrency: number,
     dynamicPromptEnabled: boolean,
+    autoRenameConversationTitle: boolean,
     panelValueFormat: PanelValueFormat,
     panelVariables: PanelVariableRow[],
     favoriteModelIds: string[],
@@ -970,6 +900,7 @@ export function useConversations() {
       settingsBySide,
       runConcurrency,
       dynamicPromptEnabled,
+      autoRenameConversationTitle,
       panelValueFormat,
       panelVariables,
       favoriteModelIds,
@@ -1006,6 +937,7 @@ export function useConversations() {
       normalizedSettings,
       stateRef.current.runConcurrency,
       stateRef.current.dynamicPromptEnabled,
+      stateRef.current.autoRenameConversationTitle,
       stateRef.current.panelValueFormat,
       stateRef.current.panelVariables,
       stateRef.current.favoriteModelIds,
@@ -1037,6 +969,7 @@ export function useConversations() {
       seedSettings,
       stateRef.current.runConcurrency,
       stateRef.current.dynamicPromptEnabled,
+      stateRef.current.autoRenameConversationTitle,
       stateRef.current.panelValueFormat,
       stateRef.current.panelVariables,
       stateRef.current.favoriteModelIds,
@@ -1302,6 +1235,7 @@ export function useConversations() {
       settingsBySide: activeSettingsBySide,
       runConcurrency: snapshot.runConcurrency,
       dynamicPromptEnabled: snapshot.dynamicPromptEnabled,
+      autoRenameConversationTitle: snapshot.autoRenameConversationTitle,
       panelValueFormat: snapshot.panelValueFormat,
       panelVariables: snapshot.panelVariables,
       favoriteModelIds: nextFavoriteModelIds,
@@ -1329,6 +1263,7 @@ export function useConversations() {
       settingsBySide: normalized,
       runConcurrency: stateRef.current.runConcurrency,
       dynamicPromptEnabled: stateRef.current.dynamicPromptEnabled,
+      autoRenameConversationTitle: stateRef.current.autoRenameConversationTitle,
       panelValueFormat: stateRef.current.panelValueFormat,
       panelVariables: stateRef.current.panelVariables,
       favoriteModelIds: filteredFavoriteModelIds,
@@ -1378,6 +1313,7 @@ export function useConversations() {
       settingsBySide: activeSettingsBySide,
       runConcurrency: next,
       dynamicPromptEnabled: snapshot.dynamicPromptEnabled,
+      autoRenameConversationTitle: snapshot.autoRenameConversationTitle,
       panelValueFormat: snapshot.panelValueFormat,
       panelVariables: snapshot.panelVariables,
       favoriteModelIds: snapshot.favoriteModelIds,
@@ -1399,6 +1335,7 @@ export function useConversations() {
       settingsBySide: activeSettingsBySide,
       runConcurrency: snapshot.runConcurrency,
       dynamicPromptEnabled: value,
+      autoRenameConversationTitle: snapshot.autoRenameConversationTitle,
       panelValueFormat: snapshot.panelValueFormat,
       panelVariables: snapshot.panelVariables,
       favoriteModelIds: snapshot.favoriteModelIds,
@@ -1407,6 +1344,28 @@ export function useConversations() {
     stateRef.current = {
       ...snapshot,
       dynamicPromptEnabled: value,
+    }
+  }
+
+  const setAutoRenameConversationTitle = (value: boolean) => {
+    actions.setAutoRenameConversationTitle(value)
+
+    const snapshot = stateRef.current
+    repository.saveStagedSettings({
+      sideMode: activeSideMode,
+      sideCount: activeSideCount,
+      settingsBySide: activeSettingsBySide,
+      runConcurrency: snapshot.runConcurrency,
+      dynamicPromptEnabled: snapshot.dynamicPromptEnabled,
+      autoRenameConversationTitle: value,
+      panelValueFormat: snapshot.panelValueFormat,
+      panelVariables: snapshot.panelVariables,
+      favoriteModelIds: snapshot.favoriteModelIds,
+    })
+
+    stateRef.current = {
+      ...snapshot,
+      autoRenameConversationTitle: value,
     }
   }
 
@@ -1420,6 +1379,7 @@ export function useConversations() {
       settingsBySide: activeSettingsBySide,
       runConcurrency: snapshot.runConcurrency,
       dynamicPromptEnabled: snapshot.dynamicPromptEnabled,
+      autoRenameConversationTitle: snapshot.autoRenameConversationTitle,
       panelValueFormat: value,
       panelVariables: snapshot.panelVariables,
       favoriteModelIds: snapshot.favoriteModelIds,
@@ -1441,6 +1401,7 @@ export function useConversations() {
       settingsBySide: activeSettingsBySide,
       runConcurrency: snapshot.runConcurrency,
       dynamicPromptEnabled: snapshot.dynamicPromptEnabled,
+      autoRenameConversationTitle: snapshot.autoRenameConversationTitle,
       panelValueFormat: snapshot.panelValueFormat,
       panelVariables: value,
       favoriteModelIds: snapshot.favoriteModelIds,
@@ -1478,7 +1439,9 @@ export function useConversations() {
       actions: assistantActions,
     }
     const hadUserMessage = conversation.messages.some((message) => message.role === 'user')
-    const nextTitle = !hadUserMessage ? summarizePromptAsTitle(titleSource ?? userContent) : conversation.title
+    const shouldAutoRenameTitle = stateRef.current.autoRenameConversationTitle
+    const nextTitle =
+      !hadUserMessage && shouldAutoRenameTitle ? summarizePromptAsTitle(titleSource ?? userContent) : conversation.title
 
     return {
       ...conversation,
@@ -1836,7 +1799,7 @@ export function useConversations() {
       })
 
       try {
-        const resumed = await resumeImageTaskByProvider({
+        const resumed = await taskResumeService.resumeTask({
           channel,
           taskId: entry.image.serverTaskId,
           taskMeta: entry.image.serverTaskMeta,
@@ -2178,77 +2141,25 @@ export function useConversations() {
       settingsBySide: activeState.activeSettingsBySide,
     })
     if (!('error' in modeResolution) && modeResolution.mode === 'text') {
-      void message.info('当前为文本模式，不支持上传参考图。')
+      notifier.info('当前为文本模式，不支持上传参考图。')
       return
     }
     const current = draftSourceImagesRef.current
-    const remaining = Math.max(0, MAX_SOURCE_IMAGES - current.length)
+    const remaining = Math.max(0, maxSourceImages - current.length)
     if (remaining <= 0) {
-      void message.warning(`最多只能上传 ${MAX_SOURCE_IMAGES} 张参考图`)
+      notifier.warning(`最多只能上传 ${maxSourceImages} 张参考图`)
       return
     }
 
-    const accepted: DraftSourceImageItem[] = []
-    const invalidNames: string[] = []
-    for (const file of files) {
-      if (!isAllowedSourceImageFile(file)) {
-        invalidNames.push(file.name || '未命名文件')
-        continue
-      }
-      if (accepted.length >= remaining) {
-        break
-      }
-      accepted.push({
-        id: makeId(),
-        file,
-        previewUrl: URL.createObjectURL(file),
-      })
+    const appendResult = appendSourceImageFiles(files)
+
+    if (appendResult.invalidNames.length > 0) {
+      notifier.warning(`以下文件格式不支持：${appendResult.invalidNames.join('、')}`)
     }
 
-    if (invalidNames.length > 0) {
-      void message.warning(`以下文件格式不支持：${invalidNames.join('、')}`)
+    if (appendResult.droppedValidCount > 0) {
+      notifier.info(`超出上限，已仅保留前 ${remaining} 张可用参考图`)
     }
-
-    if (accepted.length < files.filter((file) => isAllowedSourceImageFile(file)).length) {
-      void message.info(`超出上限，已仅保留前 ${remaining} 张可用参考图`)
-    }
-
-    if (accepted.length > 0) {
-      setDraftSourceImages((prev) => [...prev, ...accepted])
-    }
-  }
-
-  const removeDraftSourceImage = (id: string) => {
-    setDraftSourceImages((prev) => {
-      const target = prev.find((item) => item.id === id)
-      if (target) {
-        URL.revokeObjectURL(target.previewUrl)
-      }
-      return prev.filter((item) => item.id !== id)
-    })
-  }
-
-  const clearDraftSourceImages = () => {
-    setDraftSourceImages((prev) => {
-      prev.forEach((item) => URL.revokeObjectURL(item.previewUrl))
-      return []
-    })
-  }
-
-  const persistDraftSourceImages = async (items: DraftSourceImageItem[]): Promise<RunSourceImageRef[]> => {
-    const refs: RunSourceImageRef[] = []
-    for (const item of items.slice(0, MAX_SOURCE_IMAGES)) {
-      const assetKey = `source:${Date.now()}:${makeId()}`
-      await putImageBlob(assetKey, item.file)
-      refs.push({
-        id: item.id,
-        assetKey,
-        fileName: item.file.name || 'image.png',
-        mimeType: item.file.type || 'image/png',
-        size: item.file.size,
-      })
-    }
-    return refs
   }
 
   const sendDraft = async () => {
@@ -2283,7 +2194,7 @@ export function useConversations() {
       setSendScrollTrigger((prev) => prev + 1)
       actions.setDraft('')
       clearDraftSourceImages()
-      void message.success(`已切换到 ${modelCommand.model.name}`)
+      notifier.success(`已切换到 ${modelCommand.model.name}`)
       return
     }
 
@@ -2368,7 +2279,7 @@ export function useConversations() {
       }
 
       if (draftSourceImageSnapshot.length > 0) {
-        void message.info('文本模式下不会携带参考图，已自动忽略。')
+        notifier.info('文本模式下不会携带参考图，已自动忽略。')
       }
 
       const textMessages = buildTextRequestMessages(currentActive, effectiveDraft)
@@ -2403,7 +2314,7 @@ export function useConversations() {
       actions.setDraft('')
       clearDraftSourceImages()
       if (modelCommand?.scope === 'temporary') {
-        void message.success(`本次已临时切换到 ${modelCommand.model.name}`)
+        notifier.success(`本次已临时切换到 ${modelCommand.model.name}`)
       }
 
       if (!assistantMessageId) {
@@ -2514,7 +2425,7 @@ export function useConversations() {
     actions.setDraft('')
     clearDraftSourceImages()
     if (modelCommand?.scope === 'temporary') {
-      void message.success(`本次已临时切换到 ${modelCommand.model.name}`)
+      notifier.success(`本次已临时切换到 ${modelCommand.model.name}`)
     }
 
     try {
@@ -2763,155 +2674,6 @@ export function useConversations() {
     }
   }
 
-  const inferImageExtension = (src: string): string => {
-    if (src.startsWith('data:image/')) {
-      const match = src.match(/^data:image\/([a-zA-Z0-9+.-]+);/i)
-      const ext = match?.[1]?.toLowerCase() ?? 'png'
-      return ext === 'jpeg' ? 'jpg' : ext
-    }
-
-    try {
-      const parsed = new URL(src)
-      const value = parsed.pathname.toLowerCase()
-      if (value.endsWith('.png')) return 'png'
-      if (value.endsWith('.jpg') || value.endsWith('.jpeg')) return 'jpg'
-      if (value.endsWith('.webp')) return 'webp'
-    } catch {
-      // Ignore URL parsing errors and fallback to png.
-    }
-
-    return 'png'
-  }
-
-  const toDownloadHref = async (src: string): Promise<{ href: string; revoke?: () => void }> => {
-    if (typeof window === 'undefined') {
-      return { href: src }
-    }
-
-    // Prefer blob URLs for remote images so repeated downloads do not trigger page navigation.
-    if (/^https?:\/\//i.test(src)) {
-      try {
-        const response = await fetch(src)
-        if (response.ok) {
-          const blob = await response.blob()
-          const href = URL.createObjectURL(blob)
-          return {
-            href,
-            revoke: () => URL.revokeObjectURL(href),
-          }
-        }
-      } catch {
-        // Fall back to original source if fetch is blocked by CORS or network errors.
-      }
-    }
-
-    return { href: src }
-  }
-
-  const triggerDownload = async (src: string, filename: string, cleanup?: () => void) => {
-    if (typeof document === 'undefined') {
-      return
-    }
-
-    const target = await toDownloadHref(src)
-    const link = document.createElement('a')
-    link.href = target.href
-    link.download = filename
-    link.rel = 'noopener'
-    link.style.display = 'none'
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
-
-    if (target.revoke) {
-      window.setTimeout(() => target.revoke?.(), 60_000)
-    }
-    if (cleanup) {
-      window.setTimeout(() => cleanup(), 60_000)
-    }
-  }
-
-  type BulkDownloadItem = { src: string; filename: string; sourceKind: 'idb' | 'direct'; cleanup?: () => void }
-
-  const triggerZipDownload = async (items: BulkDownloadItem[], archivePrefix: string) => {
-    if (typeof document === 'undefined' || items.length === 0) {
-      return
-    }
-
-    let JSZipCtor: new () => { file: (name: string, data: Blob) => void; generateAsync: (options: { type: 'blob'; compression: 'DEFLATE'; compressionOptions: { level: number } }) => Promise<Blob> }
-    try {
-      const imported = await import('jszip')
-      JSZipCtor = imported.default as unknown as new () => {
-        file: (name: string, data: Blob) => void
-        generateAsync: (options: { type: 'blob'; compression: 'DEFLATE'; compressionOptions: { level: number } }) => Promise<Blob>
-      }
-    } catch {
-      message.error('压缩包模块加载失败，请重试。')
-      return
-    }
-
-    const zip = new JSZipCtor()
-    let addedCount = 0
-    let failedCount = 0
-    let blockedByCorsCount = 0
-
-    for (const item of items) {
-      try {
-        if (item.sourceKind === 'direct' && /^https?:\/\//i.test(item.src)) {
-          const parsed = new URL(item.src)
-          if (typeof window !== 'undefined' && parsed.origin !== window.location.origin) {
-            blockedByCorsCount += 1
-            failedCount += 1
-            continue
-          }
-        }
-        const response = await fetch(item.src)
-        if (!response.ok) {
-          failedCount += 1
-          continue
-        }
-        const blob = await response.blob()
-        zip.file(item.filename, blob)
-        addedCount += 1
-      } catch {
-        failedCount += 1
-      } finally {
-        item.cleanup?.()
-      }
-    }
-
-    if (addedCount === 0) {
-      message.error('下载失败：当前图片源不允许打包读取（跨域限制）。请重新生成后再试。')
-      return
-    }
-
-    const archiveBlob = await zip.generateAsync({
-      type: 'blob',
-      compression: 'DEFLATE',
-      compressionOptions: { level: 6 },
-    })
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
-    const downloadName = `${archivePrefix}-${timestamp}.zip`
-    const href = URL.createObjectURL(archiveBlob)
-    const link = document.createElement('a')
-    link.href = href
-    link.download = downloadName
-    link.rel = 'noopener'
-    link.style.display = 'none'
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
-    window.setTimeout(() => URL.revokeObjectURL(href), 60_000)
-
-    if (blockedByCorsCount > 0) {
-      message.warning(`压缩包已下载，但有 ${blockedByCorsCount} 张为跨域远程图片，浏览器不允许打包。建议重新生成后再下载。`)
-      return
-    }
-    if (failedCount > 0) {
-      message.warning(`压缩包已下载，但有 ${failedCount} 张图片因跨域限制未能打包。`)
-    }
-  }
-
   const downloadAllRunImages = (runId: string) => {
     const snapshot = stateRef.current
     const currentActive = snapshot.activeId ? snapshot.contents[snapshot.activeId] ?? null : null
@@ -2937,7 +2699,7 @@ export function useConversations() {
         if (!resolved) {
           continue
         }
-        const ext = inferImageExtension(resolved.src)
+        const ext = downloadService.inferImageExtension(resolved.src)
         const filename = buildImageFileName({
           modelName: sourceRun.modelName,
           prompt: sourceRun.finalPrompt,
@@ -2947,7 +2709,10 @@ export function useConversations() {
         })
         downloadItems.push({ src: resolved.src, filename, sourceKind: resolved.sourceKind, cleanup: resolved.revoke })
       }
-      await triggerZipDownload(downloadItems, 'run-images')
+      await downloadService.downloadZipArchive({
+        items: downloadItems,
+        archivePrefix: 'run-images',
+      })
     })()
   }
 
@@ -2973,7 +2738,7 @@ export function useConversations() {
         return
       }
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
-      const ext = inferImageExtension(resolved.src)
+      const ext = downloadService.inferImageExtension(resolved.src)
       const filename = buildImageFileName({
         modelName: sourceRun.modelName,
         prompt: sourceRun.finalPrompt,
@@ -2981,7 +2746,11 @@ export function useConversations() {
         ext,
         timestamp,
       })
-      await triggerDownload(resolved.src, filename, resolved.revoke)
+      await downloadService.downloadSingleImage({
+        src: resolved.src,
+        filename,
+        cleanup: resolved.revoke,
+      })
     })()
   }
 
@@ -3009,7 +2778,7 @@ export function useConversations() {
           continue
         }
         seqCounter += 1
-        const ext = inferImageExtension(resolved.src)
+        const ext = downloadService.inferImageExtension(resolved.src)
         const filename = buildImageFileName({
           modelName: run.modelName,
           prompt: run.finalPrompt,
@@ -3019,7 +2788,10 @@ export function useConversations() {
         })
         downloadItems.push({ src: resolved.src, filename, sourceKind: resolved.sourceKind, cleanup: resolved.revoke })
       }
-      await triggerZipDownload(downloadItems, 'batch-images')
+      await downloadService.downloadZipArchive({
+        items: downloadItems,
+        archivePrefix: 'batch-images',
+      })
     })()
   }
 
@@ -3050,7 +2822,7 @@ export function useConversations() {
           continue
         }
         seqCounter += 1
-        const ext = inferImageExtension(resolved.src)
+        const ext = downloadService.inferImageExtension(resolved.src)
         const filename = buildImageFileName({
           modelName: run.modelName,
           prompt: run.finalPrompt,
@@ -3066,7 +2838,10 @@ export function useConversations() {
       return
     }
     const archivePrefix = buildMessageArchivePrefix(targetRuns)
-    await triggerZipDownload(downloadItems, archivePrefix)
+    await downloadService.downloadZipArchive({
+      items: downloadItems,
+      archivePrefix,
+    })
   }
 
   const loadOlderMessages = () => {
@@ -3084,6 +2859,7 @@ export function useConversations() {
     isSending: state.isSending,
     showAdvancedVariables: state.showAdvancedVariables,
     dynamicPromptEnabled: state.dynamicPromptEnabled,
+    autoRenameConversationTitle: state.autoRenameConversationTitle,
     panelValueFormat: state.panelValueFormat,
     panelVariables: state.panelVariables,
     favoriteModelIds: state.favoriteModelIds,
@@ -3107,6 +2883,7 @@ export function useConversations() {
     clearDraftSourceImages,
     setShowAdvancedVariables: actions.setAdvancedVariables,
     setDynamicPromptEnabled,
+    setAutoRenameConversationTitle,
     setPanelValueFormat,
     setPanelVariables,
     setFavoriteModelIds,

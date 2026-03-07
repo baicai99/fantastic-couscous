@@ -2,13 +2,11 @@ import { useMemo, useReducer } from 'react'
 import type { ApiChannel, Conversation, ConversationSummary, ModelCatalog, Side, SideMode, SingleSideSettings } from '../../../types/chat'
 import { makeId } from '../../../utils/chat'
 import {
-  clampSideCount,
-  collectVariables,
   getUnusedVariableKeys,
-  normalizeConversation,
-  normalizeSettingsBySide,
   previewTemplate,
 } from '../domain/conversationDomain'
+import { clampSideCount, normalizeConversation, normalizeSettingsBySide } from '../domain/settingsNormalization'
+import { collectVariables } from '../domain/panelVariableParsing'
 import type { PanelValueFormat, PanelVariableRow } from '../domain/types'
 
 export interface ConversationState {
@@ -20,6 +18,7 @@ export interface ConversationState {
   isSending: boolean
   showAdvancedVariables: boolean
   dynamicPromptEnabled: boolean
+  autoRenameConversationTitle: boolean
   panelValueFormat: PanelValueFormat
   panelVariables: PanelVariableRow[]
   favoriteModelIds: string[]
@@ -54,6 +53,7 @@ export type ConversationAction =
   | { type: 'channels/set'; payload: ApiChannel[] }
   | { type: 'ui/setAdvancedVariables'; payload: boolean }
   | { type: 'ui/setDynamicPromptEnabled'; payload: boolean }
+  | { type: 'ui/setAutoRenameConversationTitle'; payload: boolean }
 
 function defaultPanelRows(): PanelVariableRow[] {
   return [{ id: makeId(), key: '', valuesText: '', selectedValue: '' }]
@@ -73,6 +73,7 @@ export function createInitialConversationState(input: {
     settingsBySide?: Partial<Record<Side, SingleSideSettings>>
     runConcurrency?: number
     dynamicPromptEnabled?: boolean
+    autoRenameConversationTitle?: boolean
     panelValueFormat?: PanelValueFormat
     panelVariables?: PanelVariableRow[]
     favoriteModelIds?: string[]
@@ -95,6 +96,7 @@ export function createInitialConversationState(input: {
     isSending: false,
     showAdvancedVariables: false,
     dynamicPromptEnabled: initialStaged?.dynamicPromptEnabled ?? true,
+    autoRenameConversationTitle: initialStaged?.autoRenameConversationTitle ?? true,
     panelValueFormat: initialStaged?.panelValueFormat ?? 'json',
     panelVariables:
       Array.isArray(initialStaged?.panelVariables) && initialStaged.panelVariables.length > 0
@@ -159,6 +161,8 @@ export function conversationReducer(state: ConversationState, action: Conversati
       return { ...state, showAdvancedVariables: action.payload }
     case 'ui/setDynamicPromptEnabled':
       return { ...state, dynamicPromptEnabled: action.payload, sendError: '' }
+    case 'ui/setAutoRenameConversationTitle':
+      return { ...state, autoRenameConversationTitle: action.payload, sendError: '' }
     default:
       return state
   }
@@ -226,6 +230,8 @@ export function useConversationState(initial: ConversationState) {
         dispatch({ type: 'variables/setPanelValueFormat', payload: value }),
       setAdvancedVariables: (value: boolean) => dispatch({ type: 'ui/setAdvancedVariables', payload: value }),
       setDynamicPromptEnabled: (value: boolean) => dispatch({ type: 'ui/setDynamicPromptEnabled', payload: value }),
+      setAutoRenameConversationTitle: (value: boolean) =>
+        dispatch({ type: 'ui/setAutoRenameConversationTitle', payload: value }),
     }),
     [],
   )

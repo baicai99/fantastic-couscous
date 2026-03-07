@@ -28,11 +28,19 @@
 - `domain/`
   - 纯业务规则与数据规范化。
   - 典型能力：`planRunBatch`、`buildRetryPlan`、`buildReplayPlan`、模板变量解析与批处理、side/settings 归一化。
+  - 2026-03 解耦补充：
+    - `settingsNormalization.ts`：side/settings 归一化入口。
+    - `panelVariableParsing.ts`：批量变量解析、序列化与对齐预览。
+    - `runPlanning.ts`：发送/重试/回放计划聚合导出。
+    - `failureClassifier.ts`：错误归一化。
 
 - `application/`
   - 编排器与执行器。
   - `conversationOrchestrator.ts`：连接 state 与 domain，并协调批量执行。
   - `runExecutor.ts`：单 run 执行、进度回调、错误分类、可选自动保存。
+  - `conversationNotifier.ts`：通知抽象（替代控制器直连 antd message/notification）。
+  - `conversationTaskResumeService.ts`：任务恢复查询抽象。
+  - `conversationDownloadService.ts`：下载/打包抽象（单图与 zip）。
 
 - `state/`
   - `conversationState.ts`：状态结构、reducer、selectors、actions。
@@ -57,6 +65,7 @@
 ### 5.1 Send Draft
 
 1. `useConversations.sendDraft()` 读取当前状态。
+   - 内部由组合模块协作：`hooks/conversations/useDraftSourceImages.ts`、`hooks/conversations/sendFlowUtils.ts`。
 2. 按 side 设置 `generationMode` 分流：
    - `image`：进入图片 run 计划与执行链路。
    - `text`：直接走 provider 文本流式接口，实时 patch assistant 消息内容。
@@ -94,7 +103,7 @@
   - 模型列表支持关键词搜索，点击“搜索”后可对模型 ID 与元数据进行模糊匹配过滤。
   - 渠道管理抽屉采用“测量驱动”宽度：`min 720px / max 70vw`，优先贴合表格内容宽度；当内容总宽超出上限时，表格自动启用横向滚动。
 - 模型拉取：`services/channelModels.ts`
-  - 请求 `/v1/models`（兼容不同 path，支持分页 cursor）。
+  - 优先调用 Provider Adapter 的 `discoverModelEntries`（含 metadata）；无能力时回退 HTTP 拉取 `/v1/models`。
 - 模型目录：`services/modelCatalog.ts`
   - 从渠道模型合并出可用模型 catalog，并过滤“可展示”模型。
 - 图片生成：`services/imageGeneration.ts`
@@ -106,6 +115,7 @@
 - 文本流式：`services/providerGateway.ts` + `services/providers/openaiCompatibleAdapter.ts`
   - 走 `/v1/chat/completions`（`stream: true`）。
   - 解析 SSE `data:` 增量，并实时更新 assistant 文本内容。
+  - 解析逻辑已拆分到 `services/providers/openaiCompatible/textStream.ts`。
 
 ## 7. 持久化策略
 
@@ -132,6 +142,9 @@
 - 左侧历史会话项“更多操作”图标统一为横向三点（`…`）样式，便于与顶部/正文操作图标视觉一致。
   - 若当前对话已有消息线程，先弹出确认框提示“关闭旧对话线程并新建对话”。
   - 确认后删除旧对话记录，并进入空白新会话编辑态。
+- 右侧 `Settings -> 高级功能` 新增“根据首条提问自动重命名新对话标题”开关：
+  - 开启时：新对话首条 user prompt 会被摘要为会话标题（历史左栏同步更新）。
+  - 关闭时：新对话标题保持 `未命名`，刷新后也不会再被首条 prompt 自动改写。
 - Workspace 使用 `ResizeObserver + debounce` 动态计算 header/composer 安全区。
 - Composer 输入区改为“单条胶囊栏”结构：
   - 左侧 `+` 按钮用于上传参考图（复用原上传能力）。
@@ -151,7 +164,7 @@
 
 如果你要改这个项目，优先遵循这条路径：
 1. 改业务规则：先看 `features/conversation/domain/*`。
-2. 改发送/重试/回放执行链：看 `application/*` + `hooks/useConversations.ts`。
+2. 改发送/重试/回放执行链：看 `application/*` + `hooks/useConversations.ts` + `hooks/conversations/*`。
 3. 改存储格式：看 `services/conversationStorage.ts` 与 `infra/conversationRepository.ts`。
 4. 改 UI 交互：看 `features/conversation/ui/ConversationWorkspace.tsx` 与 `components/*`。
 

@@ -82,6 +82,8 @@ const IMAGE_MODEL_BLOCKLIST_KEYWORDS = [
 const DOUBAO_FAMILY_KEYWORDS = ['doubao', 'seeddance', 'seedance', 'seedream']
 const DOUBAO_VIDEO_MODEL_ALLOWLIST_KEYWORDS = ['seeddance', 'seedance']
 const DOUBAO_TEXT_MODEL_BLOCKLIST_KEYWORDS = ['seedream', 'seeddance', 'seedance']
+const KLING_KEYWORD = 'kling'
+const KLING_VENDOR_TAG = '可灵'
 
 interface SettingsPanelProps {
   sideMode: SideMode
@@ -93,6 +95,7 @@ interface SettingsPanelProps {
   channels: ApiChannel[]
   showAdvancedVariables: boolean
   dynamicPromptEnabled: boolean
+  autoRenameConversationTitle: boolean
   runConcurrency: number
   onSideModeChange: (mode: SideMode) => void
   onSideCountChange: (count: number) => void
@@ -102,6 +105,7 @@ interface SettingsPanelProps {
   onChannelsChange: (channels: ApiChannel[]) => void
   onShowAdvancedVariablesChange: (enabled: boolean) => void
   onDynamicPromptEnabledChange: (enabled: boolean) => void
+  onAutoRenameConversationTitleChange: (enabled: boolean) => void
   onRunConcurrencyChange: (value: number) => void
   onTogglePanelMode: () => void
   openAddChannelModalSignal?: number
@@ -179,6 +183,9 @@ function inferModelTags(model: ModelSpec): string[] {
     if (value === 'gemini' || value === 'banana' || value === 'google-ai' || value === 'googleai') {
       return 'google'
     }
+    if (value.includes(KLING_KEYWORD) || value === KLING_VENDOR_TAG) {
+      return KLING_VENDOR_TAG
+    }
     if (DOUBAO_FAMILY_KEYWORDS.includes(value)) {
       return '豆包'
     }
@@ -195,6 +202,9 @@ function inferModelTags(model: ModelSpec): string[] {
   }
 
   const normalizedName = `${model.id} ${model.name}`.toLowerCase()
+  if (normalizedName.includes(KLING_KEYWORD)) {
+    tags.add(KLING_VENDOR_TAG)
+  }
   if (DOUBAO_FAMILY_KEYWORDS.some((keyword) => normalizedName.includes(keyword))) {
     tags.add('豆包')
   }
@@ -232,8 +242,9 @@ function inferModelSearchTokens(model: ModelSpec): string {
     tokens.add('seeddance')
     tokens.add('豆包')
   }
-  if (value.includes('kling')) {
-    tokens.add('可灵')
+  if (value.includes(KLING_KEYWORD) || value.includes(KLING_VENDOR_TAG)) {
+    tokens.add(KLING_VENDOR_TAG)
+    tokens.add(KLING_KEYWORD)
   }
   if (value.includes('mj')) {
     tokens.add('midjourney')
@@ -324,6 +335,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
     channels,
     showAdvancedVariables,
     dynamicPromptEnabled,
+    autoRenameConversationTitle,
     runConcurrency,
     onSideModeChange,
     onSideCountChange,
@@ -333,6 +345,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
     onChannelsChange,
     onShowAdvancedVariablesChange,
     onDynamicPromptEnabledChange,
+    onAutoRenameConversationTitleChange,
     onRunConcurrencyChange,
     onTogglePanelMode,
     openAddChannelModalSignal,
@@ -1367,6 +1380,10 @@ export function SettingsPanel(props: SettingsPanelProps) {
                 <Space>
                   <Switch checked={dynamicPromptEnabled} onChange={onDynamicPromptEnabledChange} />
                   <Text>启用动态提示词</Text>
+                </Space>
+                <Space>
+                  <Switch checked={autoRenameConversationTitle} onChange={onAutoRenameConversationTitleChange} />
+                  <Text>根据首条提问自动重命名新对话标题</Text>
                 </Space>
                 <Form layout="vertical">
                   <Form.Item label="循环并发" style={{ marginBottom: 0 }}>

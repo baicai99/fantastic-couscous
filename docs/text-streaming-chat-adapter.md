@@ -41,6 +41,7 @@
   - `视频模型`：视频链路预留模型配置（当前仅做设置与存储占位）。
 - 图片模型下拉会按名称关键词过滤以下非图片模型：`chat`、`o1~o5`、`claude`、`deepseek`、`codex`、`llama`、`coder`、`audio`、`tts`、`embedding`。
 - 名称（或 ID）命中 `doubao` / `seeddance`（兼容 `seedance`）/ `seedream` 的模型会归类到“豆包”厂商标签。
+- 名称（或标签）命中 `kling` 的模型统一归类到“可灵”厂商标签。
 - 豆包家族在“图片模型”下拉中仅保留 `seedream`，其余（如 `doubao`、`seeddance`）会被过滤。
 - 豆包家族在“文本模型”下拉中会过滤 `seedream` 与 `seeddance`（兼容 `seedance`）；其余豆包模型视为文本模型。
 - 豆包家族在“视频模型”下拉中仅保留 `seeddance`（兼容 `seedance`），其余会被过滤。

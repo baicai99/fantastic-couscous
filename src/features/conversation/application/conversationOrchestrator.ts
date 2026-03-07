@@ -9,7 +9,7 @@ import type {
   SettingPrimitive,
 } from '../../../types/chat'
 import type { CreateRunInput } from './runExecutor'
-import { buildReplayPlan, buildRetryPlan, planRunBatch } from '../domain/conversationDomain'
+import { buildReplayPlan, buildRetryPlan, planRunBatch } from '../domain/runPlanning'
 import type { ConversationState } from '../state/conversationState'
 import { Semaphore } from './utils/semaphore'
 

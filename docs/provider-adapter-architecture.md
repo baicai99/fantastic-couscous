@@ -21,8 +21,10 @@
 
 - `ProviderAdapter`
   - `discoverModels`
+  - `discoverModelEntries`（可选，返回模型 metadata）
   - `generateImages`
   - `resumeImageTask`
+  - `streamText`
   - `normalizeError`
   - `capabilities`
 - `ProviderCapabilities`
@@ -70,6 +72,10 @@
   - `url / b64_json / data / base64` 多字段图片解析。
   - 任务型响应（202 / task id / location）恢复支持。
   - 模型别名候选降级（如 `nano-banana` 与 `gemini-*`）。
+- 2026-03 解耦补充：
+  - 模型发现实现拆分至 `src/services/providers/openaiCompatible/modelDiscovery.ts`。
+  - 文本流式 SSE 解析拆分至 `src/services/providers/openaiCompatible/textStream.ts`。
+  - 支持 `discoverModelEntries`，供 `channelModels` 直接获取模型元数据。
 
 ### 3.2 Midjourney Adapter（最小能力版）
 
@@ -91,7 +97,7 @@
 ### 4.2 兼容过渡
 
 - `src/services/imageGeneration.ts` 保留为“薄封装”，内部转发到 `providerGateway`，避免一次性大面积改引用。
-- `src/services/channelModels.ts` 同步改为转发到 `providerGateway.discoverModelsByProvider`。
+- `src/services/channelModels.ts` 在“模型 ID 列表”外，新增 `discoverModelEntries` 优先路径；无能力时回退旧逻辑。
 
 ## 5. 数据与迁移
 

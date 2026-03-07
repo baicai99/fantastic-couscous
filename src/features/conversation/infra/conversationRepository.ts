@@ -29,6 +29,7 @@ export interface ConversationRepository {
     settingsBySide?: Partial<Record<Side, SingleSideSettings>>
     runConcurrency?: number
     dynamicPromptEnabled?: boolean
+    autoRenameConversationTitle?: boolean
     panelValueFormat?: PanelValueFormat
     panelVariables?: PanelVariableRow[]
     favoriteModelIds?: string[]
@@ -45,6 +46,7 @@ export interface ConversationRepository {
     settingsBySide: Record<Side, SingleSideSettings>
     runConcurrency: number
     dynamicPromptEnabled: boolean
+    autoRenameConversationTitle: boolean
     panelValueFormat: PanelValueFormat
     panelVariables: PanelVariableRow[]
     favoriteModelIds: string[]
@@ -70,6 +72,7 @@ export function createConversationRepository(): ConversationRepository {
       settingsBySide,
       runConcurrency,
       dynamicPromptEnabled,
+      autoRenameConversationTitle,
       panelValueFormat,
       panelVariables,
       favoriteModelIds,
@@ -80,6 +83,7 @@ export function createConversationRepository(): ConversationRepository {
         settingsBySide,
         runConcurrency,
         dynamicPromptEnabled,
+        autoRenameConversationTitle,
         panelValueFormat,
         panelVariables,
         favoriteModelIds,

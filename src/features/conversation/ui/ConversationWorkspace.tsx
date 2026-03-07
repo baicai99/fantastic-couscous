@@ -13,6 +13,7 @@ import { useImagePreview } from '../../../hooks/useImagePreview'
 import { useDebouncedCallback } from '../../../hooks/useDebouncedCallback'
 import { usePersistentPanelMode } from '../../../hooks/usePersistentPanelMode'
 import type { MessageAction } from '../../../types/chat'
+import { extractImageFilesFromTransfer, hasImageFileInTransfer } from '../../../utils/imageTransfer'
 import { useConversationController } from './useConversationController'
 
 const { Content } = Layout
@@ -32,25 +33,6 @@ interface MultiRenderProfile {
 
 const COMPOSER_MAX_WIDTH_PX = 920
 const COMPOSER_MIN_WIDTH_PX = COMPOSER_MAX_WIDTH_PX / 2
-
-function extractImageFilesFromTransfer(dataTransfer: DataTransfer | null): File[] {
-  if (!dataTransfer) {
-    return []
-  }
-  return Array.from(dataTransfer.files ?? []).filter((file) => file.type.toLowerCase().startsWith('image/'))
-}
-
-function hasImageFileInTransfer(dataTransfer: DataTransfer | null): boolean {
-  if (!dataTransfer) {
-    return false
-  }
-  if (extractImageFilesFromTransfer(dataTransfer).length > 0) {
-    return true
-  }
-  return Array.from(dataTransfer.items ?? []).some(
-    (item) => item.kind === 'file' && item.type.toLowerCase().startsWith('image/'),
-  )
-}
 
 function resolveMultiRenderProfile(sideCount: number): MultiRenderProfile {
   if (sideCount >= 4) {
@@ -127,6 +109,7 @@ export function ConversationWorkspace() {
     isSending,
     showAdvancedVariables,
     dynamicPromptEnabled,
+    autoRenameConversationTitle,
     panelValueFormat,
     panelVariables,
     favoriteModelIds,
@@ -150,6 +133,7 @@ export function ConversationWorkspace() {
     clearDraftSourceImages,
     setShowAdvancedVariables,
     setDynamicPromptEnabled,
+    setAutoRenameConversationTitle,
     setPanelValueFormat,
     setPanelVariables,
     setFavoriteModelIds,
@@ -535,6 +519,7 @@ export function ConversationWorkspace() {
             channels={channels}
             showAdvancedVariables={showAdvancedVariables}
             dynamicPromptEnabled={dynamicPromptEnabled}
+            autoRenameConversationTitle={autoRenameConversationTitle}
             runConcurrency={runConcurrency}
             onSideModeChange={updateSideMode}
             onSideCountChange={updateSideCount}
@@ -544,6 +529,7 @@ export function ConversationWorkspace() {
             onChannelsChange={setChannels}
             onShowAdvancedVariablesChange={setShowAdvancedVariables}
             onDynamicPromptEnabledChange={setDynamicPromptEnabled}
+            onAutoRenameConversationTitleChange={setAutoRenameConversationTitle}
             onRunConcurrencyChange={setRunConcurrency}
             onTogglePanelMode={handleTopSettingsClick}
             openAddChannelModalSignal={openAddChannelModalSignal}

@@ -14,7 +14,7 @@ import type {
 } from '../../../types/chat'
 import type { ProviderSourceImage } from '../../../types/provider'
 import { makeId, toSettingsSnapshot } from '../../../utils/chat'
-import { classifyFailure } from '../domain/conversationDomain'
+import { classifyFailure } from '../domain/failureClassifier'
 
 export interface CreateRunInput {
   batchId: string

@@ -74,6 +74,11 @@ export interface ProviderSourceImage {
   mimeType: string
 }
 
+export interface ProviderModelEntry {
+  id: string
+  metadata: Record<string, unknown> | null
+}
+
 export interface NormalizedImageTaskRegistration {
   seq: number
   requestUrl?: string
@@ -104,6 +109,7 @@ export interface ProviderAdapter {
   displayName: string
   capabilities: ProviderCapabilities
   discoverModels: (channel: Pick<ProviderChannel, 'baseUrl' | 'apiKey'>) => Promise<string[]>
+  discoverModelEntries?: (channel: Pick<ProviderChannel, 'baseUrl' | 'apiKey'>) => Promise<ProviderModelEntry[]>
   generateImages: (input: {
     channel: ProviderChannel
     request: NormalizedImageRequest

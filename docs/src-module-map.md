@@ -10,9 +10,14 @@
 
 - 全局会话控制（最核心）
   - `src/hooks/useConversations.ts`
+  - `src/hooks/conversations/useDraftSourceImages.ts`
+  - `src/hooks/conversations/sendFlowUtils.ts`
   - `src/features/conversation/state/conversationState.ts`
   - `src/features/conversation/application/conversationOrchestrator.ts`
   - `src/features/conversation/application/runExecutor.ts`
+  - `src/features/conversation/application/conversationNotifier.ts`
+  - `src/features/conversation/application/conversationTaskResumeService.ts`
+  - `src/features/conversation/application/conversationDownloadService.ts`
   - `src/features/conversation/domain/conversationDomain.ts`
 
 - 三栏主界面
@@ -25,7 +30,7 @@
 
 - 动态提示词 / 变量批处理
   - `src/features/conversation/domain/types.ts`
-  - `src/features/conversation/domain/conversationDomain.ts`
+  - `src/features/conversation/domain/panelVariableParsing.ts`
   - `src/utils/template.ts`
 
 - 图片生成链路
@@ -35,6 +40,8 @@
 
 - 渠道与模型
   - `src/services/channelModels.ts`
+  - `src/services/providers/openaiCompatible/modelDiscovery.ts`
+  - `src/services/providers/openaiCompatible/textStream.ts`
   - `src/services/modelCatalog.ts`
   - `src/components/settings/SettingsPanel.tsx`
 
@@ -55,7 +62,7 @@
 
 ## 目录职责速查
 
-- `src/features/conversation/domain`：纯业务规则、规范化、计划生成。
+- `src/features/conversation/domain`：纯业务规则、规范化、计划生成（已按 `settingsNormalization / panelVariableParsing / runPlanning / failureClassifier` 拆分导出）。
 - `src/features/conversation/application`：执行编排与副作用入口。
 - `src/features/conversation/state`：状态机（reducer/selectors）。
 - `src/features/conversation/infra`：仓储与存储边界。
@@ -80,5 +87,5 @@
 1. `docs/src-architecture-overview.md`
 2. `src/types/chat.ts`
 3. `src/hooks/useConversations.ts`
-4. `src/features/conversation/domain/conversationDomain.ts`
+4. `src/features/conversation/domain/settingsNormalization.ts`
 5. 对应任务再看 `components/settings/*` 或 `services/*`
