@@ -1,4 +1,4 @@
-import type { SettingPrimitive } from './chat'
+import type { SettingPrimitive } from './primitives'
 
 export type ProviderId = 'openai-compatible' | 'midjourney-proxy' | 'custom' | (string & {})
 

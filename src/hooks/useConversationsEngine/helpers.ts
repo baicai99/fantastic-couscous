@@ -3,7 +3,7 @@ import { isDownloadableImageRef } from '../../services/imageRef'
 import { inferModelShortcutTokens } from '../../features/conversation/domain/modelShortcuts'
 import type { PanelVariableRow } from '../../features/conversation/domain/types'
 import type { ApiChannel, Conversation, ConversationSummary, MessageAction, ModelSpec, Run, Side, SingleSideSettings } from '../../types/chat'
-import { makeId, toSummary } from '../../utils/chat'
+import { makeId, normalizeConversationTitleMode, toSummary } from '../../utils/chat'
 
 export const PROGRESS_PERSIST_DEBOUNCE_MS = 250
 export const GLOBAL_RESUME_POLL_VISIBLE_MS = 5_000
@@ -114,6 +114,17 @@ export function upsertConversationState(
   activeId: string | null,
   lruOrder: string[],
 ): { nextSummaries: ConversationSummary[]; nextContents: Record<string, Conversation> } {
+  const existingSummary = summaries.find((item) => item.id === conversation.id)
+  const resolvedConversation =
+    existingSummary?.title?.trim() &&
+    existingSummary.title !== conversation.title &&
+    conversation.titleMode === 'default'
+      ? {
+          ...conversation,
+          title: existingSummary.title,
+          titleMode: normalizeConversationTitleMode(undefined, existingSummary.title),
+        }
+      : conversation
   const cachedIds = [conversation.id, ...lruOrder.filter((id) => id !== conversation.id)]
   const keepIds = new Set(cachedIds.slice(0, MAX_IN_MEMORY_CONVERSATIONS))
   if (activeId) {
@@ -122,7 +133,7 @@ export function upsertConversationState(
 
   const nextContents = {
     ...contents,
-    [conversation.id]: conversation,
+    [conversation.id]: resolvedConversation,
   }
   for (const existingId of Object.keys(nextContents)) {
     if (!keepIds.has(existingId)) {
@@ -130,8 +141,8 @@ export function upsertConversationState(
     }
   }
 
-  const summary = toSummary(conversation)
-  const hasExisting = summaries.some((item) => item.id === conversation.id)
+  const summary = toSummary(resolvedConversation)
+  const hasExisting = Boolean(existingSummary)
   const nextSummaries = hasExisting
     ? summaries.map((item) => (item.id === conversation.id ? summary : item))
     : [summary, ...summaries]

@@ -9,7 +9,7 @@ const repoRoot = resolve(__dirname, '..')
 
 const limits = [
   { file: 'src/hooks/useConversationsEngine.ts', maxLines: 899 },
-  { file: 'src/components/settings/SettingsPanel.tsx', maxLines: 600 },
+  { file: 'src/components/settings/SettingsPanelContainer.tsx', maxLines: 1400 },
 ]
 
 function countLines(file) {

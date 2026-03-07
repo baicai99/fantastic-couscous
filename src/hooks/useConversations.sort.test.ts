@@ -41,6 +41,7 @@ function createConversation(input: {
   return {
     id: input.id,
     title: input.id,
+    titleMode: 'manual',
     createdAt: input.createdAt,
     updatedAt: input.updatedAt,
     sideMode: 'single',

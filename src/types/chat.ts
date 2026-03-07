@@ -1,7 +1,11 @@
 import type { ProviderId } from './provider'
+import type { SettingPrimitive } from './primitives'
+
+export type { SettingPrimitive } from './primitives'
 
 export type SideMode = 'single' | 'multi'
 export type Side = string
+export type ConversationTitleMode = 'default' | 'auto' | 'manual'
 export type ImageStatus = 'pending' | 'success' | 'failed'
 export type ImageThreadState = 'active' | 'detached' | 'settled'
 export type MessageRole = 'user' | 'assistant'
@@ -12,7 +16,6 @@ export interface MessageAction {
   type: MessageActionType
   label: string
 }
-export type SettingPrimitive = string | number | boolean
 export type ModelParamType = 'number' | 'enum' | 'boolean'
 export type ImageRefKind = 'url' | 'idb-blob' | 'inline'
 export type FailureCode =
@@ -158,6 +161,7 @@ export interface Message {
   displayCreatedAt?: string
   role: MessageRole
   content: string
+  titleEligible?: boolean
   sourceImages?: RunSourceImageRef[]
   runs?: Run[]
   actions?: MessageAction[]
@@ -166,6 +170,7 @@ export interface Message {
 export interface Conversation {
   id: string
   title: string
+  titleMode: ConversationTitleMode
   pinnedAt?: string | null
   createdAt: string
   updatedAt: string

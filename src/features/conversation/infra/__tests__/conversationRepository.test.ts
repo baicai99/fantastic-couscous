@@ -21,6 +21,7 @@ describe('conversationRepository', () => {
     const conversation: Conversation = {
       id: 'c1',
       title: 'conversation 1',
+      titleMode: 'manual',
       createdAt: '2026-01-01T00:00:00.000Z',
       updatedAt: '2026-01-01T00:00:00.000Z',
       sideMode: 'single',
@@ -62,7 +63,51 @@ describe('conversationRepository', () => {
 
     expect(loaded.activeId).toBe('c1')
     expect(loadedConversation?.title).toBe('conversation 1')
+    expect(loadedConversation?.titleMode).toBe('manual')
     expect(channels[0].id).toBe('ch1')
+  })
+
+  it('uses fallback title instead of re-summarizing first user prompt on load', async () => {
+    const repo = createConversationRepository()
+    const conversation: Conversation = {
+      id: 'legacy-c1',
+      title: '',
+      titleMode: 'default',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      sideMode: 'single',
+      sideCount: 2,
+      settingsBySide: {
+        single: {
+          resolution: '1K',
+          aspectRatio: '1:1',
+          imageCount: 1,
+          gridColumns: 1,
+          sizeMode: 'preset',
+          customWidth: 1024,
+          customHeight: 1024,
+          autoSave: true,
+          channelId: null,
+          modelId: 'model-a',
+          paramValues: {},
+        },
+      },
+      messages: [
+        {
+          id: 'm1',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          role: 'user',
+          content: '@gpt-image-1 draw a cat --wh 640x960',
+        },
+      ],
+    }
+
+    await repo.saveConversation(conversation)
+
+    const loadedConversation = await repo.loadConversation('legacy-c1', '未命名')
+
+    expect(loadedConversation?.title).toBe('未命名')
+    expect(loadedConversation?.titleMode).toBe('default')
   })
 
   it('keeps empty active conversation when active id is null', () => {

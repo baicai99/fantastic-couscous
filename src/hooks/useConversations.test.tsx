@@ -104,6 +104,7 @@ function createSeedConversation(input: { id: string; title: string; prompt?: str
   return {
     id: input.id,
     title: input.title,
+    titleMode: input.title === '未命名' ? 'default' : 'manual',
     createdAt: now,
     updatedAt: now,
     sideMode: 'single',
@@ -226,6 +227,7 @@ describe('useConversations', () => {
     const settledConversation: Conversation = {
       id: 'c1',
       title: 'settled',
+      titleMode: 'manual',
       createdAt: '2026-03-06T00:00:00.000Z',
       updatedAt: '2026-03-06T00:00:00.000Z',
       sideMode: 'single',
@@ -534,6 +536,7 @@ describe('useConversations', () => {
     const conversation: Conversation = {
       id: 'c3',
       title: 'resume',
+      titleMode: 'manual',
       createdAt: now,
       updatedAt: now,
       sideMode: 'single',
@@ -627,6 +630,7 @@ describe('useConversations', () => {
     const conversation: Conversation = {
       id: 'c4',
       title: 'timeout',
+      titleMode: 'manual',
       createdAt: oldCreatedAt,
       updatedAt: oldCreatedAt,
       sideMode: 'single',
@@ -724,10 +728,51 @@ describe('useConversations', () => {
     expect(result.current.queries.activeConversation?.messages[0]?.content).toBe('@gemini-2.5-flash-image')
     expect(result.current.queries.activeConversation?.messages[1]?.content).toContain('模型已切换为 gemini-2.5-flash-image')
     expect(result.current.queries.activeConversation?.messages[1]?.runs ?? []).toHaveLength(0)
+    expect(result.current.queries.activeConversation?.title).toBe('未命名')
     expect(result.current.queries.activeSettingsBySide.single.modelId).toBe('gemini-2.5-flash-image')
     expect(result.current.queries.draft).toBe('')
     expect(result.current.queries.sendScrollTrigger).toBe(initialScrollTrigger + 1)
     expect(messageSuccessSpy).toHaveBeenCalled()
+  })
+
+  it('keeps first real prompt eligible after permanent @model command', async () => {
+    mockCreateRun.mockImplementation(async (input: any) => buildSuccessfulRunFromInput({
+      runId: input.runId,
+      createdAt: input.createdAt,
+      sideMode: input.sideMode,
+      side: input.side,
+      channel: input.channel,
+      modelId: input.modelId,
+      modelName: input.modelName,
+      templatePrompt: input.templatePrompt,
+      finalPrompt: input.finalPrompt,
+      variablesSnapshot: input.variablesSnapshot,
+      paramsSnapshot: input.paramsSnapshot,
+      settings: input.settings,
+    }))
+
+    const { useConversations } = await import('./useConversations')
+    const { result } = renderHook(() => useConversations())
+
+    act(() => {
+      result.current.commands.setDraft('@gemini-2.5-flash-image')
+    })
+    await act(async () => {
+      await result.current.commands.sendDraft()
+    })
+
+    await waitFor(() => expect(result.current.queries.activeConversation?.messages).toHaveLength(2))
+    expect(result.current.queries.activeConversation?.title).toBe('未命名')
+
+    act(() => {
+      result.current.commands.setDraft('draw a cat')
+    })
+    await act(async () => {
+      await result.current.commands.sendDraft()
+    })
+
+    await waitFor(() => expect(mockCreateRun).toHaveBeenCalledTimes(1))
+    expect(result.current.queries.activeConversation?.title).toBe('draw a cat')
   })
 
   it('temporarily switches model for @model prompt send and keeps user command in history', async () => {
@@ -779,6 +824,7 @@ describe('useConversations', () => {
     expect(result.current.queries.activeConversation?.messages[0]?.content).toBe('@gpt-image-1 draw a cat')
     expect(result.current.queries.activeConversation?.messages[1]?.content).toContain('已临时切换到 gpt-image-1')
     expect(result.current.queries.activeConversation?.messages[1]?.runs?.[0]?.modelId).toBe('gpt-image-1')
+    expect(result.current.queries.activeConversation?.title).toBe('draw a cat')
     expect(result.current.queries.activeSettingsBySide.single.modelId).toBe(previousModelId)
     expect(messageSuccessSpy).toHaveBeenCalledWith('本次已临时切换到 gpt-image-1')
   })
@@ -888,6 +934,7 @@ describe('useConversations', () => {
     expect(callInput.settings.customHeight).toBe(960)
     expect(callInput.paramsSnapshot.size).toBe('640x960')
     expect(callInput.finalPrompt).toBe('draw skyline')
+    expect(result.current.queries.activeConversation?.title).toBe('draw skyline')
   })
 
   it('blocks send when --size and --wh are both provided', async () => {
@@ -943,6 +990,7 @@ describe('useConversations', () => {
     expect(callInput.settings.customWidth).toBe(640)
     expect(callInput.settings.customHeight).toBe(960)
     expect(callInput.finalPrompt).toBe('draw a cat')
+    expect(result.current.queries.activeConversation?.title).toBe('draw a cat')
     expect(result.current.queries.activeConversation?.messages[0]?.content).toBe('@gpt-image-1 draw a cat --wh 640x960')
     expect(result.current.queries.activeSettingsBySide.single.modelId).toBe(previousModelId)
     expect(messageSuccessSpy).toHaveBeenCalledWith('本次已临时切换到 gpt-image-1')
@@ -1267,6 +1315,7 @@ describe('useConversations', () => {
     const conversation: Conversation = {
       id: 'rename-c1',
       title: '旧标题',
+      titleMode: 'manual',
       pinnedAt: null,
       createdAt: '2026-03-06T00:00:00.000Z',
       updatedAt: '2026-03-06T00:00:00.000Z',
@@ -1309,6 +1358,71 @@ describe('useConversations', () => {
     })
   })
 
+  it('keeps manual title after subsequent sends', async () => {
+    await resetStorage()
+    seedChannels({
+      channels: [{
+        id: 'ch',
+        name: 'main',
+        baseUrl: 'https://example.com',
+        apiKey: 'key',
+        models: [],
+      }],
+      settingsOverride: {
+        channelId: 'ch',
+        modelId: '',
+      },
+    })
+
+    const conversation: Conversation = {
+      id: 'manual-title-c1',
+      title: '未命名',
+      titleMode: 'default',
+      pinnedAt: null,
+      createdAt: '2026-03-06T00:00:00.000Z',
+      updatedAt: '2026-03-06T00:00:00.000Z',
+      sideMode: 'single',
+      sideCount: 2,
+      settingsBySide: {
+        single: {
+          resolution: '1K',
+          aspectRatio: '1:1',
+          imageCount: 1,
+          gridColumns: 1,
+          sizeMode: 'preset',
+          customWidth: 1024,
+          customHeight: 1024,
+          autoSave: false,
+          channelId: 'ch',
+          modelId: '',
+          paramValues: {},
+        },
+      },
+      messages: [],
+    }
+    await seedConversation({ conversation })
+
+    const { useConversations } = await import('./useConversations')
+    const { result } = renderHook(() => useConversations())
+
+    act(() => {
+      result.current.commands.renameConversation('manual-title-c1', '手动标题')
+    })
+    await waitFor(() => {
+      expect(result.current.queries.activeConversation?.title).toBe('手动标题')
+    })
+
+    act(() => {
+      result.current.commands.setDraft('draw a cat')
+    })
+    await act(async () => {
+      await result.current.commands.sendDraft()
+    })
+
+    await waitFor(() => expect(result.current.queries.activeConversation?.messages).toHaveLength(2))
+    expect(result.current.queries.activeConversation?.title).toBe('手动标题')
+  })
+
   it('toggles pin and keeps pinned conversation at top after remount', async () => {
     await resetStorage()
     seedChannels()
@@ -1317,6 +1431,7 @@ describe('useConversations', () => {
     const baseConversation = (id: string, title: string, updatedAt: string): Conversation => ({
       id,
       title,
+      titleMode: 'manual',
       pinnedAt: null,
       createdAt: '2026-03-06T00:00:00.000Z',
       updatedAt,

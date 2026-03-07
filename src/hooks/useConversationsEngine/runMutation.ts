@@ -1,4 +1,5 @@
 import type { MutableRefObject } from 'react'
+import { buildRunLocationIndex, type RunLocation } from './conversationIndexes'
 import { classifyFailure } from '../../features/conversation/domain/failureClassifier'
 import type { ConversationState } from '../../features/conversation/state/conversationState'
 import type { Conversation, Run } from '../../types/chat'
@@ -25,7 +26,7 @@ interface UpdateRunImageInput {
 
 interface RunMutationDeps {
   stateRef: MutableRefObject<ConversationState>
-  runLocationByConversationRef: MutableRefObject<Record<string, Map<string, { messageIndex: number; runIndex: number }>>>
+  runLocationByConversationRef: MutableRefObject<Record<string, Map<string, RunLocation>>>
   persistConversation: (
     conversation: Conversation,
     options?: { saveStorage?: boolean; saveIndex?: boolean },
@@ -89,12 +90,7 @@ export function createRunMutationModule(deps: RunMutationDeps) {
     const locationMap =
       runLocationByConversationRef.current[conversationId] ??
       (() => {
-        const rebuilt = new Map<string, { messageIndex: number; runIndex: number }>()
-        currentConversation.messages.forEach((message, messageIndex) => {
-          ;(message.runs ?? []).forEach((run, runIndex) => {
-            rebuilt.set(run.id, { messageIndex, runIndex })
-          })
-        })
+        const rebuilt = buildRunLocationIndex(currentConversation)
         runLocationByConversationRef.current[conversationId] = rebuilt
         return rebuilt
       })()

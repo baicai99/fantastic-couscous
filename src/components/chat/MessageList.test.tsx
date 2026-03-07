@@ -58,6 +58,7 @@ function makeConversation(finalPrompts: string[] = ['template cat']): Conversati
   return {
     id: 'c1',
     title: 'T',
+    titleMode: 'manual',
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
     sideMode: 'single',
@@ -96,6 +97,7 @@ function makeUserConversation(
   return {
     id: 'c-user',
     title: 'User Conversation',
+    titleMode: 'manual',
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
     sideMode: 'single',
@@ -132,6 +134,7 @@ function makeMultiConversationWithSideOnlyRun(targetSide: string): Conversation 
   return {
     id: 'c-multi',
     title: 'Multi Conversation',
+    titleMode: 'manual',
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
     sideMode: 'multi',
@@ -250,6 +253,7 @@ function makeMultiConversationWithManyRunsAndImages(input: {
   return {
     id: 'c-many',
     title: 'Many Runs',
+    titleMode: 'manual',
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
     sideMode: 'multi',

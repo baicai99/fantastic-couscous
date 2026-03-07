@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { ReactNode } from 'react'
 import { GithubOutlined, ReloadOutlined, SettingOutlined } from '@ant-design/icons'
 import {
   Alert,
@@ -24,7 +23,6 @@ import {
 import type {
   ApiChannel,
   ImportAction,
-  ModelParamSpec,
   ModelSpec,
   SettingPrimitive,
   Side,
@@ -36,8 +34,18 @@ import {
   type ChannelImportPreviewItem,
   type ChannelModelEntry,
 } from '../../features/conversation/application/settingsPanelService'
+import {
+  collectAvailableModelTags,
+  filterModelsByTag,
+  inferModelSearchTokens,
+  inferModelTags,
+  isBlockedImageModel,
+  isBlockedTextModel,
+  isBlockedVideoModel,
+} from '../../features/conversation/domain/modelCatalogDomain'
 import { useDrawerLayout } from './hooks/useDrawerLayout'
 import { useChannelModels } from './hooks/useChannelModels'
+import { maskApiKey, normalizeCollapseKeys, renderParamInput } from './settingsPanelHelpers'
 
 const { Text } = Typography
 const ALL_MODEL_TAG = '__all__'
@@ -57,27 +65,6 @@ const GITHUB_REPO_URL = 'https://github.com/baicai99/fantastic-couscous'
 const CHANNEL_DRAWER_MIN_WIDTH = 720
 const CHANNEL_DRAWER_MAX_RATIO = 0.7
 const CHANNEL_DRAWER_HORIZONTAL_ALLOWANCE = 64
-const IMAGE_MODEL_BLOCKLIST_KEYWORDS = [
-  'chat',
-  'o1',
-  'o2',
-  'o3',
-  'o4',
-  'o5',
-  'claude',
-  'deepseek',
-  'codex',
-  'llama',
-  'coder',
-  'audio',
-  'tts',
-  'embedding',
-]
-const DOUBAO_FAMILY_KEYWORDS = ['doubao', 'seeddance', 'seedance', 'seedream']
-const DOUBAO_VIDEO_MODEL_ALLOWLIST_KEYWORDS = ['seeddance', 'seedance']
-const DOUBAO_TEXT_MODEL_BLOCKLIST_KEYWORDS = ['seedream', 'seeddance', 'seedance']
-const KLING_KEYWORD = 'kling'
-const KLING_VENDOR_TAG = '可灵'
 const {
   fetchChannelModelEntries,
   fetchChannelModels,
@@ -123,184 +110,6 @@ interface SettingsPanelProps {
 type SettingsPanelCollapseState = {
   top?: unknown
   sideById?: unknown
-}
-
-function normalizeCollapseKeys(raw: unknown, fallback: string[]): string[] {
-  if (Array.isArray(raw)) {
-    return raw
-      .map((item) => String(item))
-      .filter((item, index, array) => item.length > 0 && array.indexOf(item) === index)
-  }
-  if (typeof raw === 'string' && raw.length > 0) {
-    return [raw]
-  }
-  return fallback
-}
-
-function maskApiKey(apiKey: string): string {
-  if (!apiKey) {
-    return '-'
-  }
-
-  if (apiKey.length <= 6) {
-    return `${apiKey.slice(0, 1)}***${apiKey.slice(-1)}`
-  }
-
-  return `${apiKey.slice(0, 3)}***${apiKey.slice(-3)}`
-}
-
-function renderParamInput(
-  param: ModelParamSpec,
-  value: SettingPrimitive | undefined,
-  onChange: (next: SettingPrimitive) => void,
-): ReactNode {
-  if (param.type === 'number') {
-    return (
-      <InputNumber
-        className="full-width"
-        min={param.min}
-        max={param.max}
-        value={typeof value === 'number' ? value : Number(param.default)}
-        onChange={(next) => onChange(typeof next === 'number' ? next : Number(param.default))}
-      />
-    )
-  }
-
-  if (param.type === 'boolean') {
-    return (
-      <Switch
-        checked={typeof value === 'boolean' ? value : Boolean(param.default)}
-        onChange={(next) => onChange(next)}
-      />
-    )
-  }
-
-  return (
-    <Select
-      value={typeof value === 'string' ? value : String(param.default)}
-      options={(param.options ?? []).map((item) => ({ label: item, value: item }))}
-      onChange={(next) => onChange(next)}
-    />
-  )
-}
-
-function inferModelTags(model: ModelSpec): string[] {
-  const tags = new Set<string>()
-
-  const normalizeTag = (raw: string): string => {
-    const value = raw.trim().toLowerCase()
-    if (value === 'gemini' || value === 'banana' || value === 'google-ai' || value === 'googleai') {
-      return 'google'
-    }
-    if (value.includes(KLING_KEYWORD) || value === KLING_VENDOR_TAG) {
-      return KLING_VENDOR_TAG
-    }
-    if (DOUBAO_FAMILY_KEYWORDS.includes(value)) {
-      return '豆包'
-    }
-    return value
-  }
-
-  if (Array.isArray(model.tags) && model.tags.length > 0) {
-    for (const tag of model.tags) {
-      if (!tag) {
-        continue
-      }
-      tags.add(normalizeTag(tag))
-    }
-  }
-
-  const normalizedName = `${model.id} ${model.name}`.toLowerCase()
-  if (normalizedName.includes(KLING_KEYWORD)) {
-    tags.add(KLING_VENDOR_TAG)
-  }
-  if (DOUBAO_FAMILY_KEYWORDS.some((keyword) => normalizedName.includes(keyword))) {
-    tags.add('豆包')
-  }
-
-  return Array.from(tags)
-}
-
-function inferModelSearchTokens(model: ModelSpec): string {
-  const value = `${model.id} ${model.name}`.toLowerCase()
-  const tokens = new Set<string>()
-  for (const tag of inferModelTags(model)) {
-    tokens.add(tag)
-  }
-
-  if (value.includes('gemini')) {
-    tokens.add('google')
-    tokens.add('banana')
-  }
-  if (value.includes('banana')) {
-    tokens.add('google')
-    tokens.add('gemini')
-  }
-  if (value.includes('doubao')) {
-    tokens.add('seeddance')
-    tokens.add('seeddream')
-    tokens.add('豆包')
-  }
-  if (value.includes('seeddance')) {
-    tokens.add('doubao')
-    tokens.add('seeddream')
-    tokens.add('豆包')
-  }
-  if (value.includes('seeddream')) {
-    tokens.add('doubao')
-    tokens.add('seeddance')
-    tokens.add('豆包')
-  }
-  if (value.includes(KLING_KEYWORD) || value.includes(KLING_VENDOR_TAG)) {
-    tokens.add(KLING_VENDOR_TAG)
-    tokens.add(KLING_KEYWORD)
-  }
-  if (value.includes('mj')) {
-    tokens.add('midjourney')
-  }
-  if (value.includes('midjourney')) {
-    tokens.add('mj')
-  }
-  if (
-    value.includes('gpt-image') ||
-    value.includes('gpt-4o') ||
-    value.includes('gpt-4-all') ||
-    value.includes('sora_image') ||
-    value.includes('dall-e') ||
-    value.includes('dalle') ||
-    value.includes('kolors')
-  ) {
-    tokens.add('openai')
-  }
-
-  return Array.from(tokens).join(' ')
-}
-
-function isBlockedImageModel(input: { id: string; name?: string }): boolean {
-  const haystack = `${input.id} ${input.name ?? ''}`.toLowerCase()
-  const isDoubaoFamily = DOUBAO_FAMILY_KEYWORDS.some((keyword) => haystack.includes(keyword))
-  if (isDoubaoFamily && !haystack.includes('seedream')) {
-    return true
-  }
-  return IMAGE_MODEL_BLOCKLIST_KEYWORDS.some((keyword) => haystack.includes(keyword))
-}
-
-function isBlockedVideoModel(input: { id: string; name?: string }): boolean {
-  const haystack = `${input.id} ${input.name ?? ''}`.toLowerCase()
-  const isDoubaoFamily = DOUBAO_FAMILY_KEYWORDS.some((keyword) => haystack.includes(keyword))
-  if (!isDoubaoFamily) {
-    return false
-  }
-  return !DOUBAO_VIDEO_MODEL_ALLOWLIST_KEYWORDS.some((keyword) => haystack.includes(keyword))
-}
-
-function isBlockedTextModel(input: { id: string; name?: string }): boolean {
-  const haystack = `${input.id} ${input.name ?? ''}`.toLowerCase()
-  const isDoubaoFamily = DOUBAO_FAMILY_KEYWORDS.some((keyword) => haystack.includes(keyword))
-  if (!isDoubaoFamily) {
-    return false
-  }
-  return DOUBAO_TEXT_MODEL_BLOCKLIST_KEYWORDS.some((keyword) => haystack.includes(keyword))
 }
 
 export function SettingsPanelContainer(props: SettingsPanelProps) {
@@ -461,15 +270,7 @@ export function SettingsPanelContainer(props: SettingsPanelProps) {
     setIsModalOpen(true)
   }, [channelForm, openAddChannelModalSignal])
 
-  const availableModelTags = useMemo(() => {
-    const tags = new Set<string>(FIXED_VENDOR_TAGS)
-    for (const model of models) {
-      for (const tag of inferModelTags(model)) {
-        tags.add(tag)
-      }
-    }
-    return Array.from(tags).sort()
-  }, [models])
+  const availableModelTags = useMemo(() => collectAvailableModelTags(models, FIXED_VENDOR_TAGS), [models])
 
   const aspectRatioOptions = useMemo(
     () => getAspectRatioOptions().map((value) => ({ label: value, value })),
@@ -615,10 +416,7 @@ export function SettingsPanelContainer(props: SettingsPanelProps) {
         ? new Set(currentChannel.models)
         : null
     const scopedModels = channelModelSet ? models.filter((item) => channelModelSet.has(item.id)) : models
-    const filteredModels =
-      selectedTag === ALL_MODEL_TAG
-        ? scopedModels
-        : scopedModels.filter((item) => inferModelTags(item).includes(selectedTag))
+    const filteredModels = filterModelsByTag(scopedModels, selectedTag, ALL_MODEL_TAG)
     const imageModels = filteredModels.filter((item) => !isBlockedImageModel({ id: item.id, name: item.name }))
     const textModels = filteredModels.filter((item) => !isBlockedTextModel({ id: item.id, name: item.name }))
     const videoModels = filteredModels.filter((item) => !isBlockedVideoModel({ id: item.id, name: item.name }))
@@ -756,21 +554,28 @@ export function SettingsPanelContainer(props: SettingsPanelProps) {
                     )
                     if (
                       fallbackImageModel &&
-                      (!supportedSet.has(settings.modelId) || isBlockedImageModel({ id: settings.modelId }))
+                      (!supportedSet.has(settings.modelId) ||
+                        isBlockedImageModel({ id: settings.modelId, name: settings.modelId }))
                     ) {
                       onModelChange(side, fallbackImageModel.id)
                     }
                     if (
                       fallbackTextModel &&
                       (!supportedSet.has(settings.textModelId ?? settings.modelId) ||
-                        isBlockedTextModel({ id: settings.textModelId ?? settings.modelId }))
+                        isBlockedTextModel({
+                          id: settings.textModelId ?? settings.modelId,
+                          name: settings.textModelId ?? settings.modelId,
+                        }))
                     ) {
                       onSettingsChange(side, { textModelId: fallbackTextModel.id })
                     }
                     if (
                       fallbackVideoModel &&
                       (!supportedSet.has(settings.videoModelId ?? settings.modelId) ||
-                        isBlockedVideoModel({ id: settings.videoModelId ?? settings.modelId }))
+                        isBlockedVideoModel({
+                          id: settings.videoModelId ?? settings.modelId,
+                          name: settings.videoModelId ?? settings.modelId,
+                        }))
                     ) {
                       onSettingsChange(side, { videoModelId: fallbackVideoModel.id })
                     }
@@ -1125,7 +930,17 @@ export function SettingsPanelContainer(props: SettingsPanelProps) {
         ),
       },
     ],
-    [channelForm, channels, clearChannelImportState, onChannelsChange],
+    [
+      channelForm,
+      channels,
+      clearChannelImportState,
+      onChannelsChange,
+      setIsModelListModalOpen,
+      setModelListError,
+      setModelListItems,
+      setModelListViewMode,
+      setSelectedModelListChannelId,
+    ],
   )
 
   return (
@@ -1191,9 +1006,12 @@ export function SettingsPanelContainer(props: SettingsPanelProps) {
                   <Switch checked={dynamicPromptEnabled} onChange={onDynamicPromptEnabledChange} />
                   <Text>启用动态提示词</Text>
                 </Space>
-                <Space>
-                  <Switch checked={autoRenameConversationTitle} onChange={onAutoRenameConversationTitleChange} />
-                  <Text>根据首条提问自动重命名新对话标题</Text>
+                <Space orientation="vertical" size={2} className="full-width">
+                  <Space>
+                    <Switch checked={autoRenameConversationTitle} onChange={onAutoRenameConversationTitleChange} />
+                    <Text>根据首条提问自动重命名新对话标题</Text>
+                  </Space>
+                  <Text type="secondary">仅对新对话的首个有效提问生效；不会改写手动标题或历史标题。</Text>
                 </Space>
                 <Form layout="vertical">
                   <Form.Item label="循环并发" style={{ marginBottom: 0 }}>

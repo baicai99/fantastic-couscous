@@ -2,6 +2,7 @@
   ApiChannel,
   Conversation,
   ConversationSummary,
+  ConversationTitleMode,
   FailureCode,
   ImageItem,
   Message,
@@ -13,6 +14,39 @@
   SideMode,
   SingleSideSettings,
 } from '../types/chat'
+
+export const DEFAULT_CONVERSATION_TITLE = '未命名'
+
+export function isDefaultConversationTitle(title: string | null | undefined): boolean {
+  return (title ?? '').trim() === DEFAULT_CONVERSATION_TITLE
+}
+
+export function normalizeConversationTitleMode(
+  titleMode: ConversationTitleMode | null | undefined,
+  title: string | null | undefined,
+): ConversationTitleMode {
+  if (titleMode === 'default' || titleMode === 'auto' || titleMode === 'manual') {
+    return titleMode
+  }
+
+  return isDefaultConversationTitle(title) ? 'default' : 'manual'
+}
+
+export function isEligibleConversationTitleMessage(message: Message | null | undefined): boolean {
+  if (!message || message.role !== 'user' || typeof message.content !== 'string') {
+    return false
+  }
+
+  return (message.titleEligible ?? true) && message.content.trim().length > 0
+}
+
+export function hasEligibleConversationTitleMessage(messages: Message[] | undefined): boolean {
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return false
+  }
+
+  return messages.some((message) => isEligibleConversationTitleMessage(message))
+}
 
 export function makeId(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -37,6 +71,7 @@ export function createConversation(
 ): Conversation {
   const now = new Date().toISOString()
   const normalizedCount = Math.max(2, Math.floor(sideCount))
+  const resolvedTitle = title?.trim() || DEFAULT_CONVERSATION_TITLE
   const copiedSettings: Record<Side, SingleSideSettings> = {}
   for (const [side, settings] of Object.entries(settingsBySide)) {
     copiedSettings[side] = cloneSideSettings(settings)
@@ -44,7 +79,8 @@ export function createConversation(
 
   return {
     id: makeId(),
-    title: title ?? '未命名',
+    title: resolvedTitle,
+    titleMode: normalizeConversationTitleMode(undefined, resolvedTitle),
     pinnedAt: null,
     createdAt: now,
     updatedAt: now,
@@ -77,7 +113,7 @@ export function getFirstUserPrompt(messages: Message[] | undefined): string | nu
 export function summarizePromptAsTitle(prompt: string, maxChars = CONVERSATION_TITLE_MAX_CHARS): string {
   const normalized = prompt.replace(/\s+/g, ' ').trim()
   if (!normalized) {
-    return '未命名'
+    return DEFAULT_CONVERSATION_TITLE
   }
   if (normalized.length <= maxChars) {
     return normalized
@@ -271,6 +307,7 @@ export function appendMessagesToConversation(
     createdAt: now,
     role: 'user',
     content: userPrompt,
+    titleEligible: true,
   }
 
   const assistantMessage: Message = {
@@ -281,12 +318,14 @@ export function appendMessagesToConversation(
     runs,
   }
 
-  const hadUserMessage = Boolean(getFirstUserPrompt(conversation.messages))
-  const nextTitle = !hadUserMessage ? summarizePromptAsTitle(userPrompt) : conversation.title
+  const hadEligibleUserMessage = hasEligibleConversationTitleMessage(conversation.messages)
+  const shouldAutoRenameTitle = !hadEligibleUserMessage && conversation.titleMode === 'default'
+  const nextTitle = shouldAutoRenameTitle ? summarizePromptAsTitle(userPrompt) : conversation.title
 
   return {
     ...conversation,
     title: nextTitle,
+    titleMode: shouldAutoRenameTitle ? 'auto' : conversation.titleMode,
     updatedAt: now,
     messages: [...conversation.messages, userMessage, assistantMessage],
   }

@@ -8,7 +8,7 @@ import type {
   SideMode,
   SingleSideSettings,
 } from '../../../types/chat'
-import { clamp, cloneSideSettings } from '../../../utils/chat'
+import { clamp, cloneSideSettings, DEFAULT_CONVERSATION_TITLE, normalizeConversationTitleMode } from '../../../utils/chat'
 import { getComputedPresetResolution, normalizeSizeTier } from './sizeResolution'
 import {
   getDefaultModel,
@@ -271,6 +271,7 @@ export function normalizeConversation(
     singleSettings?: SingleSideSettings
     settingsBySide?: Partial<Record<Side, SingleSideSettings>>
     sideCount?: number
+    titleMode?: Conversation['titleMode']
   }
 
   const rawMode = conversation.sideMode as unknown
@@ -279,9 +280,13 @@ export function normalizeConversation(
     typeof raw.sideCount === 'number'
       ? clampSideCount(raw.sideCount)
       : inferSideCountFromSettings(raw.settingsBySide)
+  const normalizedTitle = conversation.title?.trim() || DEFAULT_CONVERSATION_TITLE
+  const normalizedTitleMode = normalizeConversationTitleMode(raw.titleMode, normalizedTitle)
 
   return {
     ...conversation,
+    title: normalizedTitle,
+    titleMode: normalizedTitleMode,
     sideMode,
     sideCount,
     settingsBySide: normalizeSettingsBySide(
@@ -292,6 +297,8 @@ export function normalizeConversation(
     ),
     messages: conversation.messages.map((message) => ({
       ...message,
+      titleEligible:
+        message.role === 'user' ? (typeof message.titleEligible === 'boolean' ? message.titleEligible : true) : undefined,
       sourceImages: normalizeSourceImageRefs(message.sourceImages),
       runs: (message.runs ?? []).map((run) => normalizeRun(run)),
     })),

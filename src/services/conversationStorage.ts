@@ -1,6 +1,6 @@
-import type { ApiChannel, Conversation, ConversationSummary, Side, SideMode, SingleSideSettings } from '../types/chat'
+import type { ApiChannel, Conversation, ConversationSummary, Message, Side, SideMode, SingleSideSettings } from '../types/chat'
 import type { PanelValueFormat, PanelVariableRow } from '../features/conversation/domain/types'
-import { getFirstUserPrompt, summarizePromptAsTitle } from '../utils/chat'
+import { DEFAULT_CONVERSATION_TITLE, normalizeConversationTitleMode } from '../utils/chat'
 import { resolveProviderId } from './providers/providerId'
 
 const STORAGE_INDEX_KEY = 'm1:conversation-index'
@@ -35,17 +35,35 @@ interface ConversationContentRecord {
 
 let indexedDbPromise: Promise<IDBDatabase | null> | null = null
 
+function resolveConversationTitle(title: string | undefined, fallbackTitle: string): string {
+  const existingTitle = title?.trim()
+  const normalizedFallbackTitle = fallbackTitle.trim()
 
-function resolveConversationTitle(content: Conversation, fallbackTitle: string): string {
-  const existingTitle = content.title?.trim()
+  if (existingTitle && existingTitle !== DEFAULT_CONVERSATION_TITLE) {
+    return existingTitle
+  }
+
+  if (normalizedFallbackTitle && normalizedFallbackTitle !== DEFAULT_CONVERSATION_TITLE) {
+    return normalizedFallbackTitle
+  }
+
   if (existingTitle) {
     return existingTitle
   }
-  const firstPrompt = getFirstUserPrompt(content.messages)
-  if (firstPrompt) {
-    return summarizePromptAsTitle(firstPrompt)
+
+  return normalizedFallbackTitle || DEFAULT_CONVERSATION_TITLE
+}
+
+function normalizeConversationMessages(messages: Message[] | undefined): Message[] {
+  if (!Array.isArray(messages)) {
+    return []
   }
-  return fallbackTitle
+
+  return messages.map((message) => ({
+    ...message,
+    titleEligible:
+      message.role === 'user' ? (typeof message.titleEligible === 'boolean' ? message.titleEligible : true) : undefined,
+  }))
 }
 
 function contentStorageKey(conversationId: string): string {
@@ -203,16 +221,25 @@ function compactConversationHistory(conversation: Conversation): Conversation {
   }
 }
 
-function safeParseConversation(raw: string, fallbackTitle = '未命名'): Conversation | null {
+function safeParseConversation(raw: string, fallbackTitle = DEFAULT_CONVERSATION_TITLE): Conversation | null {
   try {
-    const parsed = JSON.parse(raw) as Conversation
+    const parsed = JSON.parse(raw) as Conversation & { titleMode?: Conversation['titleMode'] }
     if (!parsed?.id) {
       return null
     }
 
+    const persistedTitle = parsed.title?.trim() || ''
+    const resolvedTitle = resolveConversationTitle(parsed.title, fallbackTitle)
+    const resolvedTitleMode =
+      resolvedTitle !== persistedTitle
+        ? normalizeConversationTitleMode(undefined, resolvedTitle)
+        : normalizeConversationTitleMode(parsed.titleMode, resolvedTitle)
+
     return {
       ...parsed,
-      title: resolveConversationTitle(parsed, parsed.title ?? fallbackTitle),
+      title: resolvedTitle,
+      titleMode: resolvedTitleMode,
+      messages: normalizeConversationMessages(parsed.messages),
     }
   } catch {
     return null
@@ -246,7 +273,10 @@ export async function removeConversationContentFromStorage(conversationId: strin
   await idbDeleteConversationRecord(conversationId)
 }
 
-export async function loadConversationContentById(conversationId: string, fallbackTitle = '未命名'): Promise<Conversation | null> {
+export async function loadConversationContentById(
+  conversationId: string,
+  fallbackTitle = DEFAULT_CONVERSATION_TITLE,
+): Promise<Conversation | null> {
   const idbRecord = await idbGetConversationRecord(conversationId)
   if (idbRecord?.payload) {
     return safeParseConversation(idbRecord.payload, fallbackTitle)

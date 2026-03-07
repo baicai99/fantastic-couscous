@@ -11,7 +11,6 @@ import type {
 import { makeId } from '../utils/chat'
 import {
   clearImageTasks,
-  makeImageTaskId,
   removeImageTasksForConversation,
   replaceImageTasksForConversation,
 } from '../services/imageTaskStore'
@@ -40,6 +39,13 @@ import { createConversationSettingsModule } from './useConversationsEngine/conve
 import { createRunMutationModule } from './useConversationsEngine/runMutation'
 import { useResumeFlow } from './useConversationsEngine/useResumeFlow'
 import { createSendFlowModule } from './useConversationsEngine/sendFlow'
+import { buildRunLocationIndex, collectPendingImageTasks, type RunLocation } from './useConversationsEngine/conversationIndexes'
+import {
+  getBrowserMemoryPressure,
+  prepareConversationForPersistence,
+  resolveAdaptiveRunConcurrencyByPressure,
+  touchConversationCache as nextConversationCacheOrder,
+} from './useConversationsEngine/conversationMemory'
 import {
   conversationHasActiveImageThreads,
   getRunCompletionStats,
@@ -94,10 +100,11 @@ export function useConversationsEngine() {
   const resumePollTimerRef = useRef<number | null>(null)
   const backgroundResumePollTimerRef = useRef<number | null>(null)
   const conversationCacheOrderRef = useRef<string[]>([])
-  const runLocationByConversationRef = useRef<Record<string, Map<string, { messageIndex: number; runIndex: number }>>>({})
+  const runLocationByConversationRef = useRef<Record<string, Map<string, RunLocation>>>({})
   const activeRunControllersRef = useRef<Record<string, Map<string, AbortController>>>({})
   const resumingImageIdsRef = useRef<Set<string>>(new Set())
   const runCompletionSignatureRef = useRef<Map<string, string>>(new Map())
+  const resumePendingImagesForConversationRef = useRef<(conversationId: string) => Promise<void> | void>(() => {})
   const {
     draftSourceImages,
     draftSourceImagesRef,
@@ -185,14 +192,11 @@ export function useConversationsEngine() {
   }
 
   const rebuildRunLocationIndex = (conversation: Conversation) => {
-    const nextMap = new Map<string, { messageIndex: number; runIndex: number }>()
-    for (let messageIndex = 0; messageIndex < conversation.messages.length; messageIndex += 1) {
-      const runs = conversation.messages[messageIndex].runs ?? []
-      for (let runIndex = 0; runIndex < runs.length; runIndex += 1) {
-        nextMap.set(runs[runIndex].id, { messageIndex, runIndex })
-      }
-    }
-    runLocationByConversationRef.current[conversation.id] = nextMap
+    runLocationByConversationRef.current[conversation.id] = buildRunLocationIndex(conversation)
+  }
+
+  function syncTaskRegistryForConversation(conversation: Conversation) {
+    replaceImageTasksForConversation(conversation.id, collectPendingImageTasks(conversation))
   }
 
   const registerActiveRun = (conversationId: string, runId: string, controller: AbortController) => {
@@ -217,59 +221,22 @@ export function useConversationsEngine() {
   }
 
   const touchConversationCache = (conversationId: string) => {
-    conversationCacheOrderRef.current = [
+    conversationCacheOrderRef.current = nextConversationCacheOrder(
+      conversationCacheOrderRef.current,
       conversationId,
-      ...conversationCacheOrderRef.current.filter((id) => id !== conversationId),
-    ].slice(0, MAX_IN_MEMORY_CONVERSATIONS)
+      MAX_IN_MEMORY_CONVERSATIONS,
+    )
   }
 
-  const compactConversationForMemory = (conversation: Conversation): Conversation => {
-    const cutoffIndex = Math.max(0, conversation.messages.length - 20)
-    return {
-      ...conversation,
-      messages: conversation.messages.map((message, index) => {
-        if (index >= cutoffIndex || !Array.isArray(message.runs) || message.runs.length === 0) {
-          return message
-        }
-
-        return {
-          ...message,
-          runs: message.runs.map((run) => ({
-            ...run,
-            images: run.images.map((image) => ({
-              ...image,
-              fullRef: undefined,
-              fileRef: image.thumbRef ?? image.fileRef,
-              refKey: image.refKey,
-              refKind: image.refKind,
-            })),
-          })),
-        }
-      }),
+  const getMemoryPressure = (): number => {
+    if (typeof performance === 'undefined') {
+      return 0
     }
+    return getBrowserMemoryPressure(performance as { memory?: { usedJSHeapSize: number; jsHeapSizeLimit: number } })
   }
 
-  const compressConversationForHighMemory = (conversation: Conversation): Conversation => {
-    const cutoffIndex = Math.max(0, conversation.messages.length - 6)
-    return {
-      ...conversation,
-      messages: conversation.messages.map((message, index) => {
-        if (index >= cutoffIndex || !Array.isArray(message.runs) || message.runs.length === 0) {
-          return message
-        }
-        return {
-          ...message,
-          runs: message.runs.map((run) => ({
-            ...run,
-            images: run.images.map((image) => ({
-              ...image,
-              fullRef: undefined,
-              fileRef: image.thumbRef ?? image.fileRef,
-            })),
-          })),
-        }
-      }),
-    }
+  const resolveAdaptiveRunConcurrency = (requested: number): number => {
+    return resolveAdaptiveRunConcurrencyByPressure(requested, getMemoryPressure())
   }
 
   const syncAndPersist = (
@@ -312,31 +279,6 @@ export function useConversationsEngine() {
     }
   }
 
-  const getMemoryPressure = (): number => {
-    if (typeof performance === 'undefined') {
-      return 0
-    }
-    const maybeMemory = performance as Performance & {
-      memory?: { usedJSHeapSize: number; jsHeapSizeLimit: number }
-    }
-    const info = maybeMemory.memory
-    if (!info || !info.jsHeapSizeLimit) {
-      return 0
-    }
-    return info.usedJSHeapSize / info.jsHeapSizeLimit
-  }
-
-  const resolveAdaptiveRunConcurrency = (requested: number): number => {
-    const normalized = Math.max(1, Math.floor(requested))
-    const pressure = getMemoryPressure()
-    if (pressure >= 0.78) {
-      return 1
-    }
-    if (pressure >= 0.65) {
-      return Math.min(2, normalized)
-    }
-    return normalized
-  }
 
   const flushPendingPersistence = async (): Promise<void> => {
     if (persistTimerRef.current !== null) {
@@ -356,9 +298,7 @@ export function useConversationsEngine() {
       const conversation = snapshot.contents[conversationId]
       if (conversation) {
         const isActive = conversationId === snapshot.activeId
-        const activeCompressed = isActive && pressure >= 0.74 ? compressConversationForHighMemory(conversation) : conversation
-        const persisted = isActive ? activeCompressed : compactConversationForMemory(conversation)
-        pendingConversations.push(persisted)
+        pendingConversations.push(prepareConversationForPersistence({ conversation, isActive, pressure }))
       }
     }
     await Promise.all(pendingConversations.map((conversation) => repository.saveConversation(conversation)))
@@ -413,7 +353,7 @@ export function useConversationsEngine() {
     const existing = snapshot.contents[conversationId]
     if (existing) {
       touchConversationCache(conversationId)
-      void resumePendingImagesForConversation(conversationId)
+      void resumePendingImagesForConversationRef.current(conversationId)
       return
     }
 
@@ -435,7 +375,7 @@ export function useConversationsEngine() {
       conversationCacheOrderRef.current,
     )
     syncAndPersist({ summaries: next.nextSummaries, contents: next.nextContents }, { saveIndex: false })
-    void resumePendingImagesForConversation(conversationId)
+    void resumePendingImagesForConversationRef.current(conversationId)
   }
 
   useEffect(() => {
@@ -599,8 +539,11 @@ export function useConversationsEngine() {
       item.id === conversationId ? { ...item, title: trimmedTitle } : item,
     )
     const currentConversation = snapshot.contents[conversationId]
-    const nextContents = currentConversation
-      ? { ...snapshot.contents, [conversationId]: { ...currentConversation, title: trimmedTitle } }
+    const nextContents: Record<string, Conversation> = currentConversation
+      ? {
+          ...snapshot.contents,
+          [conversationId]: { ...currentConversation, title: trimmedTitle, titleMode: 'manual' as const },
+        }
       : snapshot.contents
 
     syncAndPersist({ summaries: nextSummaries, contents: nextContents })
@@ -609,6 +552,7 @@ export function useConversationsEngine() {
       void repository.saveConversation({
         ...currentConversation,
         title: trimmedTitle,
+        titleMode: 'manual',
       })
       return
     }
@@ -617,10 +561,23 @@ export function useConversationsEngine() {
       if (!conversation) {
         return
       }
-      void repository.saveConversation({
+      const renamedConversation: Conversation = {
         ...conversation,
         title: trimmedTitle,
-      })
+        titleMode: 'manual',
+      }
+      const latestSnapshot = stateRef.current
+      const latestSummaries = latestSnapshot.summaries.map((item) =>
+        item.id === conversationId ? { ...item, title: trimmedTitle } : item,
+      )
+      syncAndPersist(
+        {
+          summaries: latestSummaries,
+          contents: { ...latestSnapshot.contents, [conversationId]: renamedConversation },
+        },
+        { saveIndex: false },
+      )
+      void repository.saveConversation(renamedConversation)
     })
   }
 
@@ -683,29 +640,6 @@ export function useConversationsEngine() {
     markFailedImagesPending,
   } = runMutation
 
-  const syncTaskRegistryForConversation = (conversation: Conversation) => {
-    const nextTasks = conversation.messages.flatMap((message) =>
-      (message.runs ?? []).flatMap((run) =>
-        run.images
-          .filter((image) => image.status === 'pending' && Boolean(image.serverTaskId || image.serverTaskMeta))
-          .map((image) => ({
-            id: makeImageTaskId(conversation.id, run.id, image.id),
-            conversationId: conversation.id,
-            runId: run.id,
-            imageId: image.id,
-            seq: image.seq,
-            channelId: run.channelId,
-            serverTaskId: image.serverTaskId,
-            serverTaskMeta: image.serverTaskMeta,
-            createdAt: run.createdAt,
-            updatedAt: image.lastResumeAttemptAt ?? image.detachedAt ?? conversation.updatedAt,
-          })),
-      ),
-    )
-
-    replaceImageTasksForConversation(conversation.id, nextTasks)
-  }
-
   const { resumePendingImagesForConversation } = useResumeFlow({
     stateActiveId: state.activeId,
     stateRef,
@@ -720,6 +654,7 @@ export function useConversationsEngine() {
     },
     flushPendingPersistence,
   })
+  resumePendingImagesForConversationRef.current = resumePendingImagesForConversation
 
   const sendFlow = useMemo(
     () =>

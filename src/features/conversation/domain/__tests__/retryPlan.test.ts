@@ -11,6 +11,7 @@ describe('buildRetryPlan', () => {
     const conversation: Conversation = {
       id: 'c1',
       title: 'T',
+      titleMode: 'manual',
       createdAt: '2026-01-01T00:00:00.000Z',
       updatedAt: '2026-01-01T00:00:00.000Z',
       sideMode: 'single',
@@ -119,6 +120,7 @@ describe('buildReplayPlan', () => {
     const conversation: Conversation = {
       id: 'c1',
       title: 'T',
+      titleMode: 'manual',
       createdAt: '2026-01-01T00:00:00.000Z',
       updatedAt: '2026-01-01T00:00:00.000Z',
       sideMode: 'single',

@@ -13,7 +13,13 @@ import type {
   Side,
   SingleSideSettings,
 } from '../../types/chat'
-import { createConversation, makeId, summarizePromptAsTitle } from '../../utils/chat'
+import {
+  createConversation,
+  hasEligibleConversationTitleMessage,
+  makeId,
+  normalizeConversationTitleMode,
+  summarizePromptAsTitle,
+} from '../../utils/chat'
 import type { createConversationOrchestrator } from '../../features/conversation/application/conversationOrchestrator'
 import { buildTextRequestMessages, resolveSendGenerationMode } from '../conversations/sendFlowUtils'
 import {
@@ -212,13 +218,25 @@ export function createSendFlowModule(deps: SendFlowDeps) {
     titleSource?: string,
     userSourceImages: RunSourceImageRef[] = [],
     assistantActions?: MessageAction[],
+    options?: { titleEligible?: boolean },
   ): Conversation => {
     const now = new Date().toISOString()
+    const titleEligible = options?.titleEligible ?? true
+    const summaryTitle = stateRef.current.summaries.find((item) => item.id === conversation.id)?.title?.trim() ?? ''
+    const resolvedConversationTitle =
+      summaryTitle.length > 0 && summaryTitle !== conversation.title && conversation.titleMode === 'default'
+        ? summaryTitle
+        : conversation.title
+    const resolvedConversationTitleMode =
+      resolvedConversationTitle === conversation.title
+        ? conversation.titleMode
+        : normalizeConversationTitleMode(undefined, resolvedConversationTitle)
     const userMessage: Message = {
       id: makeId(),
       createdAt: now,
       role: 'user',
       content: userContent,
+      titleEligible,
       sourceImages: userSourceImages,
     }
     const assistantMessage: Message = {
@@ -229,14 +247,17 @@ export function createSendFlowModule(deps: SendFlowDeps) {
       runs,
       actions: assistantActions,
     }
-    const hadUserMessage = conversation.messages.some((message) => message.role === 'user')
+    const hadEligibleUserMessage = hasEligibleConversationTitleMessage(conversation.messages)
     const shouldAutoRenameTitle = stateRef.current.autoRenameConversationTitle
+    const canAutoRenameTitle =
+      titleEligible && !hadEligibleUserMessage && resolvedConversationTitleMode === 'default' && shouldAutoRenameTitle
     const nextTitle =
-      !hadUserMessage && shouldAutoRenameTitle ? summarizePromptAsTitle(titleSource ?? userContent) : conversation.title
+      canAutoRenameTitle ? summarizePromptAsTitle(titleSource ?? userContent) : resolvedConversationTitle
 
     return {
       ...conversation,
       title: nextTitle,
+      titleMode: canAutoRenameTitle ? 'auto' : resolvedConversationTitleMode,
       updatedAt: now,
       messages: [...conversation.messages, userMessage, assistantMessage],
     }
@@ -313,8 +334,10 @@ export function createSendFlowModule(deps: SendFlowDeps) {
         snapshot.draft,
         `模型已切换为 ${modelCommand.model.name}，后续请求将默认使用该模型。`,
         [],
-        modelCommand.model.name,
+        undefined,
         [],
+        undefined,
+        { titleEligible: false },
       )
       persistConversation(updatedConversation)
       setActiveConversation(updatedConversation.id)
@@ -333,6 +356,7 @@ export function createSendFlowModule(deps: SendFlowDeps) {
     }
 
     const effectiveDraft = oneShotParseResult.cleanedPrompt
+    const titleEligible = effectiveDraft.trim().length > 0
     const modelAdjustedSettingsBySide = modelCommand?.scope === 'temporary'
       ? (() => {
           const nextSettings = { ...activeState.activeSettingsBySide }
@@ -373,6 +397,7 @@ export function createSendFlowModule(deps: SendFlowDeps) {
         effectiveDraft,
         [],
         blockedReason.actions,
+        { titleEligible },
       )
       persistConversation(updatedConversation)
       setActiveConversation(updatedConversation.id)
@@ -429,6 +454,8 @@ export function createSendFlowModule(deps: SendFlowDeps) {
         [],
         effectiveDraft,
         [],
+        undefined,
+        { titleEligible },
       )
       persistConversation(updatedConversation)
       if (!currentActive) {
@@ -529,6 +556,8 @@ export function createSendFlowModule(deps: SendFlowDeps) {
         plan.pendingRuns,
         effectiveDraft,
         sourceImageRefs,
+        undefined,
+        { titleEligible },
       )
       persistConversation(updatedConversation)
       setActiveConversation(updatedConversation.id)
@@ -544,6 +573,8 @@ export function createSendFlowModule(deps: SendFlowDeps) {
         plan.pendingRuns,
         effectiveDraft,
         sourceImageRefs,
+        undefined,
+        { titleEligible },
       )
       persistConversation(updatedConversation)
       targetConversationId = updatedConversation.id
