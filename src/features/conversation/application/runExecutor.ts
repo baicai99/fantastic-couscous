@@ -1,17 +1,15 @@
-﻿import { generateImagesByProvider } from '../../../services/providerGateway'
-import { getImageBlob, putImageBlob } from '../../../services/imageAssetStore'
+﻿import { conversationAssetStorePort } from './ports/assetStorePort'
+import { conversationProviderGatewayPort } from './ports/providerGatewayPort'
 import { autoSaveImage, isSaveDirectoryReady } from '../../../services/imageSave'
 import type {
-  ApiChannel,
-  ImageRefKind,
-  ImageThreadState,
   Run,
-  RunSourceImageRef,
-  SettingPrimitive,
   Side,
   SideMode,
   SingleSideSettings,
-} from '../../../types/chat'
+  SettingPrimitive,
+} from '../../../types/conversation'
+import type { ApiChannel } from '../../../types/channel'
+import type { ImageRefKind, ImageThreadState, RunSourceImageRef } from '../../../types/image'
 import type { ProviderSourceImage } from '../../../types/provider'
 import { makeId, toSettingsSnapshot } from '../../../utils/chat'
 import { classifyFailure } from '../domain/failureClassifier'
@@ -54,7 +52,9 @@ export interface CreateRunInput {
 }
 
 export interface RunExecutorDeps {
-  generateImagesFn?: typeof generateImagesByProvider
+  generateImagesFn?: typeof conversationProviderGatewayPort.generateImages
+  getImageBlobFn?: typeof conversationAssetStorePort.getImageBlob
+  putImageBlobFn?: typeof conversationAssetStorePort.putImageBlob
   autoSaveImageFn?: typeof autoSaveImage
 }
 
@@ -93,7 +93,9 @@ interface ProcessedPendingImage {
 type ProcessedImage = ProcessedSuccessImage | ProcessedFailedImage | ProcessedPendingImage
 
 export function createRunExecutor(deps: RunExecutorDeps = {}) {
-  const generateImagesFn = deps.generateImagesFn ?? generateImagesByProvider
+  const generateImagesFn = deps.generateImagesFn ?? conversationProviderGatewayPort.generateImages
+  const getImageBlobFn = deps.getImageBlobFn ?? conversationAssetStorePort.getImageBlob
+  const putImageBlobFn = deps.putImageBlobFn ?? conversationAssetStorePort.putImageBlob
   const autoSaveImageFn = deps.autoSaveImageFn ?? autoSaveImage
   const objectUrls = new Set<string>()
 
@@ -223,7 +225,7 @@ export function createRunExecutor(deps: RunExecutorDeps = {}) {
     }
 
     const assetKey = makeAssetKey()
-    await putImageBlob(assetKey, blob)
+    await putImageBlobFn(assetKey, blob)
 
     const thumbRef = (await createThumbnailDataUrl(blob)) ?? src
     return {
@@ -311,7 +313,7 @@ export function createRunExecutor(deps: RunExecutorDeps = {}) {
         const providerSourceImages: ProviderSourceImage[] = []
         const missingSourceImageNames: string[] = []
         for (const sourceImage of sourceImages) {
-          const blob = await getImageBlob(sourceImage.assetKey)
+          const blob = await getImageBlobFn(sourceImage.assetKey)
           if (!blob) {
             missingSourceImageNames.push(sourceImage.fileName || sourceImage.id)
             continue

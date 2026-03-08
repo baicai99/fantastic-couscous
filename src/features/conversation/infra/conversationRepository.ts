@@ -12,7 +12,8 @@ import {
   saveIndex,
   saveStagedSettingsToStorage,
 } from '../../../services/conversationStorage'
-import type { ApiChannel, Conversation, ConversationSummary, Side, SideMode, SingleSideSettings } from '../../../types/chat'
+import type { ApiChannel } from '../../../types/channel'
+import type { Conversation, ConversationSummary, Side, SideMode, SingleSideSettings } from '../../../types/conversation'
 import type { PanelValueFormat, PanelVariableRow } from '../domain/types'
 
 export interface ConversationRepository {
@@ -30,6 +31,7 @@ export interface ConversationRepository {
     runConcurrency?: number
     dynamicPromptEnabled?: boolean
     autoRenameConversationTitle?: boolean
+    autoRenameConversationTitleModelId?: string | null
     panelValueFormat?: PanelValueFormat
     panelVariables?: PanelVariableRow[]
     favoriteModelIds?: string[]
@@ -47,6 +49,7 @@ export interface ConversationRepository {
     runConcurrency: number
     dynamicPromptEnabled: boolean
     autoRenameConversationTitle: boolean
+    autoRenameConversationTitleModelId?: string | null
     panelValueFormat: PanelValueFormat
     panelVariables: PanelVariableRow[]
     favoriteModelIds: string[]
@@ -73,6 +76,7 @@ export function createConversationRepository(): ConversationRepository {
       runConcurrency,
       dynamicPromptEnabled,
       autoRenameConversationTitle,
+      autoRenameConversationTitleModelId,
       panelValueFormat,
       panelVariables,
       favoriteModelIds,
@@ -84,6 +88,7 @@ export function createConversationRepository(): ConversationRepository {
         runConcurrency,
         dynamicPromptEnabled,
         autoRenameConversationTitle,
+        autoRenameConversationTitleModelId,
         panelValueFormat,
         panelVariables,
         favoriteModelIds,

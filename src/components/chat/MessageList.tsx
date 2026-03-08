@@ -4,10 +4,10 @@ import { Button, Card, Collapse, Dropdown, Modal, Space, Tooltip, Typography, me
 import type { MenuProps } from 'antd'
 import type { Conversation, FailureCode, ImageItem, Message, MessageAction, Run, Side } from '../../types/chat'
 import { gridColumnCount, sortImagesBySeq } from '../../utils/chat'
+import type { ConversationSourceImagePreview } from '../../features/conversation/application/conversationSourceImagePreviewService'
 import { ENABLE_MESSAGE_WINDOWING } from '../../features/performance/flags'
 import { startMetric, trackDuration } from '../../features/performance/runtimeMetrics'
 import { useDebouncedCallback } from '../../hooks/useDebouncedCallback'
-import { getImageBlob } from '../../services/imageAssetStore'
 
 const { Paragraph, Text } = Typography
 const DEFAULT_ESTIMATED_MESSAGE_HEIGHT = 220
@@ -44,6 +44,7 @@ interface MessageListProps {
   multiImageInitialLimit?: number
   multiImagePageSize?: number
   onAssistantMessageAction?: (action: MessageAction) => void
+  resolveUserSourceImagePreview?: (assetKey: string) => Promise<ConversationSourceImagePreview | null>
 }
 
 interface DisplayImage {
@@ -293,13 +294,19 @@ function buildRunFailureCopyText(run: Run, runNumber: number): string {
 }
 
 async function copyTextToClipboard(text: string): Promise<boolean> {
-  try {
-    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+    try {
       await navigator.clipboard.writeText(text)
       return true
+    } catch {
+      return fallbackCopyTextToClipboard(text)
     }
-  } catch {}
+  }
 
+  return fallbackCopyTextToClipboard(text)
+}
+
+function fallbackCopyTextToClipboard(text: string): boolean {
   if (typeof document === 'undefined') {
     return false
   }
@@ -659,6 +666,7 @@ function MessageListComponent(props: MessageListProps) {
     multiImageInitialLimit = DEFAULT_MULTI_IMAGE_INITIAL_LIMIT,
     multiImagePageSize = DEFAULT_MULTI_IMAGE_PAGE_SIZE,
     onAssistantMessageAction,
+    resolveUserSourceImagePreview,
   } = props
 
   const viewportRef = useRef<HTMLDivElement | null>(null)
@@ -677,7 +685,7 @@ function MessageListComponent(props: MessageListProps) {
   const [paramModalMessageId, setParamModalMessageId] = useState<string | null>(null)
   const [showScrollToBottom, setShowScrollToBottom] = useState(false)
   const [userSourceImageMap, setUserSourceImageMap] = useState<Record<string, UserSourceImagePreview[]>>({})
-  const userSourceImageUrlsRef = useRef<string[]>([])
+  const userSourceImageCleanupRef = useRef<Array<() => void>>([])
   const debouncedSetViewportHeight = useDebouncedCallback((nextHeight: number) => {
     setViewportHeight((prev) => (prev === nextHeight ? prev : nextHeight))
   }, 80)
@@ -869,11 +877,18 @@ function MessageListComponent(props: MessageListProps) {
   }
 
   useEffect(() => {
+    if (!resolveUserSourceImagePreview) {
+      userSourceImageCleanupRef.current.forEach((cleanup) => cleanup())
+      userSourceImageCleanupRef.current = []
+      setUserSourceImageMap({})
+      return
+    }
+
     let cancelled = false
 
     const resolveUserSourceImages = async () => {
       const nextMap: Record<string, UserSourceImagePreview[]> = {}
-      const nextUrlsToRevoke: string[] = []
+      const nextCleanups: Array<() => void> = []
 
       for (const message of visibleMessages) {
         if (message.role !== 'user' || !Array.isArray(message.sourceImages) || message.sourceImages.length === 0) {
@@ -882,15 +897,16 @@ function MessageListComponent(props: MessageListProps) {
 
         const previews: UserSourceImagePreview[] = []
         for (const sourceImage of message.sourceImages) {
-          const blob = await getImageBlob(sourceImage.assetKey)
-          if (!blob) {
+          const preview = await resolveUserSourceImagePreview(sourceImage.assetKey)
+          if (!preview) {
             continue
           }
-          const src = URL.createObjectURL(blob)
-          nextUrlsToRevoke.push(src)
+          if (preview.cleanup) {
+            nextCleanups.push(preview.cleanup)
+          }
           previews.push({
             id: sourceImage.id,
-            src,
+            src: preview.src,
             fileName: sourceImage.fileName || '参考图',
           })
         }
@@ -901,12 +917,12 @@ function MessageListComponent(props: MessageListProps) {
       }
 
       if (cancelled) {
-        nextUrlsToRevoke.forEach((url) => URL.revokeObjectURL(url))
+        nextCleanups.forEach((cleanup) => cleanup())
         return
       }
 
-      userSourceImageUrlsRef.current.forEach((url) => URL.revokeObjectURL(url))
-      userSourceImageUrlsRef.current = nextUrlsToRevoke
+      userSourceImageCleanupRef.current.forEach((cleanup) => cleanup())
+      userSourceImageCleanupRef.current = nextCleanups
       setUserSourceImageMap(nextMap)
     }
 
@@ -915,12 +931,12 @@ function MessageListComponent(props: MessageListProps) {
     return () => {
       cancelled = true
     }
-  }, [visibleMessages])
+  }, [resolveUserSourceImagePreview, visibleMessages])
 
   useEffect(() => {
     return () => {
-      userSourceImageUrlsRef.current.forEach((url) => URL.revokeObjectURL(url))
-      userSourceImageUrlsRef.current = []
+      userSourceImageCleanupRef.current.forEach((cleanup) => cleanup())
+      userSourceImageCleanupRef.current = []
     }
   }, [])
 

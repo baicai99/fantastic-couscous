@@ -156,6 +156,7 @@ describe('conversationRepository', () => {
       runConcurrency: 4,
       dynamicPromptEnabled: true,
       autoRenameConversationTitle: true,
+      autoRenameConversationTitleModelId: 'model-a',
       panelValueFormat: 'json',
       panelVariables,
       favoriteModelIds: [],
@@ -164,5 +165,6 @@ describe('conversationRepository', () => {
     const staged = repo.loadStagedSettings()
     expect(staged?.panelVariables).toEqual(panelVariables)
     expect(staged?.autoRenameConversationTitle).toBe(true)
+    expect(staged?.autoRenameConversationTitleModelId).toBe('model-a')
   })
 })

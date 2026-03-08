@@ -1,4 +1,4 @@
-import type { SettingPrimitive } from '../../types/chat'
+import type { SettingPrimitive } from '../../types/conversation'
 import type {
   NormalizedImageItem,
   NormalizedImageRequest,

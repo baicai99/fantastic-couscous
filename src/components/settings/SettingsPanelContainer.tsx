@@ -92,6 +92,7 @@ interface SettingsPanelProps {
   showAdvancedVariables: boolean
   dynamicPromptEnabled: boolean
   autoRenameConversationTitle: boolean
+  autoRenameConversationTitleModelId: string | null
   runConcurrency: number
   onSideModeChange: (mode: SideMode) => void
   onSideCountChange: (count: number) => void
@@ -102,6 +103,7 @@ interface SettingsPanelProps {
   onShowAdvancedVariablesChange: (enabled: boolean) => void
   onDynamicPromptEnabledChange: (enabled: boolean) => void
   onAutoRenameConversationTitleChange: (enabled: boolean) => void
+  onAutoRenameConversationTitleModelIdChange: (value: string | null) => void
   onRunConcurrencyChange: (value: number) => void
   onTogglePanelMode: () => void
   openAddChannelModalSignal?: number
@@ -124,6 +126,7 @@ export function SettingsPanelContainer(props: SettingsPanelProps) {
     showAdvancedVariables,
     dynamicPromptEnabled,
     autoRenameConversationTitle,
+    autoRenameConversationTitleModelId,
     runConcurrency,
     onSideModeChange,
     onSideCountChange,
@@ -134,6 +137,7 @@ export function SettingsPanelContainer(props: SettingsPanelProps) {
     onShowAdvancedVariablesChange,
     onDynamicPromptEnabledChange,
     onAutoRenameConversationTitleChange,
+    onAutoRenameConversationTitleModelIdChange,
     onRunConcurrencyChange,
     onTogglePanelMode,
     openAddChannelModalSignal,
@@ -403,6 +407,11 @@ export function SettingsPanelContainer(props: SettingsPanelProps) {
     const selected = channelImportItems.filter((item) => item.selected && item.action !== 'skip' && !item.invalidReason).length
     return { invalid, duplicated, selected, total: channelImportItems.length }
   }, [channelImportItems])
+
+  const autoRenameTitleModels = useMemo(
+    () => models.filter((item) => !isBlockedTextModel({ id: item.id, name: item.name })),
+    [models],
+  )
 
   const renderSettingForm = (side: Side) => {
     const settings = settingsBySide[side]
@@ -1012,6 +1021,33 @@ export function SettingsPanelContainer(props: SettingsPanelProps) {
                     <Text>根据首条提问自动重命名新对话标题</Text>
                   </Space>
                   <Text type="secondary">仅对新对话的首个有效提问生效；不会改写手动标题或历史标题。</Text>
+                  <Form layout="vertical">
+                    <Form.Item label="标题生成模型" style={{ marginBottom: 0 }}>
+                      <Select
+                        showSearch
+                        allowClear
+                        className="full-width"
+                        value={autoRenameConversationTitleModelId ?? undefined}
+                        disabled={!autoRenameConversationTitle || autoRenameTitleModels.length === 0}
+                        placeholder="选择用于生成对话标题的模型"
+                        options={autoRenameTitleModels.map((item) => ({ label: item.name, value: item.id }))}
+                        optionFilterProp="label"
+                        filterOption={(input, option) => {
+                          const keyword = input.trim().toLowerCase()
+                          const value = String(option?.value ?? '')
+                          const model = autoRenameTitleModels.find((item) => item.id === value)
+                          const label = String(option?.label ?? '').toLowerCase()
+                          const id = value.toLowerCase()
+                          const aliases = model ? inferModelSearchTokens(model) : ''
+                          const haystack = `${label} ${id} ${aliases}`
+                          return haystack.includes(keyword)
+                        }}
+                        notFoundContent="暂无可用文本模型"
+                        onChange={(value) => onAutoRenameConversationTitleModelIdChange(value ?? null)}
+                      />
+                    </Form.Item>
+                  </Form>
+                  <Text type="secondary">开启后，将使用所选模型异步生成标题，效果类似 ChatGPT 新对话自动命名。</Text>
                 </Space>
                 <Form layout="vertical">
                   <Form.Item label="循环并发" style={{ marginBottom: 0 }}>

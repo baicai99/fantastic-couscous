@@ -1,6 +1,7 @@
-import type { ApiChannel, ModelCatalog, ModelSpec, SettingPrimitive } from '../types/chat'
-import { getProviderAdapterForChannel } from './providers/providerRegistry'
-import { resolveProviderId } from './providers/providerId'
+import type { ApiChannel } from '../types/channel'
+import type { SettingPrimitive } from '../types/conversation'
+import type { ModelCatalog, ModelSpec } from '../types/model'
+import { resolveChannelProviderAdapter, resolveChannelProviderId } from './providers/providerSelection'
 
 const EMPTY_CATALOG: ModelCatalog = { models: [] }
 
@@ -66,12 +67,9 @@ export function getModelCatalogFromChannels(channels: ApiChannel[]): ModelCatalo
   const merged = new Map<string, ModelSpec>()
 
   for (const channel of channels) {
-    const adapter = getProviderAdapterForChannel(channel)
+    const adapter = resolveChannelProviderAdapter(channel)
     const modelIds = Array.isArray(channel.models) ? channel.models : []
-    const providerId = resolveProviderId({
-      providerId: channel.providerId,
-      baseUrl: channel.baseUrl,
-    })
+    const providerId = resolveChannelProviderId(channel)
     for (const modelId of modelIds) {
       if (!modelId) {
         continue

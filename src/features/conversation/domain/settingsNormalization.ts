@@ -1,13 +1,13 @@
 import type {
-  ApiChannel,
   Conversation,
-  ModelCatalog,
   Run,
-  RunSourceImageRef,
   Side,
   SideMode,
   SingleSideSettings,
-} from '../../../types/chat'
+} from '../../../types/conversation'
+import type { ApiChannel } from '../../../types/channel'
+import type { RunSourceImageRef } from '../../../types/image'
+import type { ModelCatalog } from '../../../types/model'
 import { clamp, cloneSideSettings, DEFAULT_CONVERSATION_TITLE, normalizeConversationTitleMode } from '../../../utils/chat'
 import { getComputedPresetResolution, normalizeSizeTier } from './sizeResolution'
 import {

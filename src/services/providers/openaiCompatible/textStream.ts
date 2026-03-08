@@ -1,34 +1,109 @@
 import type { NormalizedTextRequest, ProviderError } from '../../../types/provider'
 
+function extractTextFragment(value: unknown): string {
+  if (typeof value === 'string') {
+    return value
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => extractTextFragment(item)).filter(Boolean).join('')
+  }
+
+  if (!value || typeof value !== 'object') {
+    return ''
+  }
+
+  const record = value as Record<string, unknown>
+
+  if (typeof record.text === 'string') {
+    return record.text
+  }
+
+  const directFields = [
+    record.text,
+    record.value,
+    record.output_text,
+    record.content,
+    record.message,
+    record.part,
+    record.item,
+    record.output,
+    record.response,
+  ]
+
+  for (const field of directFields) {
+    const extracted = extractTextFragment(field)
+    if (extracted) {
+      return extracted
+    }
+  }
+
+  if (typeof record.delta === 'string') {
+    return record.delta
+  }
+
+  return ''
+}
+
+function extractChoiceText(choice: unknown): string {
+  if (!choice || typeof choice !== 'object') {
+    return ''
+  }
+
+  const record = choice as Record<string, unknown>
+  const delta = record.delta
+  if (delta && typeof delta === 'object') {
+    const deltaRecord = delta as Record<string, unknown>
+    const deltaContent = extractTextFragment(deltaRecord.content)
+    if (deltaContent) {
+      return deltaContent
+    }
+
+    const deltaText = extractTextFragment(deltaRecord.text)
+    if (deltaText) {
+      return deltaText
+    }
+
+    const deltaOutputText = extractTextFragment(deltaRecord.output_text)
+    if (deltaOutputText) {
+      return deltaOutputText
+    }
+  }
+
+  const directFields = [record.message, record.text, record.output_text, record.content]
+  for (const field of directFields) {
+    const extracted = extractTextFragment(field)
+    if (extracted) {
+      return extracted
+    }
+  }
+
+  return ''
+}
+
 export function extractStreamDeltaText(payload: unknown): string {
   if (!payload || typeof payload !== 'object') {
     return ''
   }
-  const choices = (payload as { choices?: unknown[] }).choices
-  if (!Array.isArray(choices) || choices.length === 0) {
-    return ''
+
+  const record = payload as Record<string, unknown>
+  const choices = record.choices
+  if (Array.isArray(choices) && choices.length > 0) {
+    const choiceText = extractChoiceText(choices[0])
+    if (choiceText) {
+      return choiceText
+    }
   }
 
-  const first = choices[0] as { delta?: { content?: unknown } }
-  const content = first?.delta?.content
-  if (typeof content === 'string') {
-    return content
-  }
-  if (!Array.isArray(content)) {
-    return ''
+  const directFields = [record.delta, record.output_text, record.text, record.part, record.item, record.response, record.message]
+  for (const field of directFields) {
+    const extracted = extractTextFragment(field)
+    if (extracted) {
+      return extracted
+    }
   }
 
-  const segments = content
-    .map((item) => {
-      if (!item || typeof item !== 'object') {
-        return ''
-      }
-      const chunk = item as { text?: unknown }
-      return typeof chunk.text === 'string' ? chunk.text : ''
-    })
-    .filter(Boolean)
-
-  return segments.join('')
+  return ''
 }
 
 export async function streamOpenAICompatibleText(input: {
@@ -180,4 +255,3 @@ export async function streamOpenAICompatibleText(input: {
     throw normalized
   }
 }
-

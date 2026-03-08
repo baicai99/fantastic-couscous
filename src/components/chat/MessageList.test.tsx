@@ -4,7 +4,6 @@ import { message } from 'antd'
 import { afterEach, vi } from 'vitest'
 import { MessageList } from './MessageList'
 import type { Conversation } from '../../types/chat'
-import * as imageAssetStore from '../../services/imageAssetStore'
 
 function createDeferred<T = void>() {
   let resolve!: (value: T | PromiseLike<T>) => void
@@ -986,9 +985,11 @@ describe('MessageList', () => {
   })
 
   it('renders user source image preview inside user bubble', async () => {
-    const createObjectUrlSpy = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:user-source')
-    const revokeObjectUrlSpy = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
-    const getImageBlobSpy = vi.spyOn(imageAssetStore, 'getImageBlob').mockResolvedValue(new Blob(['img'], { type: 'image/png' }))
+    const cleanup = vi.fn()
+    const resolveUserSourceImagePreview = vi.fn().mockResolvedValue({
+      src: 'blob:user-source',
+      cleanup,
+    })
     const conversation = makeUserConversation('user with image', [
       {
         id: 'source-1',
@@ -1006,21 +1007,19 @@ describe('MessageList', () => {
         onOpenPreview={vi.fn()}
         onRetryRun={vi.fn()}
         onReplayRun={vi.fn()}
+        resolveUserSourceImagePreview={resolveUserSourceImagePreview}
       />,
     )
 
     const previewImage = await screen.findByRole('img', { name: 'ref.png' })
     expect(previewImage).toHaveAttribute('src', 'blob:user-source')
-    expect(getImageBlobSpy).toHaveBeenCalledWith('source:key:1')
+    expect(resolveUserSourceImagePreview).toHaveBeenCalledWith('source:key:1')
     const textNode = screen.getByText('user with image')
     const order = previewImage.compareDocumentPosition(textNode)
     expect(order & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
 
     unmount()
-    expect(revokeObjectUrlSpy).toHaveBeenCalledWith('blob:user-source')
-    createObjectUrlSpy.mockRestore()
-    revokeObjectUrlSpy.mockRestore()
-    getImageBlobSpy.mockRestore()
+    expect(cleanup).toHaveBeenCalled()
   })
 
   it('strips trailing run-count suffix when sending prompt back to input', async () => {

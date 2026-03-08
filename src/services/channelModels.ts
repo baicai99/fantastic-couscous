@@ -1,6 +1,6 @@
-import type { ApiChannel } from '../types/chat'
+import type { ApiChannel } from '../types/channel'
 import { discoverModelsByProvider } from './providerGateway'
-import { getProviderAdapterForChannel } from './providers/providerRegistry'
+import { resolveChannelProviderAdapter } from './providers/providerSelection'
 
 export type ChannelModelEntry = {
   id: string
@@ -116,7 +116,7 @@ function getPaginationCursor(payload: unknown, list: unknown[]): string | null {
 export async function fetchChannelModelEntries(
   channel: Pick<ApiChannel, 'baseUrl' | 'apiKey' | 'providerId'>,
 ): Promise<ChannelModelEntry[]> {
-  const adapter = getProviderAdapterForChannel(channel)
+  const adapter = resolveChannelProviderAdapter(channel)
   if (adapter.discoverModelEntries) {
     const entries = await adapter.discoverModelEntries({
       baseUrl: channel.baseUrl,

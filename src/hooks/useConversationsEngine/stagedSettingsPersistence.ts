@@ -8,6 +8,7 @@ type StagedSettingsSnapshot = Pick<
   | 'runConcurrency'
   | 'dynamicPromptEnabled'
   | 'autoRenameConversationTitle'
+  | 'autoRenameConversationTitleModelId'
   | 'panelValueFormat'
   | 'panelVariables'
   | 'favoriteModelIds'
@@ -23,6 +24,7 @@ interface PersistStagedSettingsInput {
     runConcurrency: number
     dynamicPromptEnabled: boolean
     autoRenameConversationTitle: boolean
+    autoRenameConversationTitleModelId: string | null
     panelValueFormat: PanelValueFormat
     panelVariables: PanelVariableRow[]
     favoriteModelIds: string[]
@@ -38,6 +40,8 @@ export function persistStagedSettings(input: PersistStagedSettingsInput): void {
     runConcurrency: overrides?.runConcurrency ?? snapshot.runConcurrency,
     dynamicPromptEnabled: overrides?.dynamicPromptEnabled ?? snapshot.dynamicPromptEnabled,
     autoRenameConversationTitle: overrides?.autoRenameConversationTitle ?? snapshot.autoRenameConversationTitle,
+    autoRenameConversationTitleModelId:
+      overrides?.autoRenameConversationTitleModelId ?? snapshot.autoRenameConversationTitleModelId,
     panelValueFormat: overrides?.panelValueFormat ?? snapshot.panelValueFormat,
     panelVariables: overrides?.panelVariables ?? snapshot.panelVariables,
     favoriteModelIds: overrides?.favoriteModelIds ?? snapshot.favoriteModelIds,

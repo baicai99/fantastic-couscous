@@ -1,4 +1,5 @@
-import type { ApiChannel, SettingPrimitive } from '../types/chat'
+import type { ApiChannel } from '../types/channel'
+import type { SettingPrimitive } from '../types/conversation'
 import type { ProviderSourceImage } from '../types/provider'
 import {
   generateImagesByProvider,

@@ -1,13 +1,10 @@
 import type {
   Conversation,
-  FailureCode,
-  ImageRefKind,
-  ImageThreadState,
-  ModelCatalog,
   Run,
-  RunSourceImageRef,
   SettingPrimitive,
-} from '../../../types/chat'
+} from '../../../types/conversation'
+import type { FailureCode, ImageRefKind, ImageThreadState, RunSourceImageRef } from '../../../types/image'
+import type { ModelCatalog } from '../../../types/model'
 import type { CreateRunInput } from './runExecutor'
 import { buildReplayPlan, buildRetryPlan, planRunBatch } from '../domain/runPlanning'
 import type { ConversationState } from '../state/conversationState'

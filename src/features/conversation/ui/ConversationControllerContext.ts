@@ -1,6 +1,6 @@
 import { createContext } from 'react'
-import { useConversations } from '../../../hooks/useConversations'
+import type { AppConversationController } from '../application/conversationControllerContract'
 
-export type ConversationController = ReturnType<typeof useConversations>
+export type ConversationController = AppConversationController
 
 export const ConversationControllerContext = createContext<ConversationController | null>(null)

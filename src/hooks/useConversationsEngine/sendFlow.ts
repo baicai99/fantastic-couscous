@@ -15,12 +15,18 @@ import type {
 } from '../../types/chat'
 import {
   createConversation,
+  DEFAULT_CONVERSATION_TITLE,
   hasEligibleConversationTitleMessage,
   makeId,
   normalizeConversationTitleMode,
   summarizePromptAsTitle,
 } from '../../utils/chat'
 import type { createConversationOrchestrator } from '../../features/conversation/application/conversationOrchestrator'
+import {
+  buildConversationTitleGenerationMessages,
+  resolveConversationTitleChannel,
+  sanitizeGeneratedConversationTitle,
+} from '../../features/conversation/domain/conversationTitleDomain'
 import { buildTextRequestMessages, resolveSendGenerationMode } from '../conversations/sendFlowUtils'
 import {
   applyOneShotSizeOverridesToSettings,
@@ -210,18 +216,7 @@ export function createSendFlowModule(deps: SendFlowDeps) {
     return refreshed.contents[refreshed.activeId] ?? null
   }
 
-  const appendConversationEntry = (
-    conversation: Conversation,
-    userContent: string,
-    assistantContent: string,
-    runs: Run[] = [],
-    titleSource?: string,
-    userSourceImages: RunSourceImageRef[] = [],
-    assistantActions?: MessageAction[],
-    options?: { titleEligible?: boolean },
-  ): Conversation => {
-    const now = new Date().toISOString()
-    const titleEligible = options?.titleEligible ?? true
+  const resolveConversationTitleState = (conversation: Conversation) => {
     const summaryTitle = stateRef.current.summaries.find((item) => item.id === conversation.id)?.title?.trim() ?? ''
     const resolvedConversationTitle =
       summaryTitle.length > 0 && summaryTitle !== conversation.title && conversation.titleMode === 'default'
@@ -231,6 +226,110 @@ export function createSendFlowModule(deps: SendFlowDeps) {
       resolvedConversationTitle === conversation.title
         ? conversation.titleMode
         : normalizeConversationTitleMode(undefined, resolvedConversationTitle)
+
+    return {
+      title: resolvedConversationTitle,
+      titleMode: resolvedConversationTitleMode,
+    }
+  }
+
+  const shouldGenerateConversationTitle = (conversation: Conversation, titleEligible: boolean): boolean => {
+    const autoRenameConversationTitle = stateRef.current.autoRenameConversationTitle
+    const hadEligibleUserMessage = hasEligibleConversationTitleMessage(conversation.messages)
+    const resolvedTitleState = resolveConversationTitleState(conversation)
+
+    return titleEligible && autoRenameConversationTitle && !hadEligibleUserMessage && resolvedTitleState.titleMode === 'default'
+  }
+
+  const maybeGenerateConversationTitle = (input: {
+    conversationId: string
+    titleSource: string
+    shouldGenerateTitle: boolean
+  }) => {
+    const normalizedTitleSource = input.titleSource.trim()
+    const snapshot = stateRef.current
+    const titleModelId = snapshot.autoRenameConversationTitleModelId
+    const titleChannel = resolveConversationTitleChannel(snapshot.channels, titleModelId)
+
+    if (
+      !input.shouldGenerateTitle
+      || !snapshot.autoRenameConversationTitle
+      || !titleModelId
+      || !titleChannel
+      || normalizedTitleSource.length === 0
+    ) {
+      return
+    }
+
+    const resolvedTitleModelId = titleModelId
+    const resolvedTitleChannel = titleChannel
+
+    void (async () => {
+      let generatedTitle = ''
+      try {
+        await streamTextByProvider({
+          channel: resolvedTitleChannel,
+          request: {
+            modelId: resolvedTitleModelId,
+            messages: buildConversationTitleGenerationMessages(normalizedTitleSource),
+            temperature: 0.2,
+            maxTokens: 48,
+          },
+          onDelta: (chunk) => {
+            generatedTitle += chunk
+          },
+        })
+      } catch {
+        return
+      }
+
+      const sanitizedTitle = sanitizeGeneratedConversationTitle(generatedTitle)
+      const nextTitle =
+        sanitizedTitle && sanitizedTitle !== DEFAULT_CONVERSATION_TITLE
+          ? sanitizedTitle
+          : summarizePromptAsTitle(normalizedTitleSource)
+      if (!nextTitle || nextTitle === DEFAULT_CONVERSATION_TITLE) {
+        return
+      }
+
+      let latestConversation = stateRef.current.contents[input.conversationId] ?? null
+      if (!latestConversation) {
+        await ensureConversationLoaded(input.conversationId)
+        latestConversation = stateRef.current.contents[input.conversationId] ?? null
+      }
+
+      const latestSnapshot = stateRef.current
+      if (
+        !latestSnapshot.autoRenameConversationTitle
+        || !latestSnapshot.autoRenameConversationTitleModelId
+        || !latestConversation
+        || latestConversation.titleMode !== 'default'
+      ) {
+        return
+      }
+
+      persistConversation({
+        ...latestConversation,
+        title: nextTitle,
+        titleMode: 'auto',
+        updatedAt: new Date().toISOString(),
+      })
+    })()
+  }
+
+  const appendConversationEntry = (
+    conversation: Conversation,
+    userContent: string,
+    assistantContent: string,
+    runs: Run[] = [],
+    _titleSource?: string,
+    userSourceImages: RunSourceImageRef[] = [],
+    assistantActions?: MessageAction[],
+    options?: { titleEligible?: boolean },
+  ): Conversation => {
+    const now = new Date().toISOString()
+    const titleEligible = options?.titleEligible ?? true
+    const resolvedTitleState = resolveConversationTitleState(conversation)
     const userMessage: Message = {
       id: makeId(),
       createdAt: now,
@@ -247,17 +346,11 @@ export function createSendFlowModule(deps: SendFlowDeps) {
       runs,
       actions: assistantActions,
     }
-    const hadEligibleUserMessage = hasEligibleConversationTitleMessage(conversation.messages)
-    const shouldAutoRenameTitle = stateRef.current.autoRenameConversationTitle
-    const canAutoRenameTitle =
-      titleEligible && !hadEligibleUserMessage && resolvedConversationTitleMode === 'default' && shouldAutoRenameTitle
-    const nextTitle =
-      canAutoRenameTitle ? summarizePromptAsTitle(titleSource ?? userContent) : resolvedConversationTitle
 
     return {
       ...conversation,
-      title: nextTitle,
-      titleMode: canAutoRenameTitle ? 'auto' : resolvedConversationTitleMode,
+      title: resolvedTitleState.title,
+      titleMode: resolvedTitleState.titleMode,
       updatedAt: now,
       messages: [...conversation.messages, userMessage, assistantMessage],
     }
@@ -329,6 +422,7 @@ export function createSendFlowModule(deps: SendFlowDeps) {
         sideCount: activeState.activeSideCount,
         settingsBySide: mergedSettingsBySide,
       }
+      const shouldGenerateTitle = shouldGenerateConversationTitle(conversationWithLatestSettings, false)
       const updatedConversation = appendConversationEntry(
         conversationWithLatestSettings,
         snapshot.draft,
@@ -340,6 +434,11 @@ export function createSendFlowModule(deps: SendFlowDeps) {
         { titleEligible: false },
       )
       persistConversation(updatedConversation)
+      maybeGenerateConversationTitle({
+        conversationId: updatedConversation.id,
+        titleSource: snapshot.draft,
+        shouldGenerateTitle,
+      })
       setActiveConversation(updatedConversation.id)
       setSendScrollTrigger((prev) => prev + 1)
       actions.setDraft('')
@@ -389,6 +488,7 @@ export function createSendFlowModule(deps: SendFlowDeps) {
       const baseConversation =
         currentActive ??
         createConversation(activeState.activeSettingsBySide, activeState.activeSideMode, activeState.activeSideCount)
+      const shouldGenerateTitle = shouldGenerateConversationTitle(baseConversation, titleEligible)
       const updatedConversation = appendConversationEntry(
         baseConversation,
         snapshot.draft,
@@ -400,6 +500,11 @@ export function createSendFlowModule(deps: SendFlowDeps) {
         { titleEligible },
       )
       persistConversation(updatedConversation)
+      maybeGenerateConversationTitle({
+        conversationId: updatedConversation.id,
+        titleSource: effectiveDraft,
+        shouldGenerateTitle,
+      })
       setActiveConversation(updatedConversation.id)
       setSendScrollTrigger((prev) => prev + 1)
       actions.setDraft('')
@@ -447,6 +552,7 @@ export function createSendFlowModule(deps: SendFlowDeps) {
       const assistantInitialContent = modelCommand?.scope === 'temporary'
         ? `已临时切换到 ${modelCommand.model.name} 执行本次文本请求。\n\n`
         : ''
+      const shouldGenerateTitle = shouldGenerateConversationTitle(conversationWithLatestSettings, titleEligible)
       const updatedConversation = appendConversationEntry(
         conversationWithLatestSettings,
         snapshot.draft,
@@ -458,6 +564,11 @@ export function createSendFlowModule(deps: SendFlowDeps) {
         { titleEligible },
       )
       persistConversation(updatedConversation)
+      maybeGenerateConversationTitle({
+        conversationId: updatedConversation.id,
+        titleSource: effectiveDraft,
+        shouldGenerateTitle,
+      })
       if (!currentActive) {
         setActiveConversation(updatedConversation.id)
       }
@@ -549,6 +660,7 @@ export function createSendFlowModule(deps: SendFlowDeps) {
       const assistantContent = modelCommand?.scope === 'temporary'
         ? `已临时切换到 ${modelCommand.model.name} 执行本次请求，点击图片可预览。`
         : '已完成生成请求，点击图片可预览。'
+      const shouldGenerateTitle = shouldGenerateConversationTitle(conversation, titleEligible)
       const updatedConversation = appendConversationEntry(
         conversation,
         snapshot.draft,
@@ -560,12 +672,18 @@ export function createSendFlowModule(deps: SendFlowDeps) {
         { titleEligible },
       )
       persistConversation(updatedConversation)
+      maybeGenerateConversationTitle({
+        conversationId: updatedConversation.id,
+        titleSource: effectiveDraft,
+        shouldGenerateTitle,
+      })
       setActiveConversation(updatedConversation.id)
       targetConversationId = updatedConversation.id
     } else {
       const assistantContent = modelCommand?.scope === 'temporary'
         ? `已临时切换到 ${modelCommand.model.name} 执行本次请求，点击图片可预览。`
         : '已完成生成请求，点击图片可预览。'
+      const shouldGenerateTitle = shouldGenerateConversationTitle(currentActive, titleEligible)
       const updatedConversation = appendConversationEntry(
         currentActive,
         snapshot.draft,
@@ -577,6 +695,11 @@ export function createSendFlowModule(deps: SendFlowDeps) {
         { titleEligible },
       )
       persistConversation(updatedConversation)
+      maybeGenerateConversationTitle({
+        conversationId: updatedConversation.id,
+        titleSource: effectiveDraft,
+        shouldGenerateTitle,
+      })
       targetConversationId = updatedConversation.id
     }
 

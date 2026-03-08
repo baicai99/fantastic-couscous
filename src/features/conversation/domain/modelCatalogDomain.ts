@@ -1,4 +1,5 @@
-import type { ModelCatalog, ModelSpec, SettingPrimitive } from '../../../types/chat'
+import type { SettingPrimitive } from '../../../types/conversation'
+import type { ModelCatalog, ModelSpec } from '../../../types/model'
 
 const IMAGE_MODEL_BLOCKLIST_KEYWORDS = [
   'chat',

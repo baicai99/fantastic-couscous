@@ -1,14 +1,14 @@
 import type {
-  ApiChannel,
   Conversation,
-  ModelCatalog,
   Run,
-  RunSourceImageRef,
   SettingPrimitive,
   Side,
   SideMode,
   SingleSideSettings,
-} from '../../../types/chat'
+} from '../../../types/conversation'
+import type { ApiChannel } from '../../../types/channel'
+import type { RunSourceImageRef } from '../../../types/image'
+import type { ModelCatalog } from '../../../types/model'
 import { makeId, toSettingsSnapshot } from '../../../utils/chat'
 import { renderTemplate } from '../../../utils/template'
 import {

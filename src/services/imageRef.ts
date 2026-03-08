@@ -1,4 +1,4 @@
-import type { ImageItem } from '../types/chat'
+import type { ImageItem } from '../types/image'
 import { getImageBlob } from './imageAssetStore'
 
 export interface ResolvedImageSource {

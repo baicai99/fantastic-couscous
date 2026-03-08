@@ -1,6 +1,6 @@
-import { resumeImageTaskByProvider } from '../../../services/providerGateway'
-import type { ApiChannel } from '../../../types/chat'
+import type { ApiChannel } from '../../../types/channel'
 import type { NormalizedResumeResult } from '../../../types/provider'
+import { conversationProviderGatewayPort } from './ports/providerGatewayPort'
 
 export interface ConversationTaskResumeService {
   resumeTask: (input: {
@@ -11,9 +11,9 @@ export interface ConversationTaskResumeService {
 }
 
 export function createConversationTaskResumeService(input?: {
-  resumeTaskFn?: typeof resumeImageTaskByProvider
+  resumeTaskFn?: typeof conversationProviderGatewayPort.resumeTask
 }): ConversationTaskResumeService {
-  const resumeTaskFn = input?.resumeTaskFn ?? resumeImageTaskByProvider
+  const resumeTaskFn = input?.resumeTaskFn ?? conversationProviderGatewayPort.resumeTask
   return {
     resumeTask(request) {
       return resumeTaskFn({
@@ -24,4 +24,3 @@ export function createConversationTaskResumeService(input?: {
     },
   }
 }
-

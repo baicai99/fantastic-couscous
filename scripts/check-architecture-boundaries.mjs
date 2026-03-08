@@ -9,7 +9,7 @@ const __dirname = dirname(__filename)
 const repoRoot = resolve(__dirname, '..')
 
 function listSourceFiles() {
-  const output = execSync('rg --files src/features/conversation src/hooks -g "*.ts" -g "*.tsx"', {
+  const output = execSync('rg --files src/features/conversation src/hooks src/components -g "*.ts" -g "*.tsx"', {
     cwd: repoRoot,
     encoding: 'utf8',
   })
@@ -42,6 +42,18 @@ function isUseCaseFile(pathValue) {
 
 function isHooksFile(pathValue) {
   return normalizePath(pathValue).startsWith('src/hooks/')
+}
+
+function isFeatureFile(pathValue) {
+  return normalizePath(pathValue).startsWith('src/features/conversation/')
+}
+
+function isFeatureUiFile(pathValue) {
+  return normalizePath(pathValue).startsWith('src/features/conversation/ui/')
+}
+
+function isComponentsFile(pathValue) {
+  return normalizePath(pathValue).startsWith('src/components/')
 }
 
 function toViolation(file, importPath, reason) {
@@ -78,6 +90,32 @@ function checkHooksBoundary(importPath) {
     importPath.startsWith('./components/')
   ) {
     return 'hooks must not depend on components layer'
+  }
+  return null
+}
+
+function checkComponentsBoundary(importPath) {
+  if (
+    importPath.includes('/services/') ||
+    importPath.startsWith('../services/') ||
+    importPath.startsWith('../../services/') ||
+    importPath.startsWith('./services/')
+  ) {
+    return 'components must not depend on services layer'
+  }
+  return null
+}
+
+function checkFeatureUiBoundary(importPath) {
+  if (/hooks\/useConversations(Engine)?(?:\.(t|j)sx?)?$/.test(importPath)) {
+    return 'feature ui must not depend on legacy conversation hooks'
+  }
+  return null
+}
+
+function checkFeatureTypesBoundary(importPath) {
+  if (importPath.includes('types/chat')) {
+    return 'feature source must not depend on legacy types barrel'
   }
   return null
 }
@@ -123,6 +161,24 @@ function main() {
       }
       if (isHooksFile(file)) {
         const reason = checkHooksBoundary(importPath)
+        if (reason) {
+          violations.push(toViolation(file, importPath, reason))
+        }
+      }
+      if (isFeatureUiFile(file)) {
+        const reason = checkFeatureUiBoundary(importPath)
+        if (reason) {
+          violations.push(toViolation(file, importPath, reason))
+        }
+      }
+      if (isFeatureFile(file)) {
+        const reason = checkFeatureTypesBoundary(importPath)
+        if (reason) {
+          violations.push(toViolation(file, importPath, reason))
+        }
+      }
+      if (isComponentsFile(file)) {
+        const reason = checkComponentsBoundary(importPath)
         if (reason) {
           violations.push(toViolation(file, importPath, reason))
         }

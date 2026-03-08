@@ -1,4 +1,4 @@
-import type { FailureCode } from '../../../types/chat'
+import type { FailureCode } from '../../../types/image'
 
 export function classifyFailure(message: string): FailureCode {
   const normalized = message.toLowerCase()
@@ -26,4 +26,3 @@ export function classifyFailure(message: string): FailureCode {
   }
   return 'unknown'
 }
-

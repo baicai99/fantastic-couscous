@@ -1,4 +1,5 @@
-import type { ApiChannel, Conversation, ConversationSummary, Message, Side, SideMode, SingleSideSettings } from '../types/chat'
+import type { ApiChannel } from '../types/channel'
+import type { Conversation, ConversationSummary, Message, Side, SideMode, SingleSideSettings } from '../types/conversation'
 import type { PanelValueFormat, PanelVariableRow } from '../features/conversation/domain/types'
 import { DEFAULT_CONVERSATION_TITLE, normalizeConversationTitleMode } from '../utils/chat'
 import { resolveProviderId } from './providers/providerId'
@@ -22,6 +23,7 @@ export interface StagedSettingsState {
   runConcurrency?: number
   dynamicPromptEnabled?: boolean
   autoRenameConversationTitle?: boolean
+  autoRenameConversationTitleModelId?: string | null
   panelValueFormat?: PanelValueFormat
   panelVariables?: PanelVariableRow[]
   favoriteModelIds?: string[]
@@ -427,6 +429,7 @@ export function loadStagedSettingsFromStorage(): StagedSettingsState | null {
       runConcurrency?: unknown
       dynamicPromptEnabled?: unknown
       autoRenameConversationTitle?: unknown
+      autoRenameConversationTitleModelId?: unknown
       panelValueFormat?: unknown
       panelVariables?: unknown
       favoriteModelIds?: unknown
@@ -441,6 +444,12 @@ export function loadStagedSettingsFromStorage(): StagedSettingsState | null {
       typeof parsed?.dynamicPromptEnabled === 'boolean' ? parsed.dynamicPromptEnabled : undefined
     const autoRenameConversationTitle =
       typeof parsed?.autoRenameConversationTitle === 'boolean' ? parsed.autoRenameConversationTitle : undefined
+    const autoRenameConversationTitleModelId =
+      parsed?.autoRenameConversationTitleModelId === null
+        ? null
+        : typeof parsed?.autoRenameConversationTitleModelId === 'string'
+          ? parsed.autoRenameConversationTitleModelId.trim() || null
+          : undefined
     const panelValueFormatCandidates: PanelValueFormat[] = ['json', 'yaml', 'line', 'csv', 'auto']
     const panelValueFormat =
       typeof parsed?.panelValueFormat === 'string' &&
@@ -476,6 +485,7 @@ export function loadStagedSettingsFromStorage(): StagedSettingsState | null {
       runConcurrency,
       dynamicPromptEnabled,
       autoRenameConversationTitle,
+      autoRenameConversationTitleModelId,
       panelValueFormat,
       panelVariables,
       favoriteModelIds,

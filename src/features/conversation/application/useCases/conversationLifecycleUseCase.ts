@@ -1,4 +1,5 @@
-import type { ApiChannel, Side, SideMode, SingleSideSettings } from '../../../../types/chat'
+import type { ApiChannel } from '../../../../types/channel'
+import type { Side, SideMode, SingleSideSettings } from '../../../../types/conversation'
 import type { PanelValueFormat, PanelVariableRow } from '../../domain/types'
 
 export interface ConversationLifecycleUseCase {
@@ -9,6 +10,7 @@ export interface ConversationLifecycleUseCase {
   setShowAdvancedVariables: (value: boolean) => void
   setDynamicPromptEnabled: (value: boolean) => void
   setAutoRenameConversationTitle: (value: boolean) => void
+  setAutoRenameConversationTitleModelId: (value: string | null) => void
   setPanelValueFormat: (value: PanelValueFormat) => void
   setPanelVariables: (value: PanelVariableRow[]) => void
   setFavoriteModelIds: (value: string[]) => void
@@ -39,6 +41,7 @@ export function createConversationLifecycleUseCase(input: ConversationLifecycleU
     setShowAdvancedVariables: (value) => input.setShowAdvancedVariables(value),
     setDynamicPromptEnabled: (value) => input.setDynamicPromptEnabled(value),
     setAutoRenameConversationTitle: (value) => input.setAutoRenameConversationTitle(value),
+    setAutoRenameConversationTitleModelId: (value) => input.setAutoRenameConversationTitleModelId(value),
     setPanelValueFormat: (value) => input.setPanelValueFormat(value),
     setPanelVariables: (value) => input.setPanelVariables(value),
     setFavoriteModelIds: (value) => input.setFavoriteModelIds(value),

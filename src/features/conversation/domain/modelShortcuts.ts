@@ -1,4 +1,4 @@
-import type { ModelSpec } from '../../../types/chat'
+import type { ModelSpec } from '../../../types/model'
 
 export function inferModelShortcutTokens(model: ModelSpec): string[] {
   const value = `${model.id} ${model.name}`.toLowerCase()

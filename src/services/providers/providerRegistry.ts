@@ -1,4 +1,4 @@
-import type { ApiChannel } from '../../types/chat'
+import type { ApiChannel } from '../../types/channel'
 import type { ProviderAdapter, ProviderCapabilities, ProviderId } from '../../types/provider'
 import { midjourneyAdapter } from './midjourneyAdapter'
 import { openAICompatibleAdapter } from './openaiCompatibleAdapter'

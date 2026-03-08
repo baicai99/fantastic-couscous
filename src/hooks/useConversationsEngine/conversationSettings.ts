@@ -3,6 +3,7 @@ import { getModelCatalogFromChannels } from '../../services/modelCatalog'
 import {
   normalizeSettingsBySide,
 } from '../../features/conversation/domain/settingsNormalization'
+import { resolveConversationTitleModelId } from '../../features/conversation/domain/conversationTitleDomain'
 import type { ConversationRepository } from '../../features/conversation/infra/conversationRepository'
 import type { ConversationAction, ConversationState } from '../../features/conversation/state/conversationState'
 import type { PanelValueFormat, PanelVariableRow } from '../../features/conversation/domain/types'
@@ -12,6 +13,7 @@ import type { Conversation, ModelCatalog, Side, SideMode, SingleSideSettings } f
 interface ConversationActions {
   setDynamicPromptEnabled: (value: boolean) => void
   setAutoRenameConversationTitle: (value: boolean) => void
+  setAutoRenameConversationTitleModelId: (value: string | null) => void
   setPanelValueFormat: (value: PanelValueFormat) => void
   setPanelVariables: (value: PanelVariableRow[]) => void
 }
@@ -24,6 +26,7 @@ interface SaveStagedSettingsInput {
     runConcurrency: number
     dynamicPromptEnabled: boolean
     autoRenameConversationTitle: boolean
+    autoRenameConversationTitleModelId: string | null
     panelValueFormat: PanelValueFormat
     panelVariables: PanelVariableRow[]
     favoriteModelIds: string[]
@@ -270,6 +273,10 @@ export function createConversationSettingsModule(deps: ConversationSettingsModul
     const filteredFavoriteModelIds = stateRef.current.favoriteModelIds.filter((modelId) =>
       nextCatalog.models.some((model) => model.id === modelId),
     )
+    const nextAutoRenameConversationTitleModelId = resolveConversationTitleModelId({
+      current: stateRef.current.autoRenameConversationTitleModelId,
+      models: nextCatalog.models,
+    })
 
     saveStagedSettings({
       mode: activeSideMode,
@@ -277,14 +284,17 @@ export function createConversationSettingsModule(deps: ConversationSettingsModul
       settingsBySide: normalized,
       overrides: {
         favoriteModelIds: filteredFavoriteModelIds,
+        autoRenameConversationTitleModelId: nextAutoRenameConversationTitleModelId,
       },
     })
 
     dispatch({ type: 'settings/setFavoriteModels', payload: filteredFavoriteModelIds })
+    actions.setAutoRenameConversationTitleModelId(nextAutoRenameConversationTitleModelId)
     stateRef.current = {
       ...stateRef.current,
       channels: nextChannels,
       favoriteModelIds: filteredFavoriteModelIds,
+      autoRenameConversationTitleModelId: nextAutoRenameConversationTitleModelId,
       stagedSideMode: activeSideMode,
       stagedSideCount: activeSideCount,
       stagedSettingsBySide: normalized,
@@ -370,6 +380,25 @@ export function createConversationSettingsModule(deps: ConversationSettingsModul
     }
   }
 
+  const setAutoRenameConversationTitleModelId = (value: string | null) => {
+    actions.setAutoRenameConversationTitleModelId(value)
+
+    const snapshot = stateRef.current
+    saveStagedSettings({
+      mode: activeSideMode,
+      sideCount: activeSideCount,
+      settingsBySide: activeSettingsBySide,
+      overrides: {
+        autoRenameConversationTitleModelId: value,
+      },
+    })
+
+    stateRef.current = {
+      ...snapshot,
+      autoRenameConversationTitleModelId: value,
+    }
+  }
+
   const setPanelValueFormat = (value: PanelValueFormat) => {
     actions.setPanelValueFormat(value)
 
@@ -422,6 +451,7 @@ export function createConversationSettingsModule(deps: ConversationSettingsModul
     setRunConcurrency,
     setDynamicPromptEnabled,
     setAutoRenameConversationTitle,
+    setAutoRenameConversationTitleModelId,
     setPanelValueFormat,
     setPanelVariables,
   }

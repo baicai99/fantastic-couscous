@@ -67,7 +67,7 @@ function seedChannels(input?: {
     name: 'main',
     baseUrl: 'https://example.com',
     apiKey: 'key',
-    models: ['model-a', 'gemini-2.5-flash-image', 'gpt-image-1'],
+    models: ['model-a', 'gpt-4o-mini', 'gpt-4o', 'gemini-2.5-flash-image', 'gpt-image-1'],
   }])
   repo.saveStagedSettings({
     sideMode: 'single',
@@ -92,6 +92,7 @@ function seedChannels(input?: {
     runConcurrency: 1,
     dynamicPromptEnabled: false,
     autoRenameConversationTitle: true,
+    autoRenameConversationTitleModelId: 'model-a',
     panelValueFormat: 'json',
     panelVariables: [{ id: 'v1', key: '', valuesText: '', selectedValue: '' }],
     favoriteModelIds: [],
@@ -199,6 +200,16 @@ describe('useConversations', () => {
     mockCreateRun.mockReset()
     mockResumeImageTaskByProvider.mockReset()
     mockStreamTextByProvider.mockReset()
+    mockStreamTextByProvider.mockImplementation(async (input: { request: { messages: Array<{ role: string; content: string }> }; onDelta: (chunk: string) => void }) => {
+      const systemPrompt = input.request.messages.find((message) => message.role === 'system')?.content ?? ''
+      if (!systemPrompt.includes('对话标题生成器')) {
+        return
+      }
+      const firstQuestion = input.request.messages.find((message) => message.role === 'user')?.content?.trim() ?? ''
+      if (firstQuestion) {
+        input.onDelta(firstQuestion)
+      }
+    })
     vi.restoreAllMocks()
     vi.useRealTimers()
     seedChannels()
@@ -772,7 +783,7 @@ describe('useConversations', () => {
     })
 
     await waitFor(() => expect(mockCreateRun).toHaveBeenCalledTimes(1))
-    expect(result.current.queries.activeConversation?.title).toBe('draw a cat')
+    await waitFor(() => expect(result.current.queries.activeConversation?.title).toBe('draw a cat'))
   })
 
   it('temporarily switches model for @model prompt send and keeps user command in history', async () => {
@@ -824,7 +835,7 @@ describe('useConversations', () => {
     expect(result.current.queries.activeConversation?.messages[0]?.content).toBe('@gpt-image-1 draw a cat')
     expect(result.current.queries.activeConversation?.messages[1]?.content).toContain('已临时切换到 gpt-image-1')
     expect(result.current.queries.activeConversation?.messages[1]?.runs?.[0]?.modelId).toBe('gpt-image-1')
-    expect(result.current.queries.activeConversation?.title).toBe('draw a cat')
+    await waitFor(() => expect(result.current.queries.activeConversation?.title).toBe('draw a cat'))
     expect(result.current.queries.activeSettingsBySide.single.modelId).toBe(previousModelId)
     expect(messageSuccessSpy).toHaveBeenCalledWith('本次已临时切换到 gpt-image-1')
   })
@@ -934,7 +945,7 @@ describe('useConversations', () => {
     expect(callInput.settings.customHeight).toBe(960)
     expect(callInput.paramsSnapshot.size).toBe('640x960')
     expect(callInput.finalPrompt).toBe('draw skyline')
-    expect(result.current.queries.activeConversation?.title).toBe('draw skyline')
+    await waitFor(() => expect(result.current.queries.activeConversation?.title).toBe('draw skyline'))
   })
 
   it('blocks send when --size and --wh are both provided', async () => {
@@ -990,7 +1001,7 @@ describe('useConversations', () => {
     expect(callInput.settings.customWidth).toBe(640)
     expect(callInput.settings.customHeight).toBe(960)
     expect(callInput.finalPrompt).toBe('draw a cat')
-    expect(result.current.queries.activeConversation?.title).toBe('draw a cat')
+    await waitFor(() => expect(result.current.queries.activeConversation?.title).toBe('draw a cat'))
     expect(result.current.queries.activeConversation?.messages[0]?.content).toBe('@gpt-image-1 draw a cat --wh 640x960')
     expect(result.current.queries.activeSettingsBySide.single.modelId).toBe(previousModelId)
     expect(messageSuccessSpy).toHaveBeenCalledWith('本次已临时切换到 gpt-image-1')
@@ -1061,7 +1072,7 @@ describe('useConversations', () => {
     await waitFor(() => expect(result.current.queries.activeConversation?.messages).toHaveLength(2))
     expect(mockCreateRun).not.toHaveBeenCalled()
     expect(result.current.queries.activeConversation?.messages[0]?.content).toBe('draw a cat')
-    expect(result.current.queries.activeConversation?.title).toBe('draw a cat')
+    expect(result.current.queries.activeConversation?.title).toBe('未命名')
     expect(result.current.queries.activeConversation?.messages[1]?.content).toContain('当前还没有选择模型')
     expect(result.current.queries.activeConversation?.messages[1]?.actions).toEqual([
       expect.objectContaining({ type: 'select-model', label: '选择模型' }),
@@ -1288,7 +1299,146 @@ describe('useConversations', () => {
     })
 
     expect(mockCreateRun).not.toHaveBeenCalled()
-    expect(mockStreamTextByProvider).toHaveBeenCalledTimes(1)
+    expect(mockStreamTextByProvider).toHaveBeenCalledTimes(2)
+  })
+
+  it('generates new conversation title asynchronously with the configured title model', async () => {
+    mockCreateRun.mockImplementation(async (input: any) => buildSuccessfulRunFromInput({
+      runId: input.runId,
+      createdAt: input.createdAt,
+      sideMode: input.sideMode,
+      side: input.side,
+      channel: input.channel,
+      modelId: input.modelId,
+      modelName: input.modelName,
+      templatePrompt: input.templatePrompt,
+      finalPrompt: input.finalPrompt,
+      variablesSnapshot: input.variablesSnapshot,
+      paramsSnapshot: input.paramsSnapshot,
+      settings: input.settings,
+    }))
+    mockStreamTextByProvider.mockImplementation(async (input: { request: { messages: Array<{ role: string; content: string }> }; onDelta: (chunk: string) => void }) => {
+      const systemPrompt = input.request.messages.find((message) => message.role === 'system')?.content ?? ''
+      if (!systemPrompt.includes('对话标题生成器')) {
+        return
+      }
+      input.onDelta('猫咪海报创意')
+    })
+
+    const { useConversations } = await import('./useConversations')
+    const { result } = renderHook(() => useConversations())
+
+    act(() => {
+      result.current.commands.setDraft('draw a cat wearing sunglasses on a poster')
+    })
+    await act(async () => {
+      await result.current.commands.sendDraft()
+    })
+
+    await waitFor(() => expect(result.current.queries.activeConversation?.messages).toHaveLength(2))
+    await waitFor(() => expect(result.current.queries.activeConversation?.title).toBe('猫咪海报创意'))
+  })
+
+
+  it('falls back to first prompt summary when title model returns no text', async () => {
+    mockCreateRun.mockImplementation(async (input: any) => buildSuccessfulRunFromInput({
+      runId: input.runId,
+      createdAt: input.createdAt,
+      sideMode: input.sideMode,
+      side: input.side,
+      channel: input.channel,
+      modelId: input.modelId,
+      modelName: input.modelName,
+      templatePrompt: input.templatePrompt,
+      finalPrompt: input.finalPrompt,
+      variablesSnapshot: input.variablesSnapshot,
+      paramsSnapshot: input.paramsSnapshot,
+      settings: input.settings,
+    }))
+    mockStreamTextByProvider.mockImplementation(async () => {})
+
+    const { useConversations } = await import('./useConversations')
+    const { result } = renderHook(() => useConversations())
+
+    act(() => {
+      result.current.commands.setDraft('请介绍一下人工智能的发展历史和未来趋势')
+    })
+    await act(async () => {
+      await result.current.commands.sendDraft()
+    })
+
+    await waitFor(() => expect(result.current.queries.activeConversation?.messages).toHaveLength(2))
+    await waitFor(() => expect(result.current.queries.activeConversation?.title).toBe('请介绍一下人工智能的发展历史和未来趋势'))
+  })
+
+  it('does not overwrite a manual title when async title generation resolves later', async () => {
+    mockCreateRun.mockImplementation(async (input: any) => buildSuccessfulRunFromInput({
+      runId: input.runId,
+      createdAt: input.createdAt,
+      sideMode: input.sideMode,
+      side: input.side,
+      channel: input.channel,
+      modelId: input.modelId,
+      modelName: input.modelName,
+      templatePrompt: input.templatePrompt,
+      finalPrompt: input.finalPrompt,
+      variablesSnapshot: input.variablesSnapshot,
+      paramsSnapshot: input.paramsSnapshot,
+      settings: input.settings,
+    }))
+
+    let resolveTitleRequest: (() => void) | null = null
+    mockStreamTextByProvider.mockImplementation(async (input: { request: { messages: Array<{ role: string; content: string }> }; onDelta: (chunk: string) => void }) => {
+      const systemPrompt = input.request.messages.find((message) => message.role === 'system')?.content ?? ''
+      if (!systemPrompt.includes('对话标题生成器')) {
+        return
+      }
+      await new Promise<void>((resolve) => {
+        resolveTitleRequest = () => {
+          input.onDelta('自动标题')
+          resolve()
+        }
+      })
+    })
+
+    const { useConversations } = await import('./useConversations')
+    const { result } = renderHook(() => useConversations())
+
+    act(() => {
+      result.current.commands.setDraft('draw a cat')
+    })
+    await act(async () => {
+      await result.current.commands.sendDraft()
+    })
+
+    await waitFor(() => expect(result.current.queries.activeConversation?.messages).toHaveLength(2))
+
+    act(() => {
+      result.current.commands.renameConversation(result.current.queries.activeConversation?.id ?? '', '手动标题')
+    })
+    await waitFor(() => expect(result.current.queries.activeConversation?.title).toBe('手动标题'))
+
+    await act(async () => {
+      resolveTitleRequest?.()
+      await Promise.resolve()
+    })
+
+    await waitFor(() => expect(result.current.queries.activeConversation?.title).toBe('手动标题'))
+  })
+
+  it('persists the selected auto-rename title model across remounts', async () => {
+    const { useConversations } = await import('./useConversations')
+    const first = renderHook(() => useConversations())
+
+    act(() => {
+      first.result.current.commands.setAutoRenameConversationTitleModelId('gpt-4o-mini')
+    })
+
+    expect(first.result.current.queries.autoRenameConversationTitleModelId).toBe('gpt-4o-mini')
+
+    first.unmount()
+    const second = renderHook(() => useConversations())
+    expect(second.result.current.queries.autoRenameConversationTitleModelId).toBe('gpt-4o-mini')
   })
 
   it('persists favorite model ids in staged settings', async () => {

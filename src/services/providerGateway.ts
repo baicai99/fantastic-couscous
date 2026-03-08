@@ -1,4 +1,4 @@
-import type { ApiChannel } from '../types/chat'
+import type { ApiChannel } from '../types/channel'
 import type {
   NormalizedImageItem,
   NormalizedImageRequest,
@@ -7,7 +7,11 @@ import type {
   NormalizedTextRequest,
   ProviderErrorCode,
 } from '../types/provider'
-import { getProviderAdapterById, getProviderAdapterForChannel } from './providers/providerRegistry'
+import {
+  resolveChannelProviderAdapter,
+  resolveProviderAdapterForImageRequest,
+  resolveProviderAdapterForResumeTask,
+} from './providers/providerSelection'
 
 function toProviderErrorCode(error: unknown): ProviderErrorCode {
   if (!error || typeof error !== 'object') {
@@ -20,47 +24,6 @@ function toProviderErrorCode(error: unknown): ProviderErrorCode {
     }
   }
   return 'unknown'
-}
-
-function shouldPreferMidjourneyByModel(modelId: string): boolean {
-  const value = modelId.trim().toLowerCase()
-  if (!value) {
-    return false
-  }
-  return value.includes('midjourney') || value.includes('niji') || value.startsWith('mj_') || value === 'mj'
-}
-
-function isOpenAICompatibleProvider(channel: ApiChannel): boolean {
-  return (channel.providerId ?? '').trim().toLowerCase() === 'openai-compatible'
-}
-
-function pickAdapterForImageRequest(input: { channel: ApiChannel; modelId: string }) {
-  const explicitProvider = typeof input.channel.providerId === 'string' && input.channel.providerId.trim().length > 0
-  const wantsMidjourneyByModel = shouldPreferMidjourneyByModel(input.modelId)
-  if (wantsMidjourneyByModel && (!explicitProvider || isOpenAICompatibleProvider(input.channel))) {
-    return getProviderAdapterById('midjourney-proxy') ?? getProviderAdapterForChannel(input.channel)
-  }
-  if (explicitProvider) {
-    return getProviderAdapterForChannel(input.channel)
-  }
-  return getProviderAdapterForChannel(input.channel)
-}
-
-function pickAdapterForResume(input: {
-  channel: ApiChannel
-  taskId?: string
-  taskMeta?: Record<string, string>
-}) {
-  const explicitProvider = typeof input.channel.providerId === 'string' && input.channel.providerId.trim().length > 0
-  const hint = `${input.taskMeta?.resumeUrl ?? ''} ${input.taskMeta?.location ?? ''} ${input.taskId ?? ''}`.toLowerCase()
-  const looksLikeMidjourneyTask = hint.includes('/mj/') || hint.includes('midjourney') || hint.includes('niji')
-  if (looksLikeMidjourneyTask && (!explicitProvider || isOpenAICompatibleProvider(input.channel))) {
-    return getProviderAdapterById('midjourney-proxy') ?? getProviderAdapterForChannel(input.channel)
-  }
-  if (explicitProvider) {
-    return getProviderAdapterForChannel(input.channel)
-  }
-  return getProviderAdapterForChannel(input.channel)
 }
 
 function trackGatewayMetric(input: {
@@ -91,7 +54,7 @@ function trackGatewayMetric(input: {
 }
 
 export async function discoverModelsByProvider(channel: Pick<ApiChannel, 'providerId' | 'baseUrl' | 'apiKey'>): Promise<string[]> {
-  const adapter = getProviderAdapterForChannel(channel)
+  const adapter = resolveChannelProviderAdapter(channel)
   return adapter.discoverModels({
     baseUrl: channel.baseUrl,
     apiKey: channel.apiKey,
@@ -109,7 +72,7 @@ export async function generateImagesByProvider(input: {
   }) => void
   onImageCompleted?: (item: NormalizedImageItem) => void
 }): Promise<NormalizedImageResult> {
-  const adapter = pickAdapterForImageRequest({
+  const adapter = resolveProviderAdapterForImageRequest({
     channel: input.channel,
     modelId: input.request.modelId,
   })
@@ -162,7 +125,7 @@ export async function resumeImageTaskByProvider(input: {
   taskMeta?: Record<string, string>
   signal?: AbortSignal
 }): Promise<NormalizedResumeResult> {
-  const adapter = pickAdapterForResume(input)
+  const adapter = resolveProviderAdapterForResumeTask(input)
   return adapter.resumeImageTask({
     channel: input.channel,
     taskId: input.taskId,
@@ -178,7 +141,7 @@ export async function streamTextByProvider(input: {
   onDone?: () => void
   onError?: (error: Error) => void
 }): Promise<void> {
-  const adapter = getProviderAdapterForChannel(input.channel)
+  const adapter = resolveChannelProviderAdapter(input.channel)
   const providerId = adapter.id
   const startedAt = performance.now()
 
@@ -224,3 +187,4 @@ export async function streamTextByProvider(input: {
     throw normalized
   }
 }
+

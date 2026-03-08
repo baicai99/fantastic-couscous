@@ -1,9 +1,4 @@
-import type {
-  ApiChannel,
-  ImportAction,
-  ParseApiChannelsResult,
-  ParsedApiChannelCandidate,
-} from '../types/chat'
+import type { ApiChannel, ImportAction, ParseApiChannelsResult, ParsedApiChannelCandidate } from '../types/channel'
 import { makeId } from '../utils/chat'
 import { resolveProviderId } from './providers/providerId'
 
