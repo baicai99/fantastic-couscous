@@ -9,7 +9,7 @@ const __dirname = dirname(__filename)
 const repoRoot = resolve(__dirname, '..')
 
 function listSourceFiles() {
-  const output = execSync('rg --files src/features/conversation src/hooks src/components -g "*.ts" -g "*.tsx"', {
+  const output = execSync('rg --files src/features/conversation src/hooks src/components src/utils -g "*.ts" -g "*.tsx"', {
     cwd: repoRoot,
     encoding: 'utf8',
   })
@@ -110,12 +110,18 @@ function checkFeatureUiBoundary(importPath) {
   if (/hooks\/useConversations(Engine)?(?:\.(t|j)sx?)?$/.test(importPath)) {
     return 'feature ui must not depend on legacy conversation hooks'
   }
+  if (/hooks\/useConversationsEngine\//.test(importPath) || /hooks\/conversations\/(useDraftSourceImages|sendFlowUtils)(?:\.(t|j)sx?)?$/.test(importPath)) {
+    return 'feature ui must not depend on legacy conversation engine helpers'
+  }
+  if (/components\/(chat|preview|settings|sidebar)\//.test(importPath)) {
+    return 'feature ui must not depend on shared conversation wrappers'
+  }
   return null
 }
 
-function checkFeatureTypesBoundary(importPath) {
+function checkLegacyTypesBoundary(importPath) {
   if (importPath.includes('types/chat')) {
-    return 'feature source must not depend on legacy types barrel'
+    return 'source must not depend on legacy types barrel'
   }
   return null
 }
@@ -172,7 +178,13 @@ function main() {
         }
       }
       if (isFeatureFile(file)) {
-        const reason = checkFeatureTypesBoundary(importPath)
+        const reason = checkLegacyTypesBoundary(importPath)
+        if (reason) {
+          violations.push(toViolation(file, importPath, reason))
+        }
+      }
+      if (isHooksFile(file) || isComponentsFile(file) || normalizePath(file).startsWith('src/utils/')) {
+        const reason = checkLegacyTypesBoundary(importPath)
         if (reason) {
           violations.push(toViolation(file, importPath, reason))
         }

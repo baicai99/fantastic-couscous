@@ -5,12 +5,12 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && npx -y node@22 node_modules/vite/bin/vite.js build",
+    "build": "tsc -b && node node_modules/vite/bin/vite.js build",
     "lint": "eslint .",
     "check:architecture": "node scripts/check-architecture-boundaries.mjs",
     "check:complexity": "node scripts/check-complexity.mjs",
     "ci": "npm run lint && npm run check:architecture && npm run check:complexity && npm run test && npm run build",
-    "preview": "npm run build && npx -y node@22 node_modules/vite/bin/vite.js preview",
+    "preview": "npm run build && node node_modules/vite/bin/vite.js preview",
     "test": "vitest run",
     "test:watch": "vitest"
   },

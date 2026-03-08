@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
-import type { PreviewImage, Run } from '../types/chat'
+import type { Run } from '../types/conversation'
+import type { PreviewImage } from '../types/image'
 import { clamp, sortImagesBySeq } from '../utils/chat'
 
 export interface DragOrigin {

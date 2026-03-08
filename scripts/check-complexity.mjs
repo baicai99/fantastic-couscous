@@ -8,11 +8,11 @@ const __dirname = dirname(__filename)
 const repoRoot = resolve(__dirname, '..')
 
 const limits = [
-  { file: 'src/hooks/useConversationsEngine.ts', maxLines: 899 },
-  { file: 'src/features/conversation/ui/controller/useConversationEngine.ts', maxLines: 899 },
-  { file: 'src/components/settings/SettingsPanelContainer.tsx', maxLines: 1400 },
-  { file: 'src/components/chat/MessageList.tsx', maxLines: 1400 },
-  { file: 'src/components/chat/Composer.tsx', maxLines: 1250 },
+  { file: 'src/features/conversation/ui/controller/useConversationEngine.ts', maxLines: 600 },
+  { file: 'src/features/conversation/ui/controller/engine/sendFlow.ts', maxLines: 700 },
+  { file: 'src/features/conversation/ui/components/SettingsPanelContainer.tsx', maxLines: 950 },
+  { file: 'src/features/conversation/ui/components/MessageList.tsx', maxLines: 900 },
+  { file: 'src/features/conversation/ui/components/Composer.tsx', maxLines: 900 },
   { file: 'src/features/conversation/ui/ConversationWorkspace.tsx', maxLines: 700 },
 ]
 

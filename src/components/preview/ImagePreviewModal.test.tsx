@@ -1,5 +1,5 @@
 import { createRef } from 'react'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi, beforeAll, beforeEach } from 'vitest'
 import type { ComponentProps, MutableRefObject } from 'react'
 import type { DragOrigin } from '../../hooks/useImagePreview'
@@ -8,6 +8,7 @@ import { ImagePreviewModal } from './ImagePreviewModal'
 const resizeTargets: Array<{
   callback: ResizeObserverCallback
   target: Element
+  owner: object
 }> = []
 
 beforeAll(() => {
@@ -28,12 +29,18 @@ beforeAll(() => {
     }
 
     observe(target: Element) {
-      resizeTargets.push({ callback: this.callback, target })
+      resizeTargets.push({ callback: this.callback, target, owner: this })
     }
 
-    unobserve() {}
+    unobserve(target: Element) {
+      const next = resizeTargets.filter((item) => !(item.owner === this && item.target === target))
+      resizeTargets.splice(0, resizeTargets.length, ...next)
+    }
 
-    disconnect() {}
+    disconnect() {
+      const next = resizeTargets.filter((item) => item.owner !== this)
+      resizeTargets.splice(0, resizeTargets.length, ...next)
+    }
   }
 
   ;(window as unknown as { ResizeObserver: typeof ResizeObserver }).ResizeObserver =
@@ -45,20 +52,22 @@ beforeEach(() => {
 })
 
 function triggerResize(target: Element) {
-  for (const item of resizeTargets) {
-    if (item.target !== target) {
-      continue
+  act(() => {
+    for (const item of resizeTargets) {
+      if (item.target !== target) {
+        continue
+      }
+      item.callback(
+        [
+          {
+            target,
+            contentRect: target.getBoundingClientRect(),
+          } as ResizeObserverEntry,
+        ],
+        {} as ResizeObserver,
+      )
     }
-    item.callback(
-      [
-        {
-          target,
-          contentRect: target.getBoundingClientRect(),
-        } as ResizeObserverEntry,
-      ],
-      {} as ResizeObserver,
-    )
-  }
+  })
 }
 
 function buildProps(overrides?: Partial<ComponentProps<typeof ImagePreviewModal>>) {
@@ -184,7 +193,7 @@ describe('ImagePreviewModal interactions', () => {
     expect(props.goNextPreview).toHaveBeenCalledTimes(1)
     expect(props.goFirstPreview).toHaveBeenCalledTimes(1)
     expect(props.goLastPreview).toHaveBeenCalledTimes(1)
-    expect(props.resetTransform).toHaveBeenCalledTimes(1)
+    expect(props.resetTransform).toHaveBeenCalledTimes(2)
     expect(props.zoomBy).toHaveBeenCalledTimes(2)
     expect(props.toggleFitMode).toHaveBeenCalledTimes(3)
   })

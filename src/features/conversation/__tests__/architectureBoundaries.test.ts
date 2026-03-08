@@ -44,7 +44,12 @@ function getImports(file: string): string[] {
 
 function isLegacyConversationHookEntry(specifier: string): boolean {
   return /hooks\/useConversations(?:\.tsx?|['"])?$/.test(specifier)
-    || /hooks\/useConversationsEngine(?:\.tsx?|['"])?$/.test(specifier)
+    || /hooks\/useConversationsEngine(?:\/|\.tsx?|['"])?$/.test(specifier)
+    || /hooks\/conversations\/(useDraftSourceImages|sendFlowUtils)(?:\.tsx?|['"])?$/.test(specifier)
+}
+
+function isSharedConversationComponentWrapper(specifier: string): boolean {
+  return /components\/(chat|preview|settings|sidebar)\//.test(specifier)
 }
 
 describe('conversation architecture boundaries', () => {
@@ -54,6 +59,14 @@ describe('conversation architecture boundaries', () => {
     const uiFiles = files.filter((file) => file.includes('/ui/'))
     const violations = uiFiles.filter((file) =>
       getImports(file).some((specifier) => isLegacyConversationHookEntry(specifier)),
+    )
+    expect(violations).toEqual([])
+  })
+
+  it('keeps feature UI off shared conversation wrappers', () => {
+    const uiFiles = files.filter((file) => file.includes('/ui/'))
+    const violations = uiFiles.filter((file) =>
+      getImports(file).some((specifier) => isSharedConversationComponentWrapper(specifier)),
     )
     expect(violations).toEqual([])
   })

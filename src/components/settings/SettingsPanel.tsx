@@ -1,3 +1,1 @@
-import { SettingsPanelContainer } from './SettingsPanelContainer'
-
-export { SettingsPanelContainer as SettingsPanel }
+export * from '../../features/conversation/ui/components/SettingsPanel'

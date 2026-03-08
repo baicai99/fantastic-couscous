@@ -1,57 +1,42 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { Conversation, ConversationSummary, Run, Side, SideMode, SingleSideSettings } from '../../../../types/conversation'
+import type { Run, Side } from '../../../../types/conversation'
 import { makeId } from '../../../../utils/chat'
 import { createConversationOrchestrator } from '../../application/conversationOrchestrator'
-import { conversationImageTaskPort } from '../../application/ports/imageTaskPort'
 import { conversationModelCatalogPort } from '../../application/ports/modelCatalogPort'
 import { createRunExecutor } from '../../application/runExecutor'
 import { buildPanelVariableBatches } from '../../domain/panelVariableParsing'
-import {
-  getMultiSideIds,
-  normalizeConversation,
-} from '../../domain/settingsNormalization'
-import type { PanelValueFormat, PanelVariableRow } from '../../domain/types'
+import { getMultiSideIds } from '../../domain/settingsNormalization'
 import { createConversationRepository } from '../../infra/conversationRepository'
 import {
   conversationSelectors,
   createInitialConversationState,
   useConversationState,
 } from '../../state/conversationState'
-import { trackDuration, startMetric } from '../../../performance/runtimeMetrics'
-import { useDraftSourceImages } from '../../../../hooks/conversations/useDraftSourceImages'
+import { useDraftSourceImages } from './engine/useDraftSourceImages'
 import { createAntdConversationNotifier } from '../antdConversationNotifier'
 import { createConversationDownloadService } from '../../application/conversationDownloadService'
 import { createConversationTaskResumeService } from '../../application/conversationTaskResumeService'
-import { persistStagedSettings } from '../../../../hooks/useConversationsEngine/stagedSettingsPersistence'
-import { createDownloadFlow } from '../../../../hooks/useConversationsEngine/downloadFlow'
-import { createConversationSettingsModule } from '../../../../hooks/useConversationsEngine/conversationSettings'
-import { createRunMutationModule } from '../../../../hooks/useConversationsEngine/runMutation'
-import { useResumeFlow } from '../../../../hooks/useConversationsEngine/useResumeFlow'
-import { createSendFlowModule } from '../../../../hooks/useConversationsEngine/sendFlow'
-import { buildRunLocationIndex, collectPendingImageTasks, type RunLocation } from '../../../../hooks/useConversationsEngine/conversationIndexes'
-import {
-  getBrowserMemoryPressure,
-  prepareConversationForPersistence,
-  resolveAdaptiveRunConcurrencyByPressure,
-  touchConversationCache as nextConversationCacheOrder,
-} from '../../../../hooks/useConversationsEngine/conversationMemory'
+import { createDownloadFlow } from './engine/downloadFlow'
+import { createConversationSettingsModule } from './engine/conversationSettings'
+import { createRunMutationModule } from './engine/runMutation'
+import { useResumeFlow } from './engine/useResumeFlow'
+import { createSendFlowModule } from './engine/sendFlow'
+import { useConversationPersistence } from './engine/useConversationPersistence'
+import { createConversationListCommands } from './engine/conversationListCommands'
+import type { RunLocation } from './engine/conversationIndexes'
 import {
   conversationHasActiveImageThreads,
   getRunCompletionStats,
-  MAX_IN_MEMORY_CONVERSATIONS,
   MESSAGE_HISTORY_INITIAL_LIMIT,
   MESSAGE_HISTORY_PAGE_SIZE,
-  PROGRESS_PERSIST_DEBOUNCE_MS,
   sortConversationSummariesByLastMessageTime,
-  toEpoch,
-  upsertConversationState,
-} from '../../../../hooks/useConversationsEngine/helpers'
+} from './engine/helpers'
 export {
   buildMessageArchivePrefix,
   collectBatchDownloadImagesByRunId,
   sortConversationSummariesByLastMessageTime,
-} from '../../../../hooks/useConversationsEngine/helpers'
-export type { PanelVariableRow } from '../../../../hooks/useConversationsEngine/helpers'
+} from './engine/helpers'
+export type { PanelVariableRow } from './engine/helpers'
 
 export function useConversationsEngine() {
   const repository = useMemo(() => createConversationRepository(), [])
@@ -183,258 +168,34 @@ export function useConversationsEngine() {
     }
   }
 
-  const rebuildRunLocationIndex = (conversation: Conversation) => {
-    runLocationByConversationRef.current[conversation.id] = buildRunLocationIndex(conversation)
-  }
-
-  function syncTaskRegistryForConversation(conversation: Conversation) {
-    conversationImageTaskPort.replaceConversation(conversation.id, collectPendingImageTasks(conversation))
-  }
-
-  const registerActiveRun = (conversationId: string, runId: string, controller: AbortController) => {
-    const existing = activeRunControllersRef.current[conversationId] ?? new Map<string, AbortController>()
-    existing.set(runId, controller)
-    activeRunControllersRef.current[conversationId] = existing
-  }
-
-  const unregisterActiveRun = (conversationId: string, runId: string) => {
-    const existing = activeRunControllersRef.current[conversationId]
-    if (!existing) {
-      return
-    }
-    existing.delete(runId)
-    if (existing.size === 0) {
-      delete activeRunControllersRef.current[conversationId]
-    }
-  }
-
-  const isRunStillActive = (conversationId: string, runId: string): boolean => {
-    return activeRunControllersRef.current[conversationId]?.has(runId) ?? false
-  }
-
-  const touchConversationCache = (conversationId: string) => {
-    conversationCacheOrderRef.current = nextConversationCacheOrder(
-      conversationCacheOrderRef.current,
-      conversationId,
-      MAX_IN_MEMORY_CONVERSATIONS,
-    )
-  }
-
-  const getMemoryPressure = (): number => {
-    if (typeof performance === 'undefined') {
-      return 0
-    }
-    return getBrowserMemoryPressure(performance as { memory?: { usedJSHeapSize: number; jsHeapSizeLimit: number } })
-  }
-
-  const resolveAdaptiveRunConcurrency = (requested: number): number => {
-    return resolveAdaptiveRunConcurrencyByPressure(requested, getMemoryPressure())
-  }
-
-  const syncAndPersist = (
-    next: { summaries: ConversationSummary[]; contents: Record<string, Conversation> },
-    options?: { saveIndex?: boolean },
-  ) => {
-    const sortedSummaries = sortConversationSummariesByLastMessageTime(next.summaries, next.contents)
-    stateRef.current = {
-      ...stateRef.current,
-      summaries: sortedSummaries,
-      contents: next.contents,
-    }
-    dispatch({ type: 'conversation/sync', payload: { summaries: sortedSummaries, contents: next.contents } })
-    if (options?.saveIndex ?? true) {
-      repository.saveIndex(sortedSummaries)
-    }
-  }
-
-  const persistConversation = (
-    conversation: Conversation,
-    options?: { saveStorage?: boolean; saveIndex?: boolean },
-  ) => {
-    syncTaskRegistryForConversation(conversation)
-    rebuildRunLocationIndex(conversation)
-    touchConversationCache(conversation.id)
-    const snapshot = stateRef.current
-    const next = upsertConversationState(
-      snapshot.summaries,
-      snapshot.contents,
-      conversation,
-      snapshot.activeId,
-      conversationCacheOrderRef.current,
-    )
-    syncAndPersist(
-      { summaries: next.nextSummaries, contents: next.nextContents },
-      { saveIndex: options?.saveIndex },
-    )
-    if (options?.saveStorage ?? true) {
-      void repository.saveConversation(conversation)
-    }
-  }
-
-
-  const flushPendingPersistence = async (): Promise<void> => {
-    if (persistTimerRef.current !== null) {
-      window.clearTimeout(persistTimerRef.current)
-      persistTimerRef.current = null
-    }
-
-    const snapshot = stateRef.current
-    if (pendingPersistConversationIdsRef.current.size === 0) {
-      return
-    }
-
-    const start = startMetric()
-    const pressure = getMemoryPressure()
-    const pendingConversations: Conversation[] = []
-    for (const conversationId of pendingPersistConversationIdsRef.current) {
-      const conversation = snapshot.contents[conversationId]
-      if (conversation) {
-        const isActive = conversationId === snapshot.activeId
-        pendingConversations.push(prepareConversationForPersistence({ conversation, isActive, pressure }))
-      }
-    }
-    await Promise.all(pendingConversations.map((conversation) => repository.saveConversation(conversation)))
-    pendingPersistConversationIdsRef.current.clear()
-    repository.saveIndex(snapshot.summaries)
-    trackDuration('persistence.flushBatch', start)
-  }
-
-  const scheduleConversationPersistence = (conversationId: string) => {
-    pendingPersistConversationIdsRef.current.add(conversationId)
-    if (persistTimerRef.current !== null) {
-      return
-    }
-
-    persistTimerRef.current = window.setTimeout(() => {
-      void flushPendingPersistence()
-    }, PROGRESS_PERSIST_DEBOUNCE_MS)
-  }
-
-  useEffect(() => {
-    return () => {
-      if (persistTimerRef.current !== null) {
-        window.clearTimeout(persistTimerRef.current)
-        persistTimerRef.current = null
-      }
-      if (resumePollTimerRef.current !== null) {
-        window.clearInterval(resumePollTimerRef.current)
-        resumePollTimerRef.current = null
-      }
-      if (backgroundResumePollTimerRef.current !== null) {
-        window.clearInterval(backgroundResumePollTimerRef.current)
-        backgroundResumePollTimerRef.current = null
-      }
-      Object.values(activeRunControllersRef.current).forEach((controllers) => {
-        controllers.forEach((controller) => controller.abort())
-      })
-      activeRunControllersRef.current = {}
-      void flushPendingPersistence()
-      runExecutor.releaseObjectUrls?.()
-    }
-  }, [runExecutor])
-
-  useEffect(() => {
-    if (state.summaries.length === 0) {
-      return
-    }
-    void repository.migrateLegacyContent(state.summaries.map((item) => item.id))
-  }, [repository, state.summaries])
-
-  const ensureConversationLoaded = async (conversationId: string): Promise<void> => {
-    const snapshot = stateRef.current
-    const existing = snapshot.contents[conversationId]
-    if (existing) {
-      touchConversationCache(conversationId)
-      void resumePendingImagesForConversationRef.current(conversationId)
-      return
-    }
-
-    const fallbackTitle = snapshot.summaries.find((item) => item.id === conversationId)?.title ?? '未命名'
-    const loaded = await repository.loadConversation(conversationId, fallbackTitle)
-    if (!loaded) {
-      return
-    }
-
-    const normalized = normalizeConversation(
-      loaded,
-      snapshot.channels,
-      conversationModelCatalogPort.getModelCatalogFromChannels(snapshot.channels),
-    )
-    syncTaskRegistryForConversation(normalized)
-    rebuildRunLocationIndex(normalized)
-    touchConversationCache(conversationId)
-    const next = upsertConversationState(
-      snapshot.summaries,
-      snapshot.contents,
-      normalized,
-      snapshot.activeId,
-      conversationCacheOrderRef.current,
-    )
-    syncAndPersist({ summaries: next.nextSummaries, contents: next.nextContents }, { saveIndex: false })
-    void resumePendingImagesForConversationRef.current(conversationId)
-  }
-
-  useEffect(() => {
-    if (!state.activeId) {
-      return
-    }
-    void ensureConversationLoaded(state.activeId)
-  }, [state.activeId])
-
-  const setActiveConversation = (conversationId: string | null) => {
-    void flushPendingPersistence()
-    runExecutor.releaseObjectUrls?.()
-    setHistoryVisibleLimit(MESSAGE_HISTORY_INITIAL_LIMIT)
-    stateRef.current = {
-      ...stateRef.current,
-      activeId: conversationId,
-    }
-    dispatch({ type: 'conversation/switch', payload: conversationId })
-    repository.saveActiveId(conversationId)
-    if (conversationId) {
-      void ensureConversationLoaded(conversationId)
-    }
-  }
-
-  const saveStagedSettings = (input: {
-    mode: SideMode
-    sideCount: number
-    settingsBySide: Record<Side, SingleSideSettings>
-    overrides?: Partial<{
-      runConcurrency: number
-      dynamicPromptEnabled: boolean
-      autoRenameConversationTitle: boolean
-      autoRenameConversationTitleModelId: string | null
-      panelValueFormat: PanelValueFormat
-      panelVariables: PanelVariableRow[]
-      favoriteModelIds: string[]
-    }>
-  }) => {
-    persistStagedSettings({
-      repository,
-      sideMode: input.mode,
-      sideCount: input.sideCount,
-      settingsBySide: input.settingsBySide,
-      snapshot: stateRef.current,
-      overrides: input.overrides,
-    })
-
-    stateRef.current = {
-      ...stateRef.current,
-      stagedSideMode: input.mode,
-      stagedSideCount: input.sideCount,
-      stagedSettingsBySide: input.settingsBySide,
-    }
-
-    dispatch({
-      type: 'settings/updateSide',
-      payload: {
-        sideMode: input.mode,
-        sideCount: input.sideCount,
-        settingsBySide: input.settingsBySide,
-      },
-    })
-  }
+  const {
+    registerActiveRun,
+    unregisterActiveRun,
+    isRunStillActive,
+    resolveAdaptiveRunConcurrency,
+    syncAndPersist,
+    persistConversation,
+    flushPendingPersistence,
+    scheduleConversationPersistence,
+    ensureConversationLoaded,
+    setActiveConversation,
+    saveStagedSettings,
+  } = useConversationPersistence({
+    state,
+    stateRef,
+    dispatch,
+    repository,
+    runExecutor,
+    setHistoryVisibleLimit,
+    resumePendingImagesForConversationRef,
+    pendingPersistConversationIdsRef,
+    persistTimerRef,
+    resumePollTimerRef,
+    backgroundResumePollTimerRef,
+    conversationCacheOrderRef,
+    runLocationByConversationRef,
+    activeRunControllersRef,
+  })
 
   const conversationSettings = useMemo(
     () =>
@@ -487,135 +248,27 @@ export function useConversationsEngine() {
     setPanelVariables,
   } = conversationSettings
 
-  const switchConversation = (conversationId: string) => setActiveConversation(conversationId)
-
-  const clearAllConversations = () => {
-    void flushPendingPersistence()
-    dispatch({ type: 'conversation/clear' })
-    conversationCacheOrderRef.current = []
-    runLocationByConversationRef.current = {}
-    runCompletionSignatureRef.current.clear()
-    conversationImageTaskPort.clearAll()
-    void repository.clearConversations()
-  }
-
-  const removeConversation = (conversationId: string) => {
-    void flushPendingPersistence()
-    const snapshot = stateRef.current
-    const nextSummaries = snapshot.summaries.filter((item) => item.id !== conversationId)
-    const nextContents = { ...snapshot.contents }
-    delete nextContents[conversationId]
-    syncAndPersist({ summaries: nextSummaries, contents: nextContents })
-
-    conversationCacheOrderRef.current = conversationCacheOrderRef.current.filter((id) => id !== conversationId)
-    delete runLocationByConversationRef.current[conversationId]
-    Array.from(runCompletionSignatureRef.current.keys())
-      .filter((key) => key.startsWith(`${conversationId}:`))
-      .forEach((key) => runCompletionSignatureRef.current.delete(key))
-    conversationImageTaskPort.removeConversation(conversationId)
-    void repository.removeConversation(conversationId)
-
-    if (snapshot.activeId === conversationId) {
-      const nextActiveId = nextSummaries[0]?.id ?? null
-      setActiveConversation(nextActiveId)
-    }
-  }
-
-  const renameConversation = (conversationId: string, nextTitle: string) => {
-    const trimmedTitle = nextTitle.trim()
-    if (!trimmedTitle) {
-      return
-    }
-
-    const snapshot = stateRef.current
-    const targetSummary = snapshot.summaries.find((item) => item.id === conversationId)
-    if (!targetSummary) {
-      return
-    }
-
-    const nextSummaries = snapshot.summaries.map((item) =>
-      item.id === conversationId ? { ...item, title: trimmedTitle } : item,
-    )
-    const currentConversation = snapshot.contents[conversationId]
-    const nextContents: Record<string, Conversation> = currentConversation
-      ? {
-          ...snapshot.contents,
-          [conversationId]: { ...currentConversation, title: trimmedTitle, titleMode: 'manual' as const },
-        }
-      : snapshot.contents
-
-    syncAndPersist({ summaries: nextSummaries, contents: nextContents })
-
-    if (currentConversation) {
-      void repository.saveConversation({
-        ...currentConversation,
-        title: trimmedTitle,
-        titleMode: 'manual',
-      })
-      return
-    }
-
-    void repository.loadConversation(conversationId, trimmedTitle).then((conversation) => {
-      if (!conversation) {
-        return
-      }
-      const renamedConversation: Conversation = {
-        ...conversation,
-        title: trimmedTitle,
-        titleMode: 'manual',
-      }
-      const latestSnapshot = stateRef.current
-      const latestSummaries = latestSnapshot.summaries.map((item) =>
-        item.id === conversationId ? { ...item, title: trimmedTitle } : item,
-      )
-      syncAndPersist(
-        {
-          summaries: latestSummaries,
-          contents: { ...latestSnapshot.contents, [conversationId]: renamedConversation },
-        },
-        { saveIndex: false },
-      )
-      void repository.saveConversation(renamedConversation)
-    })
-  }
-
-  const togglePinConversation = (conversationId: string) => {
-    const snapshot = stateRef.current
-    const targetSummary = snapshot.summaries.find((item) => item.id === conversationId)
-    if (!targetSummary) {
-      return
-    }
-
-    const isPinned = toEpoch(targetSummary.pinnedAt) > 0
-    const nextPinnedAt = isPinned ? null : new Date().toISOString()
-    const nextSummaries = snapshot.summaries.map((item) =>
-      item.id === conversationId ? { ...item, pinnedAt: nextPinnedAt } : item,
-    )
-    const currentConversation = snapshot.contents[conversationId]
-    const nextContents = currentConversation
-      ? { ...snapshot.contents, [conversationId]: { ...currentConversation, pinnedAt: nextPinnedAt } }
-      : snapshot.contents
-
-    syncAndPersist({ summaries: nextSummaries, contents: nextContents })
-
-    if (currentConversation) {
-      void repository.saveConversation({
-        ...currentConversation,
-        pinnedAt: nextPinnedAt,
-      })
-      return
-    }
-
-    void repository.loadConversation(conversationId, targetSummary.title).then((conversation) => {
-      if (!conversation) {
-        return
-      }
-      void repository.saveConversation({
-        ...conversation,
-        pinnedAt: nextPinnedAt,
-      })
-    })
-  }
+  const {
+    switchConversation,
+    clearAllConversations,
+    removeConversation,
+    renameConversation,
+    togglePinConversation,
+  } = useMemo(
+    () =>
+      createConversationListCommands({
+        stateRef,
+        dispatch,
+        repository,
+        flushPendingPersistence,
+        syncAndPersist,
+        setActiveConversation,
+        conversationCacheOrderRef,
+        runLocationByConversationRef,
+        runCompletionSignatureRef,
+      }),
+    [dispatch, flushPendingPersistence, repository, setActiveConversation, syncAndPersist],
+  )
 
   const runMutation = useMemo(
     () =>

@@ -1,19 +1,18 @@
 ﻿import type {
-  ApiChannel,
   Conversation,
   ConversationSummary,
   ConversationTitleMode,
-  FailureCode,
-  ImageItem,
   Message,
-  ModelSpec,
   Run,
   RunSettingsSnapshot,
-  SettingPrimitive,
   Side,
   SideMode,
   SingleSideSettings,
-} from '../types/chat'
+} from '../types/conversation'
+import type { ApiChannel } from '../types/channel'
+import type { FailureCode, ImageItem } from '../types/image'
+import type { ModelSpec } from '../types/model'
+import type { SettingPrimitive } from '../types/primitives'
 
 export const DEFAULT_CONVERSATION_TITLE = '未命名'
 
